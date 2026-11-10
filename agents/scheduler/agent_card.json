@@ -1,0 +1,7 @@
+{
+  "name": "scheduler",
+  "version": "0.1.0",
+  "description": "Builds shift schedules via OR-Tools; orchestrates other agents.",
+  "capabilities": [],
+  "auth": {}
+}
