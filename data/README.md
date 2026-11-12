@@ -16,6 +16,8 @@ Canonical data directory for the Coffee Shop Scheduler (repo root: `coffeeshop/`
 - `validate_roster_fields.py` — validates the roster schema/legality/feasibility (writes `../coffee-scheduler/ROSTER_VALIDATION.md`).
 - `build_school_calendar.mjs` / `validate_school_calendar.mjs` — build/validate the multi-year calendars (CS-004/CS-007). **Require codex's `@oai/artifact-tool` runtime — they do not run with plain Node/Python.**
 - `validate_calendars.py` — in-repo Python guard for the committed School_Calendar/Holiday_Calendar (runs anywhere; writes `../coffee-scheduler/CALENDAR_VALIDATION.md`).
+- `calibrate_standards.py` — CS-008 calibration: derives weather multipliers + throughput from the sales×weather join, auto-applies, logs to `Calibration_Log` (basis→CALIBRATED). **Not idempotent — `git restore` the standards workbook before re-running.**
+- `validate_calibration.py` — validates the calibration (throughput units/feasibility, weather unit-fix, audit trail; writes `../coffee-scheduler/CALIBRATION_VALIDATION.md`).
 
 ## Roster scheduling fields (CS-002 + CS-003)
 `coffee_shop_staff.xlsx` → `Staff` sheet adds: `role` (Barista/Register/Shift lead), `skill_level` (1–3;

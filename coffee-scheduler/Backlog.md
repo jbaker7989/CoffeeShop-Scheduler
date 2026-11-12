@@ -119,8 +119,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-008 — Calibrate throughput, weather multipliers & targets
 - **Feature:** [F5](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Ready (F1 done)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Status:** ✅ Done (2026-11-12) — all 5 validation checks PASS
+- **Developer:** Unassigned · **Started:** 2026-11-12 · **Duration:** ~0.5d (actual)
 - **Description:** Turn synthetic/assumed demand and cost parameters into calibrated, auditable values using the F1 weather join.
 - **Detailed specifications:**
   - Calibrate throughput seconds/item for all 9 categories + per-transaction register overhead (currently overstated — no basket ID).
@@ -129,6 +129,11 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
   - Define a back-test window (e.g. last 4 weeks of the sales window) and acceptance band (≤±10% MAPE per category-hour).
   - Append every accepted change to `Calibration_Log` (id, table, row_key, planned/observed/proposed, sample period, approver).
   - Event multipliers are **out of scope** here — see CS-023 (F27).
+- **Delivered:** `data/calibrate_standards.py` (generator) + `data/validate_calibration.py` (validator → `CALIBRATION_VALIDATION.md`). 14 `Calibration_Log` rows appended (auto-approved).
+  - **Throughput:** filled the empty `units_per_labor_hour` (=3600/sec) for all 9; corrected the per-line register overhead **25s→19.58s** via estimated basket size B≈1.28 (the no-basket-id fix); capacity-anchored seconds against observed peak — modeled P95 peak (~3600s) fits floor capacity at 85% with large headroom, so scale=1.0 (seconds confirmed-feasible, not re-derived; POS has no service-time data). `basis`→CALIBRATED.
+  - **Weather multipliers — derived but NOT applied.** The back-test (last 4 wks/store) showed the data-derived multipliers (RAIN 0.92, COLD 0.70, HEAT 1.15 n=6, SNOW n=0) **worsen** MAPE (~42% vs ~39% baseline): with only 6 months of Jan–Jun data, weather is confounded with season. Per the acceptance gate, assumptions were kept (basis stays ASSUMPTION), but the **metric→imperial unit bug in the condition text was fixed** (the thresholds were in mm/°C/cm while the data is °F/in). Derivations + rationale logged.
+  - **Targets:** util 0.85 / P70 / labour% / OT / penalties confirmed (retained); logged.
+  - **Known limits:** 6-month season-confounded weather signal; no service-time data (throughput capacity-anchored, not measured); no basket id (overhead amortized). A richer forecaster may revisit weather effects at CS-014.
 
 ### CS-009 — Product→category taxonomy ownership
 - **Feature:** [F29](./FEATURES.md) (part of F8) · **Priority:** P1 · **Size:** XS
@@ -800,7 +805,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 | CS-005 | F4 | P0 | XS+S | ✅ Done |
 | CS-006 | F23 | P0 | S | ✅ Done |
 | CS-007 | F25 | P0 | S | ✅ Done (merged into CS-004) |
-| CS-008 | F5 | P1 | M | Ready |
+| CS-008 | F5 | P1 | M | ✅ Done |
 | CS-009 | F29 | P1 | XS | Not started |
 | CS-010 | F6 | P1 | M | Partial |
 | CS-011 | F7 | P1 | M | Scaffolded |
