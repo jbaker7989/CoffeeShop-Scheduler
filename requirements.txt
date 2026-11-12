@@ -1,0 +1,7 @@
+# Python dependencies for the data pipeline scripts in data/
+# (build_weather_forecast.py, validate_weather_forecast.py).
+# Pinned to the versions validated for CS-001. CS-010 owns project-wide dependency
+# management and may consolidate this into a pyproject.toml.
+pandas==3.1.1
+openpyxl==3.1.5
+requests==2.34.2
