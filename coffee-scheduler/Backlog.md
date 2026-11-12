@@ -32,7 +32,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
   - `VALIDATION.md` — PASS report (36 join rows checked, 543 daily rows continuous, 0 orphan codes, 0 out-of-window sales).
   - `ATTRIBUTION.md` — Open-Meteo CC BY 4.0 / non-commercial, archive-reanalysis note.
   - `requirements.txt` — pinned `pandas==3.1.1`, `openpyxl==3.1.5`, `requests==2.34.2` (CS-010 dep handoff now has a starting point).
-  - Note: the validator lives in the external `data/` dir next to the build script; **CS-006** should bring both under version control.
+  - Note: the validator lives in the `data/` dir next to the build script; **CS-006** (done) re-rooted the repo so both scripts are now under version control.
 
 ### CS-002 — Add roster scheduling fields
 - **Feature:** [F2](./FEATURES.md) · **Priority:** P0 · **Size:** M
@@ -81,14 +81,16 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
   - Output bounds the solver's time horizon (CS-016).
 
 ### CS-006 — Data directory location & git policy
-- **Feature:** [F23](./FEATURES.md) · **Priority:** P0 · **Size:** XS
-- **Status:** Not started
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~0.5d (est.)
-- **Description:** Resolve the split between the empty `coffee-scheduler/data/` and the real files in `/Users/jbaker/Development/coffeeshop/data/`, and set a git policy.
-- **Detailed specifications:**
-  - Choose one canonical path: symlink `coffee-scheduler/data/ → ../data/`, move files in, or update docs — and apply it everywhere.
-  - Extend `.gitignore`: track synthetic workbooks (`coffee_shop_*.xlsx`, `weather_forecast.xlsx`), ignore any real PII.
-  - Commit the policy; verify no broken symlinks and every doc path resolves.
+- **Feature:** [F23](./FEATURES.md) · **Priority:** P0 · **Size:** S (re-root scope; was XS)
+- **Status:** ✅ Done (2026-11-11)
+- **Developer:** Unassigned · **Started:** 2026-11-11 · **Duration:** ~0.5d (actual)
+- **Description:** The git repo was rooted one level too deep (`coffee-scheduler/`), leaving `data/`, the `coffee_shop/` Next.js app, and the status doc outside version control. Re-root the repo at `coffeeshop/` and set a data/PII git policy.
+- **Resolution (chosen approach):**
+  - **Re-rooted the repo at `coffeeshop/`** (`mv coffee-scheduler/.git .git`); history + the `CoffeeShop-Scheduler` remote preserved, prior files recorded as renames. (The symlink option was rejected — a symlink does not version-control files outside the old tree.)
+  - **Absorbed `coffee_shop/`** by removing its throwaway inner `.git` (no remote, only the create-next-app scaffold commit); the Next.js app for F30–F35 is now tracked.
+  - Added repo-root `.gitignore` (`.DS_Store`, `.pi/`, Python caches, node_modules/.next belt-and-suspenders) and a **real-PII policy**: synthetic `.xlsx` fixtures + scripts are tracked; real PII goes in `data/private/` (ignored) or `*.pii.*` / `*.real.xlsx`.
+  - Added `data/README.md`; removed the misleading empty `coffee-scheduler/data/.gitkeep`; pointed docs at the repo-root `data/`.
+- **Outcome:** one repo (`coffee-scheduler/`, `coffee_shop/`, `data/`) with the CS-001 scripts now under version control.
 
 ### CS-007 — Multi-year holiday calendar scope
 - **Feature:** [F25](./FEATURES.md) · **Priority:** P0 · **Size:** S
@@ -139,6 +141,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
   - Per-agent `AGENTS.md` for scheduler, labor_compliance, demand_forecast, staff_comms.
   - `SKILL.md` for `labor-rule-evaluation` (strictest-wins, effective dating, minor age-on-date), plus `synthetic-roster-generation`, `sales-weather-join`, `standards-calibration`, `agent-card-authoring`.
   - Build on the `requirements.txt` CS-001 already created (`pandas==3.1.1`, `openpyxl==3.1.5`, `requests==2.34.2`) — consolidate into `pyproject.toml` if desired, add any new deps, and define the project test command.
+  - The repo-wide `.gitignore` and data/real-PII policy are already established by CS-006 (repo re-rooted at `coffeeshop/`; see `data/README.md`) — reference them rather than redefining.
 
 ### CS-011 — Author A2A Agent Cards & settle Payroll/HCM
 - **Feature:** [F7](./FEATURES.md) · **Priority:** P1 · **Size:** M
@@ -785,7 +788,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 | CS-003 | F24 | P1 | XS | Not started |
 | CS-004 | F3/F25 | P0 | S | Not started |
 | CS-005 | F4 | P0 | XS+S | Not started |
-| CS-006 | F23 | P0 | XS | Not started |
+| CS-006 | F23 | P0 | S | ✅ Done |
 | CS-007 | F25 | P0 | S | Not started |
 | CS-008 | F5 | P1 | M | Ready |
 | CS-009 | F29 | P1 | XS | Not started |

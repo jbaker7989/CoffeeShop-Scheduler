@@ -14,10 +14,10 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 ## Phase 1 — Data & foundation (unblocks the engine)
 
 ### F1. Weather data pipeline run & validation
-- **Status:** Done
+- **Status:** Done (closed 2026-11-11 via CS-001)
 - **Size:** S · **Priority:** P0
-- **Description:** `data/weather_forecast.xlsx` exists with `Hourly_Sales_Weather` (9,231 rows), `Daily_Sales_Weather` (543 rows × 3 stores) and a WMO `Weather_Codes` lookup. The script that produced it lives at `data/build_weather_forecast.py` (57 lines; hits Open-Meteo's `archive-api` for historical reanalysis, not the forecast endpoint — the filename is a misnomer). Two remaining items: (a) sanity-check the join by spot-checking hourly rows against the source sales file; (b) write an `ATTRIBUTION.md` for Open-Meteo (CC BY 4.0, non-commercial only — the free API tier is not for commercial use). The script needs `pandas`, `openpyxl`, `requests`; none are pinned in any `requirements.txt` / `pyproject.toml` yet — F6 should add that.
-- **Expected outcome:** Verified weather×sales join covering all 3 stores; the Open-Meteo license recorded so we never accidentally ship this commercially; the script's Python deps pinned.
+- **Description:** `data/weather_forecast.xlsx` exists with `Hourly_Sales_Weather` (9,231 rows), `Daily_Sales_Weather` (543 rows × 3 stores) and a WMO `Weather_Codes` lookup. The script that produced it lives at `data/build_weather_forecast.py` (57 lines; hits Open-Meteo's `archive-api` for historical reanalysis, not the forecast endpoint — the filename is a misnomer). All three sub-tasks closed: (a) `data/VALIDATION.md` documents the join sanity-check — PASS 5/5 across 36 sampled rows and the zero-fill / trading-hours invariants; (b) `ATTRIBUTION.md` records the Open-Meteo CC BY 4.0 license and the free-tier non-commercial-only constraint; (c) `requirements.txt` pins `pandas 3.1.1`, `openpyxl 3.1.5`, `requests 2.34.2`. CS-001 in `Backlog.md` is the closing story.
+- **Expected outcome:** Verified weather×sales join covering all 3 stores; Open-Meteo license recorded so the data is never accidentally shipped commercially; script's Python deps pinned — all three satisfied.
 
 ### F2. Roster scheduling fields
 - **Status:** Blocked (on roster extension) · Ready to start
@@ -156,6 +156,52 @@ The Next.js scaffold at `coffee_shop/app/` exists but is stock `create-next-app`
 
 ---
 
+## Phase 1 — Analytics
+
+Two personas, two umbrellas (F52, F56), each with three depth tiers: top-of-funnel KPIs (the executive signal), operational insights (where managers spend time), and deep analytics (cohort / forensic views). Every screen reads from the Postgres layer defined by F45 / F47, with materialised views for the heavy aggregates.
+
+### F52. Store-manager analytics (umbrella)
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Owns the store-manager analytics experience. Decisions: RBAC (a store manager sees only their store's data; a district manager can be added later as a third persona), the layout pattern (KPI cards across the top, operational insights below, drill-down on click), the shared date-range filter and store selector (single store, fixed), and the convention for "this store vs same-store prior period vs LY." Each depth tier is its own story below. Builds on F30 (Manager-facing UI umbrella). Reads from Postgres read-only role per F45; aggregates served from materialised views defined in F47.
+- **Expected outcome:** A store manager opens the analytics tab and sees their store's signal in three tiers, drilled into by clicking any KPI.
+
+### F53. Store-manager top-of-funnel KPIs
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** The dashboard a store manager looks at first thing. Cards across the top, each clickable into the operational view: today's revenue vs forecast (with delta %), today's labour cost %, shifts scheduled vs needed (coverage gaps from F11), compliance issue count (target: zero), overtime hours this week, forecast accuracy MAPE for the last 7 days (from F9), and items per labour hour. Each card surfaces the underlying rule or constraint ID if the value is off-target.
+- **Expected outcome:** A store manager opens one screen and knows whether today is on track before their first coffee.
+
+### F54. Store-manager operational insights
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Where the manager spends most of their time: hourly heatmap (sales × daypart × day-of-week); coverage gaps by hour from F11; schedule compliance rate after F14; call-out frequency by employee with an attention flag for any employee above a threshold; sales per labour hour by daypart; throughput variance vs the F5 standards; minor rule utilisation (any minor at > 90 % of their weekly cap — surfaces F10 / F24); and the F10 `Rule_Eval_Log` filtered to this store, with the rule_id and reason shown inline.
+- **Expected outcome:** A manager can move from "today is off" to "this is why" in one click, and from "this is why" to "this is the rule" in one more click.
+
+### F55. Store-manager deep analytics
+- **Status:** Not started · **Size:** M · **Priority:** P3
+- **Description:** Forensic and cohort views: demand elasticity (rain → sales per category, derived from the F1 weather join); product mix shift over time (which categories growing, which shrinking); solver quality (feasibility rate, average solve time for this store); spread-of-hours incidents per employee per week (Part 146); ESSTA call-out clustering (any patterns in `NYC-ESSTA-NO-REPLACE` triggers); FPC coverage compliance (every shift had an FPC holder on site); manager override rate vs F11's solver recommendations.
+- **Expected outcome:** The store manager has the same diagnostic depth a data analyst would have, surfaced as pre-built views rather than ad-hoc SQL.
+
+### F56. C-Suite analytics (umbrella)
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Owns the C-Suite analytics experience. Decisions: RBAC (C-Suite sees all stores; can drill into any store's manager view from F52–F55), the one-screen executive layout (signal-first, narrative annotations supported), the cross-store comparison pattern (sparklines, percentile bands, period-over-period deltas), and the export conventions (PDF for board decks, CSV for finance). Includes the manager-level rollup — a C-Suite user can drop into any store's analytics and see exactly what its manager sees, with the store's full history appended. Each depth tier is its own story below. Builds on F52 (so C-Suite inherits the store layout, not invents a new one).
+- **Expected outcome:** A C-Suite user opens one screen and knows whether the company is on track across all stores, then drills into any store at any tier.
+
+### F57. C-Suite top-of-funnel KPIs
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** One-screen executive summary. Cards: total company revenue (this week vs prior week vs LY), total labour cost % vs the F11 cost target, total transactions and items, forecast accuracy across all stores, zero-tolerance compliance counter (any `VERIFY` rule that touched a real shift this week — surfaces F19), overtime dollars across the company, schedule coverage rate, and a top-movers strip (stores up / down vs prior week). Each card clickable into the cross-store rollup. Narrative annotation supported — C-Suite can pin a one-line note to any anomaly for the next viewer.
+- **Expected outcome:** The executive summary is one screen, all cards have a one-line reason if off-target, and the company-wide compliance posture is visible at a glance.
+
+### F58. C-Suite cross-store rollup + manager view
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Compare stores and drop into manager views: per-store revenue and labour % sparklines with percentile bands; store-vs-store KPI matrix (revenue / FT, items / labour-hour, overtime rate, call-out rate, solver feasibility rate); per-store compliance summary (drill-through to F35); per-store call-out frequency hotspots; per-store solver quality (which store has the most infeasible days); manager override rate rollup (which stores the system is fighting the most). Click any store → drops into F52 with that store's data, full history, and the C-Suite viewer's audit trail noted.
+- **Expected outcome:** The C-Suite can compare any two stores side-by-side and drop into either store's manager view without losing context.
+
+### F59. C-Suite deep analytics
+- **Status:** Not started · **Size:** L · **Priority:** P3
+- **Description:** Strategic views: cohort analysis (stores opened in similar conditions performing similarly now); cross-store weather elasticity (do all stores respond the same way to weather, per F1); forecast accuracy broken down by category × store × daypart (where is the model weakest); solver ROI (labour cost savings attributable to F11 vs a naive baseline schedule); compliance audit risk (count of any `VERIFY` rule that touched a real shift, rolled up by rule_id); coverage-of-coverage (how often each store ran at minimum crew vs full crew, by daypart); cohort retention (do employees at higher-utilisation stores stay longer).
+- **Expected outcome:** Strategic questions ("are we spending the labour budget well?", "where is the model wrong?", "is the solver paying for itself?") have pre-built answers — no ad-hoc SQL required.
+
+---
+
 ## Phase 1 — Platform, plumbing & hardening
 
 ### F16. n8n workflows
@@ -237,6 +283,110 @@ These were not in the original backlog but the data and Project Status already i
 - **Status:** Not started (part of F8) · **Size:** XS · **Priority:** P1
 - **Description:** Sales has `product_id` and `product_category`; `Throughput_Standards` maps 9 categories to seconds-per-unit; the forecaster must consume the same taxonomy. Add a `Product_Taxonomy` table (or a versioned mapping sheet) and pin it: the forecaster, throughput table, and explanation layer all read the same version. Without this, "Coffee" in the forecast and "Coffee" in throughput can silently drift.
 - **Expected outcome:** One versioned category taxonomy that every downstream consumer reads — so calibration, forecast and explanation stay aligned.
+
+---
+
+## Phase 1 — Observability (OpTel)
+
+OpenTelemetry is the chosen observability framework. F18 ("Observability across A2A") describes the requirement; this section implements it with OTel. Stack: OTel SDK in every agent, OTel Collector, and the LGTM backends (Tempo / Mimir / Loki) with Grafana for visualisation.
+
+### F36. OpenTelemetry implementation (umbrella)
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Adopt OpenTelemetry across the agent platform. This umbrella owns: OTel SDK version pin, OTel Collector deployment shape, W3C `traceparent` propagation contract across every A2A boundary, custom metric vocabulary (solver solve-time, rule-eval counts, LangGraph state transitions), sampling policy, and the Docker Compose file that ships the Collector + Tempo + Mimir + Loki + Grafana together. F18's "one trace ID across all A2A calls, with authentication and timeouts on each boundary" is the goal; this feature picks OTel to deliver it.
+- **Expected outcome:** An A2A call across any two agents shows up in Tempo with one `trace_id`; per-call RED metrics land in Mimir; structured logs land in Loki — all visible from one Grafana pane.
+
+### F37. OTel SDK instrumentation per agent
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Each runtime agent (Scheduler, Demand Forecast, Labor Compliance, Staff Comms) and the CP-SAT solver emit OTel spans for: every A2A call (client + server), every tool invocation, every LangGraph node transition, every solver iteration, every rule evaluation, every SMS send / receive. Custom spans for `solver.solve_time_ms`, `rule_eval.count{rule_id,result}`, `forecast.quantile_p70`. Trace context propagated via W3C `traceparent` on every A2A boundary. Each agent's `AGENTS.md` lists the spans it emits.
+- **Expected outcome:** Every agent boundary, tool call and internal step is a span — all sharing one `trace_id` across the call chain.
+
+### F38. OTel Collector deployment
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** Deploy the OTel Collector as a single Docker Compose service. Receivers: OTLP/gRPC + OTLP/HTTP on standard ports. Processors: tail-based sampling (keep 100% of errors, 10% of success), batch, resource attributes (`service.name`, `service.version`, `deployment.environment`). Exporters: Tempo (traces), Mimir via `prometheusremotewrite` (metrics), Loki (logs). Config versioned at `coffee-scheduler/otel/collector-config.yaml`.
+- **Expected outcome:** A running Collector that receives from every agent and ships to all three backends, configured in version control.
+
+### F39. LGTM backends (Tempo, Mimir, Loki)
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Deploy Grafana Tempo (traces), Grafana Mimir (metrics) and Grafana Loki (logs) via Docker Compose for the demo; document the Kubernetes / managed-equivalent path for production. Tempo backed by MinIO locally, S3 in production. Mimir with a single replica and the standard ingester / store-gateway / querier split. Loki with filesystem store locally; S3-compatible store in production. One Compose file, one startup command.
+- **Expected outcome:** Tempo, Mimir and Loki running, each receiving data from the Collector, with documented production upgrade paths.
+
+### F40. Grafana dashboards
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** Pre-built Grafana dashboards provisioned via JSON in `coffee-scheduler/otel/dashboards/`: (a) A2A call graph (Tempo), (b) per-agent RED metrics (Mimir), (c) solver performance (Mimir custom metrics), (d) rule-eval counts grouped by `rule_id` and `result` (Mimir), (e) call-out workflow state-transition log (Loki), (f) cross-signal "trace drill-down" pane — takes a `trace_id` and shows spans, metrics and logs for that trace. Data sources for all three backends pre-wired in the Grafana provisioning. Per-story dashboards for F14 (call-out workflow) and F11 (solver).
+- **Expected outcome:** A manager or engineer opens Grafana and sees the whole system's behaviour from one `trace_id`.
+
+### F41. CI observability gate
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** Per-PR CI job that fails if any new external call (HTTP, A2A, DB, tool invocation) lacks an OTel span. Implemented as a span exporter in test mode — every test must exercise a code path that emits at least one span, asserted via the exporter. New agents or new tool wrappers without instrumentation fail this gate before they merge.
+- **Expected outcome:** A PR cannot land code that bypasses observability.
+
+---
+
+## Phase 1 — Data platform (PostgreSQL)
+
+Move the project off `.xlsx` as the source of truth onto PostgreSQL. The Excel files stay in git as historical fixtures and as a read-side export (F46). F47 is the schema design; F42–F46 are the platform that runs it.
+
+### F42. PostgreSQL implementation (umbrella)
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** Move the project off `.xlsx` as the source of truth onto PostgreSQL. This umbrella owns: the Postgres version pin, the connection-string convention (`.env.example`, never committed), the migration tool (Alembic), the role / user model (read-only agent role, read-write agent role, manager role), and the path from current workbooks to schema-versioned tables. **F23 (data directory decision) is settled here: Postgres is the canonical store.** The Excel files become fixtures and exports.
+- **Expected outcome:** Every agent reads from and writes to Postgres; Excel is a derived artefact, not a source.
+
+### F43. Postgres provisioning & migrations
+- **Status:** Not started · **Size:** S · **Priority:** P0
+- **Description:** Postgres 16 deployed via Docker Compose for local dev. Schema migrations managed by Alembic — one revision per change, with `upgrade` and `downgrade` scripts. Connection pooling via PgBouncer in front of Postgres (single Compose service). Backup / restore runbook at `coffee-scheduler/docs/postgres-backup.md` — at minimum a `pg_dump` schedule via n8n, and a documented restore drill.
+- **Expected outcome:** A fresh checkout can `docker compose up postgres && alembic upgrade head` and have a working database.
+
+### F44. ETL: Excel → Postgres
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** Idempotent ETL script (`scripts/etl_excel_to_postgres.py`) that reads each `coffee_shop_*.xlsx` and `weather_forecast.xlsx` and writes to the Postgres schema defined in F47. Uses `COPY` for the big tables (`transactions`, `weather_hourly`, `weather_daily`, `rule_eval_log`). Validates row counts after load and asserts known invariants (e.g. "every rule in `labor_rules` has a `rule_id`"; "every transaction has a valid `store_id`"). Reports per-table counts and any anomalies. Safe to re-run; uses upserts / `ON CONFLICT` everywhere. Tagged and runnable from CI on a schedule.
+- **Expected outcome:** A single command migrates the current Excel data into Postgres with no manual steps and no data loss; the script is idempotent.
+
+### F45. Agent data-access layer
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** SQLAlchemy models (or equivalent) for every table defined in F47. Repository pattern for read and write — agents call `repo.get_employee(...)`, `repo.append_rule_eval(...)`, never raw SQL. Connection pooling shared across agents. Read-only role for the Compliance agent, read-write role for the Solver and the Manager-facing UI (F34). LangGraph state checkpoints stored in Postgres per F12. All queries parameterised; no string concatenation. Integration tests cover the layer against a test database.
+- **Expected outcome:** Agents access data through a typed, pooled, role-aware layer — no direct SQL in agent code.
+
+### F46. Excel export (read-only export path)
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** Generator script that writes the same `.xlsx` shape (`coffee_shop_staff.xlsx`, `coffee_shop_labor_rules.xlsx`, `coffee_shop_labor_standards.xlsx`) from the Postgres tables. Uses the F29 product taxonomy to keep category names consistent. Runs on demand via n8n or the CLI. The exported Excel files are byte-different (timestamps, formula values) but row-identical to the source-of-truth Postgres content. Does not write back into Postgres.
+- **Expected outcome:** Managers who want an Excel view can generate it; the workbook is no longer the source.
+
+---
+
+## Phase 1 — Data mapping & schema
+
+The canonical schema document for the project. Lives at `coffee-scheduler/docs/schema.md` with the live source in Alembic migrations under `coffee-scheduler/db/`. Every table, every relationship, every index, documented.
+
+### F47. Data mapping & schema design (ERD + PK / FK / indexes)
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** The canonical schema document. For every Postgres table: primary key, foreign keys (with `ON DELETE` behaviour), single-column and composite indexes, effective-dating strategy (`DATERANGE` columns + `EXCLUDE USING GIST` constraints where overlap is illegal), partitioning strategy (`PARTITION BY RANGE (date)` for `transactions`, `rule_eval_log`, `weather_hourly`), and JSONB columns where the schema is loose. Includes an ERD (Mermaid or dbdiagram.io source) showing all relationships. Tables covered at minimum: `employees`, `employer_config`, `labor_rules`, `school_calendar`, `holidays`, `consent_waivers`, `rule_eval_log`, `store_profiles`, `stations`, `throughput_standards`, `coverage_rules`, `fixed_tasks`, `shift_rules`, `cost_targets`, `demand_adjustments`, `calibration_log`, `transactions`, `weather_hourly`, `weather_daily`, `weather_codes`, `product_taxonomy` (F29), `events` (F50). Document cross-references F26 (Coverage_Rules ↔ Labor_Rules) and F10 (effective-dating sub-task).
+- **Expected outcome:** A single document an engineer can read to understand every table, every relationship, every index — before writing a query. The Alembic migrations are generated from this schema, not the other way round.
+
+---
+
+## Phase 1 — Data ingestion
+
+Pipelines that move external data into the Postgres schema from F47. Each is an idempotent n8n-driven job with OTel spans (F37) and Loki logs (F39). New ingestion pipelines follow the same shape.
+
+### F48. Weather data ingestion pipeline
+- **Status:** Not started (the script exists at `data/build_weather_forecast.py`) · **Size:** S · **Priority:** P1
+- **Description:** Wrap `build_weather_forecast.py` in a scheduled n8n cron (weekly) that re-pulls Open-Meteo historical data and refreshes the `weather_hourly` and `weather_daily` tables. Idempotent — re-runs upsert by `(location_id, date, hour)`. Logs each run to Loki (F39) and emits a custom OTel span (F37). Fails loud (and pages via n8n) if any store has missing hours. Attribution per F1 written to `ATTRIBUTION.md` once.
+- **Expected outcome:** A weekly cron that keeps the weather join current without manual intervention; failures visible in Grafana.
+
+### F49. POS data ingestion
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** n8n workflow that pulls transaction data from Square Sandbox (F17) or a production POS and writes to the `transactions` table. Maps POS `product_id` to the F29 product taxonomy. Backfills historical data on first run, then incremental on a nightly cron. Logs to Loki; emits OTel spans per ingestion batch. Dead-letter queue for unmapped `product_id` values so the taxonomy gap is visible, not silently dropped.
+- **Expected outcome:** Nightly POS sync from sandbox (or production) into Postgres with no manual steps and a visible dead-letter for taxonomy gaps.
+
+### F50. Event data ingestion (F27 implementation)
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Per-store event feed ingest from Ticketmaster / Songkick / per-venue feeds. Writes to an `events` table keyed by `(store_id, event_id, starts_at)`. Effective-dated so a cancelled event has `effective_to = cancellation_date`, not a delete. Exposes an `event_calendar` view that the forecaster (F9) and the solver (F11) consume. Reuses the F48 ingestion pattern (n8n cron + OTel spans + Loki logs). Implements the abstract pipeline described in F27.
+- **Expected outcome:** Event-driven demand uplift is computed from live event data, not assumed.
+
+### F51. Rule-change ingestion (F28 implementation)
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** n8n trigger that watches `labor_rules` for inserts, updates and `effective_to` changes (via Postgres `LISTEN/NOTIFY` or a polling trigger). On change: emits an OTel event, writes a `Rule_Eval_Log` row tagged `agent = "labor-compliance-agent/reload"`, and notifies the running solver to reload its rule snapshot. Idempotent — multiple changes in one window produce one notification, not N. Implements the rollout flow described in F28.
+- **Expected outcome:** A rule row added today takes effect in the running solver within minutes, with an audit trail.
 
 ---
 

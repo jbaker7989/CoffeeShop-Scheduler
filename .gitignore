@@ -1,1 +1,26 @@
+# macOS
 .DS_Store
+
+# Tooling scratch
+.pi/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / Next.js (also covered by coffee_shop/.gitignore; kept here as belt-and-suspenders)
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+
+# --- Real PII must NEVER be committed. Synthetic fixtures in data/ ARE tracked. ---
+# Put any file containing real employee PII in data/private/ (ignored) or name it *.pii.* / *.real.xlsx
+data/private/
+*.real.xlsx
+*.pii.*
+.env*
