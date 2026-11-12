@@ -59,7 +59,9 @@ function nyStateHolidays(year) {
   return [
     ...federalHolidays(year),
     ["Lincoln's Birthday", new Date(Date.UTC(year, 1, 12))],
-    ["Election Day", nthWeekday(year, 11, 2, 1)],
+    // NY Election Day = first Tuesday AFTER the first Monday of November (i.e. first Monday + 1 day),
+    // not simply the first Tuesday (which is wrong whenever Nov 1 falls on a Tuesday).
+    ["Election Day", new Date(nthWeekday(year, 11, 1, 1).getTime() + 86400000)],
   ];
 }
 
