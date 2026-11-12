@@ -120,6 +120,42 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 
 ---
 
+## Phase 1 — Manager-facing UI
+
+The Next.js scaffold at `coffee_shop/app/` exists but is stock `create-next-app` boilerplate — no scheduler routes, no API integration, no components. This section turns it into the manager-facing surface. F30 is the umbrella; F31–F35 are the individual screens.
+
+### F30. Manager-facing web UI (umbrella)
+- **Status:** Not started (scaffold exists, not wired) · **Size:** M · **Priority:** P1
+- **Description:** Claim ownership of `coffee_shop/app/` as the manager-facing surface for the scheduler. This feature owns the decisions the screens below share: Next.js → backend integration pattern (server actions vs API routes vs n8n-mediated), manager auth (single-tenant demo OK to start), the shared layout / navigation, and the convention for how each screen binds to the LangGraph state in F12. Each screen is a separate feature (F31–F35); this is the plumbing they all use.
+- **Expected outcome:** A scaffolded Next.js app a manager can sign into, with shared navigation and a documented integration pattern the screens below can build on.
+
+### F31. Weekly schedule view
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Per-store, per-day weekly grid showing shift assignments, station coverage and meal-break timing. Hover (or click) on any shift surfaces the rule IDs and `Rule_Eval_Log` reasons that placed it there (from F10). Read-only — edits go through the solver (F11) or the call-out flow (F32). Must handle multi-week navigation and filter by store / role / status. Backed by F12's LangGraph state for the active week.
+- **Expected outcome:** A manager can open a store's week, see who works when, and on hover learn exactly which rule made that placement.
+
+### F32. Call-out approval
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** UI surface for the F14 call-out/swap LangGraph workflow. Manager sees the sick employee's shift, the candidate cover the workflow proposed, the eligibility reasons (skills, hours, minor limits, key-holder/FPC), and approves or redirects. The workflow's hard-stop branches (e.g. `NYC-ESSTA-NO-REPLACE`) must be visible inline so the decision is auditable. Approving routes back to F16 to update payroll/HCM and to F10 to log the resolution. Two-way binding to LangGraph state — the screen is the human-in-the-loop step the workflow already waits on.
+- **Expected outcome:** A manager can review and approve a replacement in one screen, with the legal reasons visible at decision time.
+
+### F33. Forecast review
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Chart overlay of P70 forecast vs. actuals by store × day × hour × category (per F8 contract). Used to (a) sanity-check the forecaster before trusting it, and (b) drive calibration cycles (F5). Back-test period selectable; click-through to per-hour detail with the weather join from F1 visible alongside. Read-only — calibration actions route through F5.
+- **Expected outcome:** A manager can see "did the forecast match the day" and feed back into calibration without leaving the app.
+
+### F34. Rules admin
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** View / edit `Labor_Rules` rows with the F26 reconciliation check running live: any change that creates an assumption-vs-law conflict, marks an unverified rule as `LAW`, or sets coverage-rule effective dates that conflict with the underlying legal rule is blocked at submit. Surface the `Consent_Waivers` list with expiry warnings (per F10 waiver-expiry sub-task) so managers see WV-0001 expiring 2027-06-26 before it does. All edits route through F28 (rule-change rollout + `Rule_Eval_Log` audit row).
+- **Expected outcome:** A manager can maintain the rules table without ever silently breaking the assumption-vs-law boundary.
+
+### F35. Calibration & rule-eval log viewer
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** Read-only table view over `Calibration_Log` (F5) and `Rule_Eval_Log` (F10) with filter by date, rule, employee, store and result. Export to CSV for auditors. The write paths stay owned by F5 and F10 — this is the read surface only, so auditors and managers can answer "what did the engine decide, and why" without opening the workbook.
+- **Expected outcome:** Auditors and managers can answer "what did the engine decide, and why" without running a query against the workbooks.
+
+---
+
 ## Phase 1 — Platform, plumbing & hardening
 
 ### F16. n8n workflows
