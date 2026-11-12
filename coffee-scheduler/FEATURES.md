@@ -291,6 +291,14 @@ These were not in the original backlog but the data and Project Status already i
 - **Status:** Not started (part of F8) · **Size:** XS · **Priority:** P1
 - **Description:** Sales has `product_id` and `product_category`; `Throughput_Standards` maps 9 categories to seconds-per-unit; the forecaster must consume the same taxonomy. Add a `Product_Taxonomy` table (or a versioned mapping sheet) and pin it: the forecaster, throughput table, and explanation layer all read the same version. Without this, "Coffee" in the forecast and "Coffee" in throughput can silently drift.
 - **Expected outcome:** One versioned category taxonomy that every downstream consumer reads — so calibration, forecast and explanation stay aligned.
+- **Acceptance criteria (CS-009):**
+  1. **AC1 — complete mapping:** `Product_Taxonomy` has exactly one row per distinct sales `product_id` (80), each with a non-null `product_detail`, `product_type` and `product_category`.
+  2. **AC2 — category is a function of product:** no `product_id` maps to more than one `product_category` (the sales hierarchy is single-valued).
+  3. **AC3 — no drift vs source:** the set of `product_category` values in `Product_Taxonomy` equals the set in `coffee_shop_sales.xlsx` — none missing, none invented.
+  4. **AC4 — cross-consumer coverage (also BUG-002):** the taxonomy's category set equals the `Throughput_Standards` category set; the taxonomy validator names any category present in one consumer but absent from the other, and calibration refuses (does not score 0 labor) any sales category absent from `Throughput_Standards`.
+  5. **AC5 — pinned version:** a single `taxonomy_version` is recorded in `Taxonomy_Meta` and stamped on every `Product_Taxonomy` row, so downstream consumers can reference an exact version.
+  - **Edge / adversarial:** a sales row carrying a category absent from `Throughput_Standards` must make both the taxonomy validator **fail** and calibration **raise** — never silently pass or score it as zero labor.
+  - **Cross-references:** `coffee_shop_sales.xlsx` (source hierarchy), `Throughput_Standards` (consumer), F8/CS-012 (forecast contract — future consumer of the pinned version), BUG-002.
 
 ---
 
