@@ -65,8 +65,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-004 — Load NYC school calendar (multi-year)
 - **Feature:** [F3](./FEATURES.md) + [F25](./FEATURES.md) · **Priority:** P0 · **Size:** S
-- **Status:** Not started
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Status:** ✅ Done (2026-11-12) — CS-007 merged into this delivery
+- **Developer:** Unassigned · **Started:** 2026-11-12 · **Duration:** ~0.5d (actual)
 - **Description:** Load NYC public schools + federal/NY holiday calendars as effective-dated data covering the full forecast/back-test horizon.
 - **Detailed specifications:**
   - Load school days, holidays and breaks for **2023–2028** (back-tests use 2023; forward planning runs ≥1 yr ahead).
@@ -74,6 +74,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
   - Expose an `IN_SESSION` lookup by date; no `None` rows allowed for any date the solver can emit.
   - Replace the 2026-only `Holiday_Calendar` (11 rows) with the multi-year set.
   - Blocks minor-labor rule evaluation (CS-012) and the solver (CS-016).
+- **Delivered:** `School_Calendar` now has 2,192 dated rows spanning 2023–2028, with `NYC-DOE-2026-27` retained for every enrolled-minor roster key, effective dates, daily `in_session` and `day_before_school_day` flags, source provenance, and 416 explicitly marked 2027–28 planning-assumption rows. `Holiday_Calendar` now has 144 separate US-Federal and NY-State holiday rows (same-date jurisdictional records retained). `data/build_school_calendar.mjs` regenerates the workbook data; `data/validate_school_calendar.mjs` verifies coverage, active-record uniqueness, roster-key compatibility, planning flags, and holiday provenance.
 
 ### CS-005 — Closing-hours decision & operating-hours config
 - **Feature:** [F4](./FEATURES.md) · **Priority:** P0 · **Size:** XS (decision) + S (config)
@@ -101,14 +102,15 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-007 — Multi-year holiday calendar scope
 - **Feature:** [F25](./FEATURES.md) · **Priority:** P0 · **Size:** S
-- **Status:** Not started
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Status:** ✅ Done (2026-11-12) — merged into CS-004
+- **Developer:** Unassigned · **Started:** 2026-11-12 · **Duration:** incl. in CS-004
 - **Description:** Holiday calendar coverage matching the forecast horizon (companion to CS-004 for federal/NY holidays specifically).
 - **Detailed specifications:**
   - Load federal + NY State holidays for 2023–2028, effective-dated.
   - Join to daily sales for back-test labelling (CS-011, CS-014).
   - Reconcile with the school calendar so no date is classified twice.
   - *Note:* may be merged into CS-004 if one calendar loader covers both; keep separate if sources differ.
+- **Delivered:** Separate jurisdictional holiday rows now coexist with independent school-session records; consumers can identify a holiday without overwriting an NYCPS instructional-day classification.
 
 ---
 
@@ -793,10 +795,10 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 | CS-001 | F1 | P0 | S | ✅ Done |
 | CS-002 | F2 | P0 | M | ✅ Done |
 | CS-003 | F24 | P1 | XS | ✅ Done |
-| CS-004 | F3/F25 | P0 | S | Not started |
+| CS-004 | F3/F25 | P0 | S | ✅ Done (CS-007 merged) |
 | CS-005 | F4 | P0 | XS+S | ✅ Done |
 | CS-006 | F23 | P0 | S | ✅ Done |
-| CS-007 | F25 | P0 | S | Not started |
+| CS-007 | F25 | P0 | S | ✅ Done (merged into CS-004) |
 | CS-008 | F5 | P1 | M | Ready |
 | CS-009 | F29 | P1 | XS | Not started |
 | CS-010 | F6 | P1 | M | Partial |
