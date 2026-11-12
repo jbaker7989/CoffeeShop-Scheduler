@@ -29,7 +29,7 @@ Status of the Predictive Smart Shift Scheduler: what is decided, what is built, 
 - **Store setups:**
   - Lower Manhattan (5) and Hell's Kitchen (8): 6 staff on floor, 4 stations.
   - Astoria (3): 4 staff on floor, 3 stations.
-- **Hours:** 6:00 AM–10:30 PM, with 45 minutes before open and after close.
+- **Hours:** per the CS-005 decision (2026-11-12): Lower Manhattan & Hell's Kitchen 06:00–21:00, Astoria 07:00–20:30, with 45 minutes before open and after close. (Was 6:00 AM–10:30 PM; shortened to last-tx + ~30 min. See `coffee-scheduler/docs/decisions/CS-005-closing-hours.md`.)
 - **Minors' ages** are always calculated from date of birth on the shift date, never stored as a flag.
 
 ### File conventions
@@ -55,7 +55,7 @@ Status of the Predictive Smart Shift Scheduler: what is decided, what is built, 
 - **Weather data:** run the fixed script, confirm weather\_forecast.xlsx was created, then check the data.
 - **Roster scheduling fields:** roles, skill levels, home location, cross-location eligibility, key-holder status, cash authorisation, Food Protection Certificate, hourly rate, school enrolment, availability personas, and min/max hours. Without these the solver has nothing to schedule.
 - **School calendar:** load the NYC public schools 2026–27 calendar. Every minor rule depends on it.
-- **Closing-hours decision:** sales stop at about 8–9 PM at every store, and Astoria opens at 7 AM. Either keep 10:30 PM and staff evenings at minimum crew, or change the operating hours.
+- **Closing-hours decision:** ✅ Resolved (CS-005, 2026-11-12). Shortened hours to last-tx + ~30 min: LM/HK close 21:00, Astoria 07:00–20:30; no dead-hour evening crew. Encoded in `coffee_shop_labor_standards.xlsx`.
 
 ### Compliance verification (before relying on the rules table)
 

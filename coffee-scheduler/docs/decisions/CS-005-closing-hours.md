@@ -1,9 +1,28 @@
 # CS-005 — Closing-hours decision & operating-hours config
 
 **Story:** [CS-005](../../Backlog.md) · **Feature:** [F4](../../FEATURES.md) · **Priority:** P0
-**Status:** Open — awaiting answers to Q1–Q4 (see Outstanding questions below)
-**Decision needed by:** before CS-016 (solver) starts.
-**Author:** TBD · **Reviewers:** TBD
+**Status:** ✅ Decided (2026-11-12) — adopted the suggested answer set (§6); encoded in `coffee_shop_labor_standards.xlsx`.
+**Decision needed by:** before CS-016 (solver) starts. — met.
+**Author:** Project owner (approved) · **Reviewers:** —
+
+---
+
+## 0. Decision (2026-11-12)
+
+Adopted the **suggested answer set** in §6:
+
+| Store | Open | Close | First staff in | Last staff out |
+|---|---|---|---|---|
+| Lower Manhattan (5) | 06:00 | **21:00** | 05:15 | 21:45 |
+| Hell's Kitchen (8) | 06:00 | **21:00** | 05:15 | 21:45 |
+| Astoria (3) | **07:00** | **20:30** | 06:15 | 21:15 |
+
+Evening crew policy **Q4 = C (no dead hours)** — close lands at last-tx + ~30 min, so no evening
+minimum-crew rule is added. 45-min pre-open / post-close windows retained.
+
+**Encoded by** `data/apply_closing_hours.py` into `Store_Profile` (open/close; staff-in/out are
+auto-derived formulas) and `Hours_Validation` (hours-to-close recomputed; Finding note refreshed).
+OQ-7 handled as a data fix (Astoria 06:00→07:00). This unblocks CS-016 (solver time horizon).
 
 ---
 
@@ -164,3 +183,4 @@ If the answers diverge from this set, that's fine — encode whatever is decided
 ## 7. Changelog
 
 - **2026-11-11** — Document created (CS-005 plan execution). Outstanding questions OQ-1 through OQ-7 listed. No answers yet. Status: Open.
+- **2026-11-12** — Decided: adopted the suggested answer set (Q1=B 21:00 LM/HK, Q2=B 20:30 Astoria, Q3=A 07:00 Astoria, Q4=C no dead hours). Encoded into `coffee_shop_labor_standards.xlsx` via `data/apply_closing_hours.py`. OQ-5 (post-2023 evening foot-traffic) accepted as a demo-acceptable risk, flag for production. Status: Decided.

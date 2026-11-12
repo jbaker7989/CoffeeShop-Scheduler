@@ -77,14 +77,15 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-005 — Closing-hours decision & operating-hours config
 - **Feature:** [F4](./FEATURES.md) · **Priority:** P0 · **Size:** XS (decision) + S (config)
-- **Status:** Not started (business decision open)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1.5d (est.)
+- **Status:** ✅ Done (2026-11-12) — suggested answer set adopted
+- **Developer:** Unassigned · **Started:** 2026-11-12 · **Duration:** ~0.5d (actual)
 - **Description:** Settle the evening-hours business decision and encode per-store operating hours.
 - **Detailed specifications:**
   - Decide: keep 10:30 PM close with minimum evening crew, **or** shorten hours (sales stop ~8–9 PM; Astoria opens 7 AM).
   - Record the decision and rationale in the Project Status doc.
   - Encode per-store open/close + 45 min pre-open / post-close in `coffee_shop_labor_standards.xlsx`.
   - Output bounds the solver's time horizon (CS-016).
+- **Delivered:** Decision recorded in `docs/decisions/CS-005-closing-hours.md` (now Decided). Encoded via `data/apply_closing_hours.py`: LM(5)/HK(8) **06:00–21:00** (staff 05:15–21:45), Astoria(3) **07:00–20:30** (staff 06:15–21:15); Astoria open corrected 06:00→07:00 (data fix). No dead-hour evening crew (Q4=C). `Hours_Validation` hours-to-close recomputed. Solver time horizon (CS-016) now defined.
 
 ### CS-006 — Data directory location & git policy
 - **Feature:** [F23](./FEATURES.md) · **Priority:** P0 · **Size:** S (re-root scope; was XS)
@@ -793,7 +794,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 | CS-002 | F2 | P0 | M | ✅ Done |
 | CS-003 | F24 | P1 | XS | ✅ Done |
 | CS-004 | F3/F25 | P0 | S | Not started |
-| CS-005 | F4 | P0 | XS+S | Not started |
+| CS-005 | F4 | P0 | XS+S | ✅ Done |
 | CS-006 | F23 | P0 | S | ✅ Done |
 | CS-007 | F25 | P0 | S | Not started |
 | CS-008 | F5 | P1 | M | Ready |
