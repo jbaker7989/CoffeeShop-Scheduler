@@ -1,6 +1,6 @@
 # Coffee Shop Scheduler — Backlog
 
-Stories derived from [`FEATURES.md`](./FEATURES.md). Each story links back to its feature (F#) and carries: **Priority**, **Size**, **Description**, **Detailed specifications**, **Developer**, **Started** (datetime work began), and **Duration** (development time — estimate until work starts, actual once done).
+Stories derived from [`FEATURES.md`](./FEATURES.md). Each story links back to its feature (F#) and carries: **Priority**, **Size**, **Status**, **Description**, **Detailed specifications** (the story's acceptance criteria), **Developer**, **Started** (datetime work began), and **Duration** (development time — estimate until work starts, actual once done). The feature catalogue owns the product-level expected outcome; this backlog owns the implementable, verifiable work. Every feature must have at least one linked story.
 
 Backlog created: 2026-11-10.
 
@@ -483,6 +483,299 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ---
 
+## P0 — Data-platform blockers
+
+### CS-042 — PostgreSQL platform decision & canonical-store migration
+- **Feature:** [F42](./FEATURES.md) · **Priority:** P0 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Make PostgreSQL the canonical store and demote Excel to fixtures and exports.
+- **Detailed specifications:**
+  - Pin the Postgres version; document the `.env.example` connection convention and the read-only, read-write, and manager roles.
+  - Select Alembic as the migration tool and document the workbook-to-table transition, resolving the CS-006/F23 canonical-path decision.
+  - Demonstrate one agent reading the canonical database rather than an `.xlsx` file.
+
+### CS-043 — Postgres provisioning, migrations & recovery runbook
+- **Feature:** [F43](./FEATURES.md) · **Priority:** P0 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Provide reproducible local Postgres infrastructure and a recoverable schema lifecycle.
+- **Detailed specifications:**
+  - Docker Compose starts Postgres 16 and PgBouncer; `alembic upgrade head` works from a fresh checkout.
+  - Every migration has tested upgrade and downgrade paths.
+  - Add `docs/postgres-backup.md` covering scheduled `pg_dump` and a successful restore drill.
+
+### CS-044 — Idempotent Excel-to-Postgres ETL
+- **Feature:** [F44](./FEATURES.md) · **Priority:** P0 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Load all current workbook fixtures into the schema without data loss or duplicate rows.
+- **Detailed specifications:**
+  - Implement `scripts/etl_excel_to_postgres.py` using upserts/`ON CONFLICT`, and use `COPY` for large tables.
+  - Report source/target row counts and fail on stated invariants, including missing `rule_id` or invalid transaction `store_id`.
+  - A second run produces the same row counts; schedule the checked ETL in CI.
+
+### CS-047 — Canonical data schema, ERD & migrations
+- **Feature:** [F47](./FEATURES.md) · **Priority:** P0 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Define the database contract before consumers depend on it.
+- **Detailed specifications:**
+  - Publish `docs/schema.md` and an ERD covering every F47 table, PK/FK, delete behaviour, index, partition and effective-dating decision.
+  - Model prohibited effective-date overlap with `DATERANGE`/GiST exclusion constraints where applicable.
+  - Generate and review Alembic migrations from the approved schema; cross-reference F10 and F26.
+
+## P1 — Product surfaces, data access & ingestion
+
+### CS-030 — Manager UI foundation
+- **Feature:** [F30](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Establish the shared manager-facing Next.js application shell and backend boundary.
+- **Detailed specifications:**
+  - Choose and document the Next.js-to-backend integration pattern, demo authentication boundary, and LangGraph-state binding convention.
+  - Implement shared navigation and layout with an authenticated manager entry point.
+  - Screen stories CS-031–CS-035 consume this shared shell rather than creating independent patterns.
+
+### CS-031 — Weekly schedule view
+- **Feature:** [F31](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Deliver the read-only, rule-explainable weekly schedule grid.
+- **Detailed specifications:**
+  - Support store, role, status and multi-week navigation filters; render assignments, station coverage and meal breaks.
+  - Selecting a shift surfaces its `Rule_Eval_Log` references and reasons.
+  - Route edits to the solver or call-out flow; no direct grid mutation.
+
+### CS-034 — Rules admin
+- **Feature:** [F34](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Provide guarded maintenance of labor rules and consent waivers.
+- **Detailed specifications:**
+  - Block submissions that violate F26 reconciliation, use unverified law, or conflict in effective dates.
+  - Show waiver expiry warnings, including WV-0001, and route accepted edits through CS-024 with an audit record.
+  - Prove the UI cannot silently save an invalid rule.
+
+### CS-045 — Typed agent data-access layer
+- **Feature:** [F45](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Give agents a pooled, role-aware repository API instead of raw SQL.
+- **Detailed specifications:**
+  - Implement typed models and parameterised repository reads/writes for every F47 table.
+  - Enforce the documented roles and store LangGraph checkpoints in Postgres.
+  - Integration-test the layer against a test database; prohibit string-built SQL in agent code.
+
+### CS-048 — Scheduled weather ingestion
+- **Feature:** [F48](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Turn the existing weather builder into an idempotent, observable data job.
+- **Detailed specifications:**
+  - Schedule weekly n8n execution; upsert hourly/daily weather on location/date/hour keys.
+  - Emit OTel/Loki telemetry and fail loudly when any store has missing hours.
+  - Preserve Open-Meteo attribution and validate reruns do not duplicate data.
+
+### CS-032 — Call-out approval screen
+- **Feature:** [F32](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Implement the manager’s human-in-the-loop call-out approval surface.
+- **Detailed specifications:**
+  - Show the affected shift, ranked candidate, eligibility reasons and hard-stop legal branches inline.
+  - Approve or redirect the LangGraph workflow, then send accepted results to payroll/HCM and compliance logging.
+  - Preserve two-way state binding so a refresh cannot lose the approval state.
+
+### CS-033 — Forecast review screen
+- **Feature:** [F33](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Make forecast quality reviewable by managers without changing calibration directly.
+- **Detailed specifications:**
+  - Plot P70 versus actuals by store, day, hour and category with a selectable back-test range.
+  - Provide per-hour detail including the F1 weather join and a handoff to F5 calibration.
+  - Keep the screen read-only and conform to the F8 forecast contract.
+
+### CS-035 — Calibration and rule-evaluation log viewer
+- **Feature:** [F35](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Expose audit logs as searchable, exportable read-only data.
+- **Detailed specifications:**
+  - Filter calibration and rule-evaluation records by date, rule, employee, store and result.
+  - Export the displayed results to CSV without creating a second write path.
+
+### CS-036 — OpenTelemetry observability foundation
+- **Feature:** [F36](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Define the shared OTel contract and demo deployment shape.
+- **Detailed specifications:**
+  - Pin SDK versions; document W3C propagation, metric vocabulary, sampling policy and resource attributes.
+  - Provide a Compose topology for Collector, Tempo, Mimir, Loki and Grafana.
+  - Demonstrate one cross-agent trace visible with a single `trace_id`.
+
+### CS-037 — Per-agent OTel instrumentation
+- **Feature:** [F37](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Instrument every runtime boundary and document emitted telemetry.
+- **Detailed specifications:**
+  - Trace A2A client/server calls, tools, graph transitions, solving, rule evaluation and SMS operations.
+  - Emit the specified solver, rule-eval and forecast metrics; propagate `traceparent` at every A2A boundary.
+  - List the emitted spans in each relevant agent `AGENTS.md`.
+
+### CS-038 — OTel Collector deployment
+- **Feature:** [F38](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Version and run the shared telemetry Collector.
+- **Detailed specifications:**
+  - Add `otel/collector-config.yaml` with OTLP receivers, batching, resource attributes and tail sampling.
+  - Export traces, metrics and logs to Tempo, Mimir and Loki; verify error traces are retained.
+
+### CS-039 — LGTM backend deployment
+- **Feature:** [F39](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Run the local trace, metric and log backends with a documented production route.
+- **Detailed specifications:**
+  - Compose starts Tempo, Mimir, Loki and their local storage dependencies from one command.
+  - Verify each backend receives Collector data; document S3/Kubernetes or managed production equivalents.
+
+### CS-040 — Provisioned Grafana dashboards
+- **Feature:** [F40](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Deliver the operational dashboards called for by F40.
+- **Detailed specifications:**
+  - Provision all three data sources and dashboards for A2A RED, solver, rule evaluation, call-out states and trace drill-down.
+  - Validate that a pasted `trace_id` correlates its spans, metrics and logs.
+
+### CS-041 — CI observability gate
+- **Feature:** [F41](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Prevent uninstrumented external execution paths from merging.
+- **Detailed specifications:**
+  - Add a test-mode span exporter and CI assertion for HTTP, A2A, database and tool call paths.
+  - Demonstrate that a new uninstrumented wrapper fails CI and an instrumented one passes.
+
+### CS-046 — Read-only Excel export from Postgres
+- **Feature:** [F46](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Retain an Excel view while keeping Postgres authoritative.
+- **Detailed specifications:**
+  - Generate the three existing workbook shapes from canonical tables using the F29 taxonomy.
+  - Verify row equivalence with database content and ensure the exporter never writes back.
+
+### CS-049 — POS data ingestion
+- **Feature:** [F49](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Ingest initial and nightly POS transactions into Postgres.
+- **Detailed specifications:**
+  - Support Square Sandbox and a production adapter; map products through F29 and backfill before incremental sync.
+  - Emit batch telemetry and route unmapped products to a visible dead-letter queue.
+
+### CS-050 — Event-feed ingestion
+- **Feature:** [F50](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Implement CS-023's event pipeline on the canonical data platform.
+- **Detailed specifications:**
+  - Ingest effective-dated events keyed by store, event and start time; cancellations close rows rather than delete them.
+  - Publish an `event_calendar` view for the forecaster and solver, using the shared n8n/OTel pattern.
+
+### CS-051 — Rule-change ingestion and reload notification
+- **Feature:** [F51](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Implement CS-024's reload workflow for Postgres rule changes.
+- **Detailed specifications:**
+  - Watch inserts, updates and effective-date changes; coalesce a batch into one idempotent notification.
+  - Log the reload and OTel event, then prove a running solver adopts a new effective rule within minutes.
+
+## P2 — Analytics stories
+
+### CS-052 — Store-manager analytics foundation
+- **Feature:** [F52](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Establish the store-scoped analytics shell, RBAC and shared filters.
+- **Detailed specifications:**
+  - Enforce one-store manager visibility using the F45 read-only role.
+  - Implement the KPI/insight/drill-down layout, fixed store selector and shared date range.
+
+### CS-053 — Store-manager KPI dashboard
+- **Feature:** [F53](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Surface daily store health as actionable KPI cards.
+- **Detailed specifications:**
+  - Render all F53 measures with deltas and drill-down links.
+  - Every off-target card exposes the relevant rule or constraint identifier.
+
+### CS-054 — Store-manager operational insights
+- **Feature:** [F54](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Deliver manager-facing operational diagnostics.
+- **Detailed specifications:**
+  - Provide the F54 hourly heatmap, coverage, productivity, throughput, call-out and minor-utilisation views.
+  - Drill from each compliance signal to the filtered `Rule_Eval_Log` and its cited rule.
+
+### CS-056 — C-Suite analytics foundation
+- **Feature:** [F56](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Establish company-wide analytics with drill-through to store context.
+- **Detailed specifications:**
+  - Enforce C-Suite all-store access and preserve audit context when drilling into CS-052.
+  - Implement executive layout, cross-store comparison conventions and PDF/CSV export contract.
+
+### CS-057 — C-Suite KPI dashboard
+- **Feature:** [F57](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Present company performance and compliance posture on one screen.
+- **Detailed specifications:**
+  - Render all F57 cards, top movers and drill-throughs with one-line off-target reasons.
+  - Support persistent narrative annotations on anomalies.
+
+### CS-058 — Cross-store rollup and manager drill-through
+- **Feature:** [F58](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Compare store performance and preserve context while drilling in.
+- **Detailed specifications:**
+  - Provide the F58 matrix, sparklines, compliance/call-out/solver rollups and two-store comparison.
+  - Clicking a store opens its CS-052 history with the originating executive context recorded.
+
+## P3 — Advanced analytics
+
+### CS-055 — Store-manager deep analytics
+- **Feature:** [F55](./FEATURES.md) · **Priority:** P3 · **Size:** M
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Provide pre-built forensic views for a single store.
+- **Detailed specifications:**
+  - Implement the F55 elasticity, product-mix, solver, labour-law, ESSTA, FPC and override analyses.
+  - Source heavy aggregates from the F47 materialised views and document each metric definition.
+
+### CS-059 — C-Suite deep analytics
+- **Feature:** [F59](./FEATURES.md) · **Priority:** P3 · **Size:** L
+- **Status:** Not started
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~8d (est.)
+- **Description:** Provide strategic cross-store analytics without ad-hoc SQL.
+- **Detailed specifications:**
+  - Implement every F59 cohort, elasticity, forecast-quality, ROI, compliance and coverage analysis.
+  - Define refresh cadence and validation for each materialised aggregate.
+
+---
+
 ## Backlog summary
 
 | Story | Feature | Priority | Size | Status |
@@ -529,3 +822,33 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 | CS-027 | F20 | P3 | L | Design-only |
 | CS-028 | F21 | P3 | L | Design-only |
 | CS-029 | F22 | P3 | L | Design-only |
+| CS-030 | F30 | P1 | M | Not started |
+| CS-031 | F31 | P1 | M | Not started |
+| CS-032 | F32 | P2 | M | Not started |
+| CS-033 | F33 | P2 | M | Not started |
+| CS-034 | F34 | P1 | M | Not started |
+| CS-035 | F35 | P2 | S | Not started |
+| CS-036 | F36 | P2 | M | Not started |
+| CS-037 | F37 | P2 | M | Not started |
+| CS-038 | F38 | P2 | S | Not started |
+| CS-039 | F39 | P2 | M | Not started |
+| CS-040 | F40 | P2 | S | Not started |
+| CS-041 | F41 | P2 | S | Not started |
+| CS-042 | F42 | P0 | M | Not started |
+| CS-043 | F43 | P0 | S | Not started |
+| CS-044 | F44 | P0 | M | Not started |
+| CS-045 | F45 | P1 | M | Not started |
+| CS-046 | F46 | P2 | S | Not started |
+| CS-047 | F47 | P0 | M | Not started |
+| CS-048 | F48 | P1 | S | Not started |
+| CS-049 | F49 | P2 | M | Not started |
+| CS-050 | F50 | P2 | M | Not started |
+| CS-051 | F51 | P2 | S | Not started |
+| CS-052 | F52 | P2 | M | Not started |
+| CS-053 | F53 | P2 | S | Not started |
+| CS-054 | F54 | P2 | M | Not started |
+| CS-055 | F55 | P3 | M | Not started |
+| CS-056 | F56 | P2 | M | Not started |
+| CS-057 | F57 | P2 | S | Not started |
+| CS-058 | F58 | P2 | M | Not started |
+| CS-059 | F59 | P3 | L | Not started |
