@@ -138,6 +138,6 @@ The compliance rules engine (F10 / CS-013) covers **NY State + NYC**: Hospitalit
 
 ## Maintainer
 
-**Jason Baker** — [@jbaker7989](https://github.com/jbaker7989)
+**Jason Baker** — [@jbaker7989](https://github.com/jbaker7989) · [LinkedIn](https://www.linkedin.com/in/jason-baker-78034996)
 
 Project owner and primary contributor. Issues and PRs welcome; please follow the SDD/TDD process documented in `test/SKILL.md` before opening a PR.
