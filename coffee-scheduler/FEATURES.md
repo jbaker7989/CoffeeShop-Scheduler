@@ -24,6 +24,10 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Size:** M · **Priority:** P0
 - **Description:** Extend `coffee_shop_staff.xlsx` (currently identity-only) with the fields the solver needs: roles, skill levels, home location, cross-location eligibility, key-holder status, cash authorisation, Food Protection Certificate holder, hourly rate, school enrolment, availability personas, and min/max hours per week. Minor occupation restrictions map to roster roles.
 - **Expected outcome:** A roster the CP-SAT solver can actually schedule against; without this the solver has no inputs.
+- **Regression acceptance — BUG-001:**
+  1. **AC1 — complete allocation:** The generator derives each cohort's store quotas from the actual adult/minor partitions, and quota totals equal the partition totals.
+  2. **AC2 — future-date coverage:** With `AS_OF` set so the roster has 33 adults and 7 minors, generation assigns every employee and writes all 15 `NEW_COLS`; it must not raise `KeyError`.
+  3. **AC3 — infeasible roster:** If the adult partition cannot supply the per-store leadership/skill floor, generation stops before workbook mutation with a descriptive typed error that names the cohort and required minimum.
 
 ### F3. School calendar load
 - **Status:** Not started · **Size:** S · **Priority:** P0
@@ -40,6 +44,10 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Size:** M · **Priority:** P1
 - **Description:** Calibrate the synthetic/assumed numbers using the `Daily_Sales_Weather` join from F1: throughput seconds per item for all 9 categories plus per-transaction register overhead (currently overstated — no basket ID); weather multipliers in `Demand_Adjustments` (`ADJ-RAIN`, `ADJ-COLD`, `ADJ-HEAT`, `ADJ-SNOW`) derived from the join; event multipliers need a separate ingest pipeline (F27); target utilisation (85%), forecast quantile (P70), labour % targets, and the overtime budget. Deliverable includes a back-test period (e.g. last 4 weeks of the 6-month sales window) and an acceptance band (e.g. ≤±10% MAPE per category-hour) so "calibrated" is measurable. Every accepted change must append to the `Calibration_Log` sheet in `coffee_shop_labor_standards.xlsx` (id, table, row_key, planned/observed/proposed values, sample period, approver).
 - **Expected outcome:** Defensible demand and cost parameters with a logged history of every change — so forecast and solver outputs are realistic rather than arbitrary, and the trail is auditable.
+- **Regression acceptance — BUG-003:**
+  1. **AC1 — initial calibration:** A workbook whose throughput and demand-adjustment rows are uncalibrated may be calibrated once, marks the applicable rows `CALIBRATED`, and records its audit entries.
+  2. **AC2 — repeat-run protection:** A second calibration run against that workbook exits with a descriptive already-calibrated error before mutation; throughput values, demand adjustments, and `Calibration_Log` remain unchanged.
+  3. **AC3 — mixed-state protection:** If any applicable throughput or demand-adjustment row is already `CALIBRATED`, calibration refuses the mixed-state workbook before appending a log row or changing another row.
 
 ---
 
