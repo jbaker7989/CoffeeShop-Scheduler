@@ -794,6 +794,120 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ---
 
+## Defects — found by code test pass (2026-11-12)
+
+Bugs and unhandled corner cases found by reading + exercising the committed `data/*.py` scripts against
+the real workbooks (all four validators PASS today — these are latent defects the current green state
+hides). Each is written **SDD-first**: the *Specification* is a failing test to add to the relevant
+`validate_*.py` (or a new `test_*.py`) **before** any code change, so the fix is proven by a red→green
+test, per `test/SKILL.md`. None are fixed yet; all reproductions below were run and confirmed.
+
+### BUG-001 — `build_roster_fields.py` crashes / mis-allocates when the adult÷minor partition drifts
+- **Feature:** [F2](./FEATURES.md) (regression risk in CS-002/CS-003) · **Priority:** P1 · **Size:** S
+- **Status:** 🐞 Open · **Type:** Defect (latent — green today)
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~1d (est.)
+- **Description:** The generator hard-codes the home-store quotas `adult_quota={5:12,8:12,3:8}` (sum 32)
+  and `minor_quota={5:3,8:3,3:2}` (sum 8) and fills each store by **positional slicing**
+  `pool[k:k+n]`. These constants silently assume the roster partitions into **exactly 32 adults + 8
+  minors**. That split is a function of each employee's DOB and the frozen `AS_OF = 2026-11-12`. If any
+  of those change — an employee is added/removed/edited, or `AS_OF` is ever advanced — the counts shift
+  and the code fails **two different ways**, neither guarded:
+  - **Overflow (≥33 adults):** the surplus employee is never placed into `by_store`, so it never
+    receives `role`/`skill_level`/etc., and the write loop `ws.cell(..., e[name])` raises
+    **`KeyError: 'role'`** — an uncaught crash, mid-write, after PII has already been split out.
+  - **Underflow (≤31 adults or a store short):** a store silently gets fewer crew than its quota,
+    dropping it below the solver-feasibility floor (≥3 key-holders / ≥2 skill-3 baristas / ≥4 FPC),
+    which only surfaces later as a `validate_roster_fields.py` check-E FAIL with no pointer to the cause.
+- **Reproduction (verified 2026-11-12):**
+  - `age_on(dob, AS_OF)` gives **32 adults / 8 minors** at `AS_OF=2026-11-12` **and** `2027-06-01`, but
+    **33 / 7** at `2028-01-01` (one employee crosses 18) — so the quotas are correct only for a window.
+  - Simulating 33 adults through the exact quota/slice logic leaves `employee_id=32` unplaced and the
+    write loop raises `KeyError: 'role'`.
+- **Specification (write these tests first — they must fail on today's code):**
+  - A test that feeds a roster of 33 adults (or sets `AS_OF=2028-01-01`) and asserts
+    `build_roster_fields.main()` **either places every employee or raises a clear, typed error**
+    (e.g. `SystemExit("roster partition 33/7 ≠ quota 32/8 — update quotas")`), never a bare `KeyError`.
+  - A test asserting `sum(adult_quota.values()) + sum(minor_quota.values()) == len(employees)` and that
+    every tracked `employee_id` ends up with all 15 `NEW_COLS` populated (no blank scheduling cells).
+- **Proposed fix:** derive quotas from the actual adult/minor counts (proportional split with a
+  documented remainder rule) instead of hard-coding; assert total coverage before writing; fail closed
+  with a descriptive message if a store would drop below its feasibility floor.
+- **Risk if unfixed:** the "regenerate the roster deterministically" guarantee (a core project
+  principle) breaks the first time the staff list or the as-of date changes.
+
+### BUG-002 — Calibration silently treats unknown product categories as **zero labor** (shared validator blind spot)
+- **Feature:** [F5](./FEATURES.md) (CS-008) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (latent — all 9 categories match today)
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
+- **Description:** In `calibrate_standards.py → throughput_capacity`, per-line labor is
+  `r.transaction_qty * sec.get(r.product_category, 0)` — any sales `product_category` **absent from
+  `Throughput_Standards`** contributes **0** labor-seconds, understating modeled peak load and making
+  the capacity-feasibility check pass too easily (it would under-scale `seconds_per_unit`).
+  `validate_calibration.py` recomputes capacity with the **identical** `sec_by_cat.get(cat, 0)` fallback
+  (line ~71), so the validator shares the blind spot and cannot catch it. A renamed category, a stray
+  whitespace/casing difference, a NaN, or a genuinely new product line would all slip through silently.
+- **Reproduction (verified 2026-11-12):** today `sales_categories − throughput_categories = {}` and 0
+  NaN, so the defect is dormant — but both the generator and its validator use `.get(cat, 0)`, so the
+  guard that *should* catch a mismatch is the very thing that swallows it.
+- **Specification (write first):**
+  - A test asserting **every** distinct non-null `product_category` in `coffee_shop_sales.xlsx` is a key
+    in `Throughput_Standards` (set-equality or subset), failing loudly if sales contains an unmapped
+    category — add it to `validate_calibration.py` as a new check **F**.
+  - A unit test that injects a synthetic `"Smoothies"` sales row and asserts calibration **raises**
+    (fail-closed) rather than scoring its labor as 0.
+- **Proposed fix:** replace `.get(cat, 0)` with an explicit coverage assertion (raise/`SystemExit`
+  listing the unmapped categories) in both the generator and the validator.
+- **Risk if unfixed:** a future taxonomy change (CS-009) or POS feed (CS-049) silently corrupts the
+  capacity anchor, and the validator reports PASS.
+
+### BUG-003 — `calibrate_standards.py` is not idempotent and has no re-run guard
+- **Feature:** [F5](./FEATURES.md) (CS-008) · **Priority:** P1 · **Size:** S
+- **Status:** 🐞 Open · **Type:** Defect (known limitation, not yet guarded)
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~1d (est.)
+- **Description:** The script reads `seconds_per_unit` / overhead **from the same sheet it then
+  overwrites**, and flips `basis`→`CALIBRATED` in place. A second run (without a prior
+  `git restore data/coffee_shop_labor_standards.xlsx`) re-reads the **already-scaled** seconds and
+  re-amortizes + re-scales them a second time, and appends a **duplicate** block of `CAL-####`
+  `Calibration_Log` rows. There is no "already calibrated → abort/no-op" guard; the only safeguard is a
+  human remembering the README note. For a pipeline whose whole premise is deterministic, reproducible
+  regeneration, a generator that corrupts its own output on a second invocation is a real trap.
+- **Reproduction (by construction):** `basis` is `CALIBRATED` in the committed workbook after CS-008;
+  re-running the script consumes those calibrated values as if they were the raw baseline (double
+  application) and grows `Calibration_Log` by another full set of rows each time.
+- **Specification (write first):**
+  - A test that runs calibration **twice** on a temp copy and asserts the resulting workbook bytes /
+    the `Throughput_Standards` values / the `Calibration_Log` row count are **identical** to a single
+    run (idempotency), OR that the second run exits non-zero with a clear "already calibrated" message.
+- **Proposed fix (either):** (a) read the **raw baseline** from an immutable source (a separate
+  `*_baseline` sheet or a committed constants block) rather than the mutable output; or (b) detect
+  `basis == CALIBRATED` and refuse to re-apply unless `--force`, upserting (not appending) log rows by
+  `(table,row_key)`.
+- **Risk if unfixed:** an accidental double-run (CI, a teammate, a rebase) silently biases every
+  downstream forecast/cost number with no error.
+
+### BUG-004 — Weather multipliers compound multiplicatively when conditions co-occur
+- **Feature:** [F5](./FEATURES.md)/[F9](./FEATURES.md) (CS-008 → CS-014) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (masked — multipliers currently unapplied by the back-test gate)
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
+- **Description:** The multipliers are documented as **independently estimated** (each condition's ratio
+  measured on its own against the normal-day baseline — overlap is a stated limitation). But the
+  back-test `pred()` applies them by looping every matching condition and multiplying:
+  `p *= mult` per hit. A day that is simultaneously RAIN **and** COLD gets `base × mult_rain × mult_cold`
+  — a compounded adjustment the estimation never justified (the single-condition ratios already each
+  absorb the co-occurring weather). This over/under-shoots on multi-condition days. It is **masked
+  today** only because the gate keeps all four multipliers unapplied; it becomes a live forecasting
+  error the moment any multiplier is applied (richer data in CS-014).
+- **Specification (write first):**
+  - A test asserting that for a row matching N conditions, the applied adjustment equals the project's
+    **chosen** combination rule (e.g. the single dominant condition, or an explicitly additive/blended
+    rule) — **not** the naïve product — pinning the intended semantics before CS-014 reuses `pred`.
+- **Proposed fix:** pick and document a combination rule (dominant-condition, or capped blend) and
+  implement it in one shared helper used by both the back-test and the runtime forecaster.
+- **Risk if unfixed:** CS-014 inherits a silent multi-condition bias on exactly the extreme days that
+  matter most for staffing.
+
+---
+
 ## Backlog summary
 
 | Story | Feature | Priority | Size | Status |
@@ -870,3 +984,12 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 | CS-057 | F57 | P2 | S | Not started |
 | CS-058 | F58 | P2 | M | Not started |
 | CS-059 | F59 | P3 | L | Not started |
+
+### Defects (found 2026-11-12)
+
+| Story | Feature | Priority | Size | Status |
+| --- | --- | --- | --- | --- |
+| BUG-001 | F2 | P1 | S | 🐞 Open — roster quota crash on partition drift |
+| BUG-002 | F5 | P2 | XS | 🐞 Open — unknown category = 0 labor (validator blind spot) |
+| BUG-003 | F5 | P1 | S | 🐞 Open — calibration not idempotent / no re-run guard |
+| BUG-004 | F5/F9 | P2 | XS | 🐞 Open — weather multipliers compound on co-occurring conditions |
