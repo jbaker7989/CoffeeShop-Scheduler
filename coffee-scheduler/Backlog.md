@@ -36,8 +36,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-002 — Add roster scheduling fields
 - **Feature:** [F2](./FEATURES.md) · **Priority:** P0 · **Size:** M
-- **Status:** Ready to start
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Status:** ✅ Done (2026-11-12) — all 6 validation checks PASS (CS-003 folded in)
+- **Developer:** Unassigned · **Started:** 2026-11-12 · **Duration:** ~0.5d (actual)
 - **Description:** Extend `coffee_shop_staff.xlsx` from identity-only to a schedulable roster.
 - **Detailed specifications:**
   - Add typed columns: `role`, `skill_level`, `home_location_id`, `cross_location_eligible`, `is_key_holder`, `cash_authorised`, `fpc_holder`, `hourly_rate`, `enrolled_in_school`, `availability_persona`, `min_hours_week`, `max_hours_week`.
@@ -45,17 +45,23 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
   - `location_id = store_id`; home location must be one of the 3 stores.
   - Validate: every active employee has role, home location, rate, and min/max hours; no min > max.
   - Output consumed directly by the solver (CS-016).
+- **Delivered:**
+  - `data/build_roster_fields.py` (deterministic, seed=42) + `data/validate_roster_fields.py` (read-only); `ROSTER_VALIDATION.md` PASS report.
+  - **Naming reconciliation:** the FPC column is `food_protection_cert` (not the backlog's `fpc_holder`) to match the `NYC-FPC-COVERAGE` rule's own note; `skill_level==3` = peak-skill eligible (`COV-PEAK-SKILL`). CS-013/CS-016 should consume these names.
+  - Values are legal (no minor is a key-holder/shift lead; minor weekly hours within NY caps) and solver-feasible per home store (≥3 key-holders, ≥2 skill-3 baristas, ≥4 FPC holders). Store floor/station counts used: LM(5)=6/4, HK(8)=6/4, Astoria(3)=4/3.
+  - Persona→availability-window mapping deferred to CS-016a (the field is a label the solver interprets).
 
 ### CS-003 — Roster school-enrolment & multi-employer typed fields
 - **Feature:** [F24](./FEATURES.md) (part of F2) · **Priority:** P1 · **Size:** XS
-- **Status:** Not started
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~0.5d (est.)
+- **Status:** ✅ Done (2026-11-12) — folded into CS-002
+- **Developer:** Unassigned · **Started:** 2026-11-12 · **Duration:** incl. in CS-002
 - **Description:** Make school enrolment a typed join key and add the multi-employer flag, so compliance rules evaluate cleanly.
 - **Detailed specifications:**
   - Replace free-text "school enrolment" with `is_enrolled` (bool), `school_calendar_id` (FK to School_Calendar), `grade_band`.
   - Add `has_other_employer` (default `False`) to support `NY-MINOR-ALL-MULTIEMPLOYER`.
   - For the 3 employees aged 15 (`FED-MINOR-1415-OCCUPATION`), record parent/school certificate on file via the existing `Consent_Waivers` table.
   - Depends on CS-002; blocks CS-016.
+- **Delivered:** `is_enrolled`, `school_calendar_id` (`NYC-DOE-2026-27`, blank iff not enrolled), `grade_band`, `has_other_employer` added in the same pass as CS-002. All 8 minors enrolled (HS); 1–2 flagged `has_other_employer` to exercise the multi-employer rule. Note: the existing `Consent_Waivers` WV-0001 (EMP-1033) already records that employee's certificate.
 
 ### CS-004 — Load NYC school calendar (multi-year)
 - **Feature:** [F3](./FEATURES.md) + [F25](./FEATURES.md) · **Priority:** P0 · **Size:** S
@@ -784,8 +790,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 | Story | Feature | Priority | Size | Status |
 | --- | --- | --- | --- | --- |
 | CS-001 | F1 | P0 | S | ✅ Done |
-| CS-002 | F2 | P0 | M | Ready |
-| CS-003 | F24 | P1 | XS | Not started |
+| CS-002 | F2 | P0 | M | ✅ Done |
+| CS-003 | F24 | P1 | XS | ✅ Done |
 | CS-004 | F3/F25 | P0 | S | Not started |
 | CS-005 | F4 | P0 | XS+S | Not started |
 | CS-006 | F23 | P0 | S | ✅ Done |

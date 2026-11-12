@@ -4,12 +4,26 @@ Canonical data directory for the Coffee Shop Scheduler (repo root: `coffeeshop/`
 
 ## Contents (tracked)
 - `coffee_shop_sales.xlsx` — source POS sales (synthetic; 2023-01-01…2023-06-30, stores 3/5/8).
-- `coffee_shop_staff.xlsx` — roster identity (synthetic names + DOB).
+- `coffee_shop_staff.xlsx` — roster: identity (name, sex, DOB) **plus scheduling fields** (CS-002/CS-003).
+  See its `Data_Dictionary` sheet for every column, its domain, and the source rule. PII (SSN + address)
+  was moved out to `private/coffee_shop_staff_pii.xlsx` (gitignored).
 - `coffee_shop_labor_rules.xlsx` — effective-dated labor rules.
 - `coffee_shop_labor_standards.xlsx` — store profiles, stations, demand, throughput, coverage, cost targets.
 - `weather_forecast.xlsx` — Open-Meteo weather joined to sales (see `../coffee-scheduler/ATTRIBUTION.md`).
 - `build_weather_forecast.py` — builds `weather_forecast.xlsx` from sales + Open-Meteo.
 - `validate_weather_forecast.py` — validates the weather×sales join (writes `../coffee-scheduler/VALIDATION.md`).
+- `build_roster_fields.py` — adds scheduling fields to `coffee_shop_staff.xlsx` + splits PII to `private/` (seed=42).
+- `validate_roster_fields.py` — validates the roster schema/legality/feasibility (writes `../coffee-scheduler/ROSTER_VALIDATION.md`).
+
+## Roster scheduling fields (CS-002 + CS-003)
+`coffee_shop_staff.xlsx` → `Staff` sheet adds: `role` (Barista/Register/Shift lead), `skill_level` (1–3;
+3 = peak-skill eligible), `home_location_id` (3/5/8), `cross_location_eligible`, `is_key_holder`,
+`cash_authorised`, `food_protection_cert` (named per `NYC-FPC-COVERAGE`), `hourly_rate`,
+`availability_persona`, `min_hours_week`/`max_hours_week`, and the school fields `is_enrolled`,
+`school_calendar_id`, `grade_band`, `has_other_employer`. Values are synthetic but **legal** (no minor is a
+key-holder; minor weekly hours respect NY caps) and **solver-feasible** per home store (≥3 key-holders,
+≥2 skill-3 baristas, ≥4 FPC holders). Regenerate with `build_roster_fields.py`; verify with
+`validate_roster_fields.py`.
 
 ## Git / PII policy (CS-006)
 All workbooks here are **synthetic fixtures** and are committed so the pipeline is reproducible.
