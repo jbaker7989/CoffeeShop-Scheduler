@@ -897,7 +897,7 @@ closing regression evidence.
 
 ### BUG-004 — Weather multipliers compound multiplicatively when conditions co-occur
 - **Feature:** [F5](./FEATURES.md)/[F9](./FEATURES.md) (CS-008 → CS-014) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (masked — multipliers currently unapplied by the back-test gate)
+- **Status:** ✅ Fixed (2026-11-13, `9151e2f`) — `weather_adjustment` applies a single **dominant** independently-estimated effect (never a compound product); covered by `test_weather_adjustment.py` (D5)
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
 - **Description:** The multipliers are documented as **independently estimated** (each condition's ratio
   measured on its own against the normal-day baseline — overlap is a stated limitation). But the
@@ -918,7 +918,7 @@ closing regression evidence.
 
 ### BUG-005 — ETL `null()` coerces every whole-number value to `int`, corrupting zero-padded identifier strings
 - **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P1 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (silent data corruption — dormant on current fixtures) · **Pattern:** D7
+- **Status:** ◑ Mostly fixed (2026-11-13) · **Pattern:** D7 — The first fix (`9151e2f`, `null()`→`return value`) over-corrected and broke integer-column COPY (`89250.0` into an `integer` column); `706b33a` restored whole-number float→int coercion, which leaves strings untouched and passes the string-preservation regression test. **Residual follow-up:** a ZIP/SSN *stored numerically* in the workbook is already lossy before `null()` sees it — the complete fix is reading identifier columns as `dtype=str`. Low priority (current fixtures store none numerically).
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
 - **Description:** `scripts/etl_excel_to_postgres.py → null()` returns
   `int(value) if isinstance(value, float) and value.is_integer() else value`. The coercion is applied by
@@ -943,7 +943,7 @@ closing regression evidence.
 
 ### BUG-006 — ETL `columns()` infers the column set from `data[0]` only; keys unique to later rows are silently dropped
 - **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P1 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (silent data loss — dormant on current fixtures) · **Pattern:** D8
+- **Status:** ✅ Fixed (2026-11-13, `9151e2f`) · **Pattern:** D8 — `columns()` now returns the **union of keys across all rows** (`list(dict.fromkeys(...))`); covered by `test_columns_are_the_union_of_every_row`.
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
 - **Description:** `columns(rows)` returns `list(rows[0])` — the keys of the **first row only**.
   `copy_stage` then stages/COPYs just those columns and `upsert` inserts only them, writing `row.get(c)`
@@ -966,7 +966,7 @@ closing regression evidence.
 
 ### BUG-007 — ETL `validate_snapshot` never validates `employee_pii` (key/null checks skip the most sensitive table)
 - **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (validation-coverage gap — fails closed at the DB, not in the ETL) · **Pattern:** D9
+- **Status:** ✅ Fixed (2026-11-13, `9151e2f`) · **Pattern:** D9 — `validate_snapshot` now iterates `set(snapshot.tables) & set(KEYS)` (derived from the load, not a parallel `PUBLIC_TABLES` list), so `employee_pii` is validated; covered by `test_duplicate_private_employee_is_rejected_before_load`.
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
 - **Description:** The pre-load key/null-uniqueness loop iterates `PUBLIC_TABLES & set(snapshot.tables)`,
   and `employee_pii` is **not in `PUBLIC_TABLES`** (verified `False`). So when `--include-pii` is set, the
@@ -987,7 +987,7 @@ closing regression evidence.
 
 ### BUG-008 — ETL derives `shifts`/`schedules` one-row-per-eval, aborting on the normal many-evals-per-shift case
 - **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (brittle cardinality assumption — fails closed) · **Pattern:** D1
+- **Status:** ✅ Fixed (2026-11-13, `9151e2f`) · **Pattern:** D1 — `derive_legacy_schedule_rows` builds `shifts` from a **set** of `(shift_id, schedule_id)`, so many evaluations per shift collapse to one row instead of aborting on a duplicate key.
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
 - **Description:** `t["shifts"]` is built one row per `rule_eval_log` row carrying a `shift_id`
   (lines ~176-177). `shifts`'s natural key is `(tenant_id, shift_id)`, so two rule evaluations for the
@@ -1006,7 +1006,7 @@ closing regression evidence.
 
 ### BUG-009 — ETL orphan-delete for the global `weather_codes` uses `scope = TRUE`, clobbering across tenants
 - **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P3 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (multi-tenant isolation hazard — latent until F60+) · **Pattern:** —
+- **Status:** ✅ Fixed (2026-11-13, `9151e2f`) · **Pattern:** — `tables_to_prune` excludes `weather_codes` (and any global reference table) from the per-tenant orphan-delete, so a tenant load can never prune shared reference data.
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
 - **Description:** The post-load orphan-delete (line ~265) removes target rows absent from the current
   load. For every tenant-scoped table the scope is `t.tenant_id = %s` (safe), but for the global
@@ -1110,9 +1110,9 @@ closing regression evidence.
 | BUG-001 | F2 | P1 | S | 🐞 Open — roster quota crash on partition drift |
 | BUG-002 | F5 | P2 | XS | ✅ Fixed (under CS-009) — fail-closed category coverage |
 | BUG-003 | F5 | P1 | S | 🐞 Open — calibration not idempotent / no re-run guard |
-| BUG-004 | F5/F9 | P2 | XS | 🐞 Open — weather multipliers compound on co-occurring conditions |
-| BUG-005 | F44 | P1 | XS | 🐞 Open — ETL `null()` int-coerces strings, drops ZIP leading zeros (D7) |
-| BUG-006 | F44 | P1 | XS | 🐞 Open — ETL `columns()` samples row 0; later-row keys silently dropped (D8) |
-| BUG-007 | F44 | P2 | XS | 🐞 Open — `validate_snapshot` skips `employee_pii` key/null checks (D9) |
-| BUG-008 | F44 | P2 | XS | 🐞 Open — `shifts` derivation aborts on many-evals-per-shift (D1) |
-| BUG-009 | F44 | P3 | XS | 🐞 Open — `weather_codes` orphan-delete `scope=TRUE` clobbers across tenants |
+| BUG-004 | F5/F9 | P2 | XS | ✅ Fixed (`9151e2f`) — dominant weather effect, not a compound product (D5) |
+| BUG-005 | F44 | P1 | XS | ◑ Mostly fixed (`9151e2f`+`706b33a`) — float→int restored; numeric-stored ID dtype follow-up (D7) |
+| BUG-006 | F44 | P1 | XS | ✅ Fixed (`9151e2f`) — `columns()` unions all rows' keys (D8) |
+| BUG-007 | F44 | P2 | XS | ✅ Fixed (`9151e2f`) — `validate_snapshot` covers `employee_pii` via `KEYS` (D9) |
+| BUG-008 | F44 | P2 | XS | ✅ Fixed (`9151e2f`) — `shifts` deduped from a set (D1) |
+| BUG-009 | F44 | P3 | XS | ✅ Fixed (`9151e2f`) — `weather_codes` excluded from per-tenant prune |
