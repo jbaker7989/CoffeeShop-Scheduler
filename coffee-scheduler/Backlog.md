@@ -521,8 +521,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-043 — Postgres provisioning, migrations & recovery runbook
 - **Feature:** [F43](./FEATURES.md) · **Priority:** P0 · **Size:** S
-- **Status:** Not started
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Status:** ✅ Done (2026-11-13) — Codex dev / Claude validate+document. Compose adds PgBouncer (6432, transaction pooling); migration `0001` round-trips (`test_migrations_roundtrip.py`, `spec: F43.ac3`); `docs/postgres-backup.md` backup/restore drill executed (restore + RLS spot-check = 1). Plan & validation in [docs/plans/CS-043-postgres-provisioning.md](./docs/plans/CS-043-postgres-provisioning.md). All F43 AC1–AC5 verified on the host. **Two follow-ups logged** (not blockers): (1) engine uses non-local `SET ROLE` → role leaks onto pooled backends (tenant isolation still holds via the local GUC) — switch to `SET LOCAL ROLE`; (2) the round-trip test drops data on the target DB — give it a scratch database.
+- **Developer:** Codex (dev) + Claude (validate/doc) · **Started:** 2026-11-13 · **Duration:** ~1d (est.)
 - **Description:** Provide reproducible local Postgres infrastructure and a recoverable schema lifecycle.
 - **Detailed specifications:**
   - Docker Compose starts Postgres 16 and PgBouncer; `alembic upgrade head` works from a fresh checkout.
@@ -1147,7 +1147,7 @@ closing regression evidence.
 | CS-040 | F40 | P2 | S | Not started |
 | CS-041 | F41 | P2 | S | Not started |
 | CS-042 | F42 | P0 | M | Not started |
-| CS-043 | F43 | P0 | S | Not started |
+| CS-043 | F43 | P0 | S | ✅ Done — compose+PgBouncer, reversible migration, backup/restore drill (F43 AC1–AC5 verified) |
 | CS-044 | F44 | P0 | M | Not started |
 | CS-045 | F45 | P1 | M | Not started |
 | CS-046 | F46 | P2 | S | Not started |

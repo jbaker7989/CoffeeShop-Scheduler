@@ -1,0 +1,48 @@
+# Local data plane: migrations use the direct Postgres 5432 connection because DDL
+# and advisory locks are not pooling-safe; the application uses PgBouncer on 6432.
+services:
+  postgres:
+    image: postgres:16
+    container_name: coffeeshop-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: coffeeshop
+      POSTGRES_PASSWORD: coffeeshop
+      POSTGRES_DB: coffeeshop
+    volumes:
+      - coffeeshop_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coffeeshop -d coffeeshop"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgbouncer:
+    # edoburu/pgbouncer is actively published on Docker Hub; the bitnami pgbouncer tags
+    # were removed/relocated in 2025. Transaction pooling in front of postgres on 6432.
+    image: edoburu/pgbouncer:v1.23.1-p2
+    ports:
+      - "6432:6432"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: coffeeshop
+      DB_PASSWORD: coffeeshop
+      DB_NAME: coffeeshop
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      LISTEN_PORT: "6432"
+      MAX_CLIENT_CONN: "100"
+      DEFAULT_POOL_SIZE: "20"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/6432' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  coffeeshop_pgdata:

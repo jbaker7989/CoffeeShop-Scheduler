@@ -24,3 +24,6 @@ data/private/
 *.real.xlsx
 *.pii.*
 .env*
+
+# Local DB backups (CS-043 runbook) — never commit dumps
+backups/

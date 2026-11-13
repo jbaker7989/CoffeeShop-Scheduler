@@ -365,9 +365,17 @@ Move the project off `.xlsx` as the source of truth onto PostgreSQL. The Excel f
 - **Expected outcome:** Every agent reads from and writes to Postgres; Excel is a derived artefact, not a source.
 
 ### F43. Postgres provisioning & migrations
-- **Status:** Not started · **Size:** S · **Priority:** P0
-- **Description:** Postgres 16 deployed via Docker Compose for local dev. Schema migrations managed by Alembic — one revision per change, with `upgrade` and `downgrade` scripts. Connection pooling via PgBouncer in front of Postgres (single Compose service). Backup / restore runbook at `coffee-scheduler/docs/postgres-backup.md` — at minimum a `pg_dump` schedule via n8n, and a documented restore drill.
-- **Expected outcome:** A fresh checkout can `docker compose up postgres && alembic upgrade head` and have a working database.
+- **Status:** In development · **Size:** S · **Priority:** P0
+- **Description:** Postgres 16 and PgBouncer provide reproducible local infrastructure; Alembic migrations are reversible and the data plane has a tested recovery procedure.
+- **Acceptance criteria:**
+  1. **AC1** — `docker compose up` starts Postgres 16 and PgBouncer, and both become healthy.
+  2. **AC2** — From a fresh checkout, `alembic upgrade head` succeeds over the direct composed Postgres connection and reaches revision `0001`.
+  3. **AC3** — `upgrade → downgrade → upgrade` round-trips without leftover tables, roles, partitions, or policies and without second-upgrade conflicts.
+  4. **AC4** — The application uses PgBouncer transaction pooling on port 6432, while transaction-local `SET ROLE` and `set_config('app.tenant_id', ..., true)` preserve RLS tenant isolation.
+  5. **AC5** — `docs/postgres-backup.md` provides scheduled custom-format `pg_dump`, retention, and a scratch-database restore drill that verifies row counts and RLS.
+- **Edge / adversarial:** an unset tenant setting matches no rows; migration teardown removes externally maintained child partitions through its parent; a role with grants has its grants removed before deletion.
+- **Cross-references:** CS-043, F42 (canonical Postgres store), F44 (ETL), F47 (schema and migration `0001`).
+- **Expected outcome:** A fresh checkout can compose the data plane, migrate it directly, use a pooled application connection safely, and restore it from a verified backup.
 
 ### F44. ETL: Excel → Postgres
 - **Status:** Done (2026-11-12 via CS-044) · **Size:** M · **Priority:** P0

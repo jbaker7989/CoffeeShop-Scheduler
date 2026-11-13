@@ -289,8 +289,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # initial migration: drop everything it created
+    # Children and partitions must go first so no policy, FK, or partition remains.
+    # CASCADE covers dynamically-created partitions maintained outside this revision.
     for t in (["employee_pii"] + list(reversed(DOMAIN_TABLES)) + GLOBAL_READONLY):
         op.execute(f"DROP TABLE IF EXISTS {t} CASCADE")
+
+    # Roles own no tables, but DROP OWNED removes their grants/dependencies before
+    # deletion.  This keeps a subsequent upgrade from inheriting stale privileges.
+    conn = op.get_bind()
     for role in ("app_rw", "app_ro", "secrets_rw"):
-        op.execute(f"DROP ROLE IF EXISTS {role}")
+        exists = conn.exec_driver_sql(
+            "SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)
+        ).scalar()
+        if exists:
+            op.execute(f"DROP OWNED BY {role}")
+            op.execute(f"DROP ROLE {role}")
