@@ -406,6 +406,67 @@ Pipelines that move external data into the Postgres schema from F47. Each is an 
 
 ---
 
+## Phase 1 — SaaS multi-tenancy
+
+Convert the single-tenant deployment into a multi-tenant SaaS serving SMB coffee shops (1–10 stores per tenant). Shared schema, `tenant_id` on every domain table, Postgres Row-Level Security for isolation. Maven Roasters data becomes the demo / seed tenant. Architecture details: [`docs/architecture/saas-multi-tenancy.md`](./docs/architecture/saas-multi-tenancy.md).
+
+### F60. Tenancy model & Row-Level Security
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** Add the `tenants` table (root); add `tenant_id` to every domain table from F47; enable RLS on every domain table with a `tenant_isolation` policy that filters by `current_setting('app.tenant_id')::UUID`; add composite `(tenant_id, …)` indexes; reconfigure PgBouncer to transaction mode and set `app.tenant_id` per request. Migration: backfill Maven data as the `maven-demo` tenant before enabling RLS so application code can be deployed alongside.
+- **Expected outcome:** Every domain row is tenant-scoped; cross-tenant queries return zero rows at the database level regardless of what the application does.
+
+### F61. Auth + per-tenant RBAC
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** `tenant_users` table (per-tenant users with `owner` / `manager` / `staff` / `read_only` roles); `saas_admins` table for cross-tenant admins with MFA; argon2id password hashing; email + password login (no SSO in MVP); JWT issuance with `tenant_id`, `user_id`, `role`, `is_saas_admin` claims; impersonation flow with audit logging. Per-tenant email uniqueness — the same email can register in two tenants (common for SMB owners).
+- **Expected outcome:** Every authenticated request carries a tenant context; SaaS admins can act on any tenant with full audit trail.
+
+### F62. Tenant onboarding
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** Signup endpoint (creates tenant + owner in one transaction); email verification (blocks solver until verified); 14-day trial period with nightly suspension job; first-run wizard (add first store, add first employee, set hours, pick plan); provisioning transaction that seeds jurisdiction-specific `labor_rules` and default `labor_standards`. Idempotent provisioning so re-running on a populated tenant is a no-op.
+- **Expected outcome:** A new SMB owner can sign up, verify email, complete the wizard, and have a working tenant in under 10 minutes.
+
+### F63. Per-tenant configuration
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Per-tenant settings: jurisdiction, operating hours (per store), coverage rules, cost targets, demand adjustments, SMS provider config (Twilio subaccount or shared pool), weather source override, branding (logo, primary color). Fast-changing per-tenant flags live in `tenants.settings` JSONB; structured config lives in dedicated tables (which get the same RLS treatment).
+- **Expected outcome:** Each tenant's behaviour is driven by their own configuration, not a shared global default.
+
+### F64. SaaS admin surface
+- **Status:** Not started · **Size:** L · **Priority:** P1
+- **Description:** A separate UI at `admin.coffeescheduler.com` (or `/admin` behind a separate auth flow): tenant list with search / filter / pagination; tenant detail with usage, last login, plan, payment status; suspend / activate / churn actions; impersonate (audit-logged); plan management (calls Stripe API); aggregate usage dashboard (MRR, active tenants, total solver runs, total SMS); audit log of every admin action. Separate React app, separate auth flow, separate deploy from the manager / C-Suite UI.
+- **Expected outcome:** A SaaS admin can find, suspend, impersonate, and re-plan any tenant without leaving the admin UI.
+
+### F65. Billing & plan tiers
+- **Status:** Not started · **Size:** L · **Priority:** P1
+- **Description:** Stripe integration — `Customer` per tenant, `Subscription` per tenant, webhooks for `customer.subscription.updated`, `invoice.paid`, `invoice.payment_failed`. Plans: Starter (1 store, 10 employees, free), Pro ($99/mo per location, up to 10 stores), Enterprise (custom). Payment failure → 7-day grace period → suspension. Plan tier limits enforced at API gateway.
+- **Expected outcome:** Tenants can sign up to a paid plan, be billed monthly, and have subscription state changes propagate to the application automatically.
+
+### F66. Usage tracking & quotas
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Per-tenant metering aggregated nightly from `rule_eval_log` (solver runs), OTel metrics (SMS sent), and Postgres size queries (storage). Stored in `tenant_usage` table; quotas enforced at API gateway with 429 responses carrying quota context. Plan-tier limits (e.g. Starter = 50 solver runs / mo) checked on every API call.
+- **Expected outcome:** A tenant exceeding their plan's quota gets a clear 429 with the relevant numbers; no over-usage billing surprises.
+
+### F67. Tenant-scoped observability
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Every OTel span gets `tenant.id` and `tenant.slug` resource attributes (extends F37). Grafana dashboards gain a `tenant` template variable. Loki log queries scope by `tenant.id`. Per-tenant alerting (e.g. "tenant X's solver has been infeasible for 3 days") without per-tenant dashboards.
+- **Expected outcome:** A support engineer can debug a single tenant's behaviour without seeing other tenants' data; a SaaS admin sees cross-tenant aggregates.
+
+### F68. Multi-tenant isolation tests
+- **Status:** Not started · **Size:** M · **Priority:** P0 (gate before any multi-tenant deploy)
+- **Description:** Automated cross-tenant attack scenarios per the SDD test classes: a user from tenant A receives 404 (not 403, to avoid existence disclosure) when accessing tenant B's resources; SQL injection attempts with `tenant_id = '<tenant_b_uuid>'` return zero rows under RLS; impersonation tokens work for the impersonated tenant but every action is logged with `impersonated_by`; suspended tenants get 403 across all endpoints. Each test tagged `spec: F68.ac#` for CI traceability.
+- **Expected outcome:** The CI suite catches any cross-tenant data leak before merge; isolation is regression-proof.
+
+### F69. Data export / delete (GDPR)
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Per-tenant data export — JSON dump of every row owned by the tenant, packaged and delivered to the requesting user. Per-tenant hard delete — removes every row across every domain table in a single transaction; audit-logged; tenant row marked `churned` rather than deleted (so historical invoices remain). Right-to-be-forgotten flow for individual users.
+- **Expected outcome:** EU customers can request data export / deletion per GDPR Article 15 and Article 17; the SaaS can fulfil both within statutory windows.
+
+### F70. Tenant routing
+- **Status:** Not started · **Size:** S · **Priority:** P0
+- **Description:** Resolve tenant from request — subdomain (`acme.coffeescheduler.com`) for production, path-prefix (`/t/acme/`) for dev. Tenant resolver middleware extracts `tenant.slug`, looks up `tenant_id`, rejects the request with 404 if the tenant doesn't exist or is suspended. TLS wildcard certificate for the subdomain pattern; the path-prefix mode shares the main certificate. Per `migration/SKILL.md` discipline, the resolver is a small, well-tested module.
+- **Expected outcome:** Every request lands in the right tenant context before any data access; routing failures are loud and fast.
+
+---
+
 ## Known limitations (state openly, not features)
 - Only 6 months of sales history, all from 2023.
 - No basket ID in the sales data (register overhead overstated).
