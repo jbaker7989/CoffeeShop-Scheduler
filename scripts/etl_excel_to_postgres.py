@@ -75,7 +75,7 @@ class LoadReport:
 def null(value):
     if value is None or pd.isna(value):
         return None
-    return int(value) if isinstance(value, float) and value.is_integer() else value
+    return value
 
 
 def rows(path, sheet):
@@ -171,10 +171,7 @@ def read_snapshot(data_dir=DEFAULT_DATA, include_pii=False):
     log = rows(rules, "Rule_Eval_Log")
     t["rule_eval_log"] = with_tenant([{**r, "eval_id": legacy_uuid(r["eval_id"]), "schedule_id": legacy_uuid(r["schedule_id"]),
         "shift_id": legacy_uuid(r["shift_id"]), "employee_id": employee_id(r["employee_id"])} for r in log])
-    schedule_ids = {r["schedule_id"] for r in t["rule_eval_log"] if r["schedule_id"]}
-    t["schedules"] = [{"tenant_id": TENANT, "schedule_id": value, "status": "legacy-import", "solver_version": "excel-etl"} for value in schedule_ids]
-    t["shifts"] = [{"tenant_id": TENANT, "shift_id": r["shift_id"], "schedule_id": r["schedule_id"]}
-        for r in t["rule_eval_log"] if r["shift_id"]]
+    t["schedules"], t["shifts"] = derive_legacy_schedule_rows(t["rule_eval_log"])
     t["transactions"] = with_tenant(rows(sales, "Transactions"))
     t["weather_codes"] = rows(weather, "Weather_Codes")
     t["weather_hourly"] = with_tenant([{k: v for k, v in r.items() if k not in {"day_of_week", "store_location"}} for r in rows(weather, "Hourly_Sales_Weather")])
@@ -191,7 +188,7 @@ def read_snapshot(data_dir=DEFAULT_DATA, include_pii=False):
 
 
 def validate_snapshot(snapshot):
-    for table in PUBLIC_TABLES & set(snapshot.tables):
+    for table in set(snapshot.tables) & set(KEYS):
         keys = KEYS[table]
         seen = set()
         for row in snapshot.tables[table]:
@@ -210,7 +207,21 @@ def validate_snapshot(snapshot):
 
 
 def columns(rows):
-    return list(rows[0]) if rows else []
+    return list(dict.fromkeys(key for row in rows for key in row))
+
+
+def derive_legacy_schedule_rows(logs):
+    schedules = {row["schedule_id"] for row in logs if row.get("schedule_id")}
+    shifts = {(row["shift_id"], row.get("schedule_id")) for row in logs if row.get("shift_id")}
+    return ([{"tenant_id": TENANT, "schedule_id": value, "status": "legacy-import", "solver_version": "excel-etl"}
+             for value in schedules],
+            [{"tenant_id": TENANT, "shift_id": shift_id, "schedule_id": schedule_id}
+             for shift_id, schedule_id in shifts])
+
+
+def tables_to_prune(tables):
+    """Global reference data is shared; a tenant snapshot must never delete it."""
+    return [table for table in tables if table != "weather_codes"]
 
 
 def ident(name):
@@ -258,7 +269,7 @@ def load_snapshot(database_url, tenant_slug, data_dir=DEFAULT_DATA, include_pii=
                 data = snapshot.tables[table]
                 stages[table] = copy_stage(cur, table, data)
                 upsert(cur, table, *stages[table])
-            for table in reversed(load_order):
+            for table in reversed(tables_to_prune(load_order)):
                 stage, _ = stages[table]; keys = KEYS[table]
                 joins = " AND ".join(f"s.{ident(k)}=t.{ident(k)}" for k in keys)
                 scope = "TRUE" if table == "weather_codes" else "t.tenant_id=%s"

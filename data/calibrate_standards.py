@@ -104,6 +104,13 @@ def weather_multipliers(daily):
     return out, base
 
 
+def weather_adjustment(row, multipliers):
+    """Apply one dominant independently-estimated weather effect, never a compound product."""
+    candidates = [info["multiplier"] for adj, (fn, _) in WEATHER_ADJ.items()
+                  if fn(row) and (info := multipliers[adj])["multiplier"] is not None]
+    return max(candidates, key=lambda value: (abs(value - 1), -value), default=1.0)
+
+
 def throughput_capacity(s, sec, overhead_corr, floor):
     """Return a global scale so modeled P95 hourly labor-seconds fits capacity at UTIL, per store."""
     hourly = s.groupby(["store_id", "date", "hour", "product_category"]).transaction_qty.sum().reset_index()
@@ -179,9 +186,7 @@ def main():
             if p is None:
                 return None
             if weather:
-                for adj, (fn, _) in WEATHER_ADJ.items():
-                    if fn(row) and mults[adj]["multiplier"]:
-                        p *= mults[adj]["multiplier"]
+                p *= weather_adjustment(row, mults)
             return p
         def mape_of(weather):
             errs = []
