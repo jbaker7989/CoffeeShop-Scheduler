@@ -1,6 +1,6 @@
 # PostgreSQL schema & ERD — Coffee Shop Scheduler (F47 / CS-047)
 
-**Status:** Draft · **Owner:** TBD · **Date:** 2026-11-12
+**Status:** Implemented in migration `0001` (applied to the local data plane; §5 decisions resolved) · **Owner:** TBD · **Date:** 2026-11-12
 **Decision:** the schema is **multi-tenant-ready from day one** — every domain table carries `tenant_id`
 and is protected by Row-Level Security, with `maven-demo` as the sole seed tenant. The SaaS features
 (F60–F70) then add auth/billing/admin *around* an already-isolated core rather than reworking every table.
@@ -69,24 +69,25 @@ A partitioned table's primary key **must include the partition key**, so those P
 ```mermaid
 erDiagram
     tenants ||--o{ employees : has
-    tenants ||--o{ store_profiles : has
+    tenants ||--o{ stores : has
     tenants ||--o{ labor_rules : has
     tenants ||--o{ transactions : has
 
     employees ||--o| employee_pii : "1:1 (restricted)"
-    employees }o--|| store_profiles : "home_location_id"
+    employees }o--|| stores : "home_location_id"
     employees }o--o| school_calendars : "school_calendar_id"
     employees ||--o{ consent_waivers : "has"
     employees ||--o{ shift_assignments : "assigned"
 
-    store_profiles ||--o{ stations : "has"
-    store_profiles ||--o{ fixed_tasks : "has"
-    store_profiles ||--o{ cost_targets : "has"
-    store_profiles ||--o{ coverage_rules : "has"
-    store_profiles ||--o{ transactions : "at"
-    store_profiles ||--o{ weather_daily : "at"
-    store_profiles ||--o{ demand_adjustments : "scoped"
-    store_profiles ||--o{ events : "at"
+    stores ||--o{ store_hours : "per-day hours"
+    stores ||--o{ stations : "has"
+    stores ||--o{ fixed_tasks : "has"
+    stores ||--o{ cost_targets : "has"
+    stores ||--o{ coverage_rules : "has"
+    stores ||--o{ transactions : "at"
+    stores ||--o{ weather_daily : "at"
+    stores ||--o{ demand_adjustments : "scoped"
+    stores ||--o{ events : "at"
 
     product_taxonomy ||--o{ transactions : "classifies"
     product_taxonomy }o--|| throughput_standards : "category"
@@ -98,10 +99,10 @@ erDiagram
     schedules ||--o{ shifts : "contains"
     shifts ||--o{ shift_assignments : "staffed by"
     shifts ||--o{ rule_eval_log : "checked"
-    forecasts }o--|| store_profiles : "for store"
+    forecasts }o--|| stores : "for store"
 
     weather_codes ||--o{ weather_hourly : "describes"
-    weather_hourly }o--|| store_profiles : "at"
+    weather_hourly }o--|| stores : "at"
     school_calendars ||--o{ school_calendar_days : "day rows"
     holidays }o--|| tenants : "scoped"
     employer_config }o--|| tenants : "scoped"
@@ -140,20 +141,23 @@ Source: `coffee_shop_labor_rules.xlsx!Employer_Config`. | PK `(tenant_id, employ
 `employer_id, employer_name, jurisdiction, wage_order, fww_covered BOOLEAN, chain_location_count INT, notes`.
 RLS. Index `(tenant_id, employer_id)`.
 
-### 3.3 `store_profiles`
-Source: `labor_standards!Store_Profile`. | PK `(tenant_id, location_id, day_of_week)`.
-`location_id INT, store_location TEXT, day_of_week TEXT CHECK(Mon..Sun), open_time TIME, close_time TIME,
-pre_open_minutes INT, post_close_minutes INT, max_staff_on_floor INT, stations INT, profile_type TEXT,
-basis TEXT`. `first_staff_in`/`last_staff_out` are **generated columns**
-(`open_time - pre_open_minutes` / `close_time + post_close_minutes`). RLS. FK targets for stations/tasks/etc.
-> Store identity (`location_id` → name, floor/station counts) is logically distinct from the per-day hours
-> grid; both live here for parity with the workbook. A future split into `stores` + `store_hours` is noted
-> but not required for CS-047.
+### 3.3 `stores` + `store_hours` *(split from the workbook's `Store_Profile` sheet)*
+Source: `labor_standards!Store_Profile`. **Split into two tables** so every store FK has a unique store key
+(the flat per-day grid is not unique on `location_id`, which ~12 tables FK to). Decided in migration `0001`.
+- **`stores`** *(store identity)* — PK `(tenant_id, location_id)`. `location_id INT, store_location TEXT,
+  max_staff_on_floor INT, stations INT, profile_type TEXT, basis TEXT`. This is the FK target for
+  `stations`, `fixed_tasks`, `coverage_rules`, `cost_targets`, `demand_adjustments`, `employees.home_location_id`,
+  `transactions.store_id`, `weather_hourly`, `weather_daily`, `events`, `schedules`, `shifts`, `forecasts`.
+- **`store_hours`** *(per-day grid)* — PK `(tenant_id, location_id, day_of_week)`;
+  FK `(tenant_id, location_id)` → `stores`. `open_time TIME, close_time TIME, pre_open_minutes INT,
+  post_close_minutes INT, first_staff_in TIME, last_staff_out TIME`.
+Both RLS. `first_staff_in`/`last_staff_out` are populated by ETL from open/close ± pre/post minutes (plain
+columns in `0001`, not generated, to keep the first migration simple).
 
 ### 3.4 `stations`
 Source: `labor_standards!Stations`. | PK `(tenant_id, station_id)`.
 `station_id, location_id INT, store_location TEXT, station_type TEXT, staffed_by_role TEXT`.
-FK `(tenant_id, location_id)` → `store_profiles.location_id` (`ON DELETE CASCADE`). RLS.
+FK `(tenant_id, location_id)` → `stores.location_id` (`ON DELETE CASCADE`). RLS.
 
 ### 3.5 `fixed_tasks`
 Source: `labor_standards!Fixed_Tasks`. | PK `(tenant_id, task_id)`.
@@ -208,7 +212,7 @@ skill_level INT CHECK(1..3), home_location_id INT, cross_location_eligible BOOLE
 cash_authorised BOOLEAN, food_protection_cert BOOLEAN, hourly_rate NUMERIC(10,2), availability_persona TEXT,
 min_hours_week INT, max_hours_week INT CHECK(min<=max), is_enrolled BOOLEAN, school_calendar_id TEXT NULL,
 grade_band TEXT CHECK IN('HS','College','None'), has_other_employer BOOLEAN`.
-FKs: `(tenant_id, home_location_id)` → `store_profiles`; `(tenant_id, school_calendar_id)` → `school_calendars`
+FKs: `(tenant_id, home_location_id)` → `stores`; `(tenant_id, school_calendar_id)` → `school_calendars`
 (NULL iff not enrolled, `CHECK (is_enrolled = (school_calendar_id IS NOT NULL))`). RLS.
 Legality `CHECK`s (minor never key-holder; minor weekly caps) carried from `validate_roster_fields.py`.
 
@@ -242,8 +246,8 @@ Index `(tenant_id, rule_id, result)`, `(tenant_id, shift_id)`.
 Source: `labor_rules!School_Calendar`. Split the flat sheet into a header (`school_calendars`: PK
 `(tenant_id, calendar_id)`, `calendar_source, source_url, effective_from, effective_to, is_assumption, notes`)
 and day rows (`school_calendar_days`: PK `(tenant_id, calendar_id, date)`, `in_session BOOLEAN, day_before_school_day BOOLEAN`).
-FK days→header. Temporal on the header (`validity`). RLS. *(If a flat table is preferred for ETL parity, keep one
-`school_calendar` table keyed `(tenant_id, calendar_id, date)` — note the choice in CS-047's plan.)*
+FK days→header. RLS. **Normalized form chosen in migration `0001`** so `employees.school_calendar_id` has a
+unique FK target (`school_calendars.calendar_id`); a flat single table has no unique `calendar_id` to point at.
 
 ### 3.20 `holidays`
 Source: `labor_rules!Holiday_Calendar`. | PK `(tenant_id, holiday_id)`.
@@ -255,7 +259,7 @@ Source: `coffee_shop_sales.xlsx` (~149k rows). | PK `(tenant_id, transaction_id,
 **PARTITION BY RANGE (transaction_date)** monthly.
 `transaction_id BIGINT, transaction_date DATE, transaction_time TIME, transaction_qty INT, store_id INT,
 store_location TEXT, product_id INT, unit_price NUMERIC(10,2), product_category TEXT, product_type TEXT, product_detail TEXT`.
-FKs: `(tenant_id, store_id)`→`store_profiles.location_id`; `(tenant_id, product_id)`→`product_taxonomy`.
+FKs: `(tenant_id, store_id)`→`stores.location_id`; `(tenant_id, product_id)`→`product_taxonomy`.
 RLS. Index `(tenant_id, store_id, transaction_date)`, `(tenant_id, product_id)`.
 
 ### 3.22 `weather_hourly` *(partitioned)*
@@ -316,14 +320,21 @@ row counts, mirroring the current validators' PASS/FAIL reports.
 
 ---
 
-## 5. Open decisions for CS-047 review
-1. **`store_profiles` shape** — keep the flat per-day grid (workbook parity) vs split into `stores` + `store_hours`.
-2. **`school_calendar`** — normalized header+days (§3.19) vs one flat table (ETL parity).
-3. **Surrogate vs natural PKs** — this draft keeps business keys (`rule_id`, `location_id`, `product_id`,
-   `transaction_id`) scoped by `tenant_id`; confirm before generating migrations.
-4. **Partition granularity** — monthly assumed; the 6-month fixture fits a handful of partitions, but confirm
-   the maintenance job that pre-creates future partitions.
-5. **`weather_hourly`/`weather_daily` ownership** — they currently embed joined sales columns; decide whether
-   to keep the denormalized join or derive sales aggregates via a view.
+## 5. Decisions — resolved in migration `0001` (CS-047)
+1. **Store shape** — ✅ **split** into `stores` (identity) + `store_hours` (per-day), because ~12 tables FK to a
+   store and the flat per-day grid is not unique on `location_id` (§3.3).
+2. **School calendar** — ✅ **normalized** `school_calendars` + `school_calendar_days`, so the enrolment FK
+   resolves (§3.19).
+3. **Surrogate vs natural PKs** — ✅ **natural keys kept**, scoped by `tenant_id` (`rule_id`, `location_id`,
+   `product_id`, `transaction_id`); surrogate `UUID` only for `events`/`schedules`/`shifts`/`forecasts`/`rule_eval_log`.
+4. **Partition granularity** — ✅ `transactions`/`weather_hourly`/`rule_eval_log` are `PARTITION BY RANGE` with a
+   **`DEFAULT` partition** created in `0001`; monthly partitions are added later by a maintenance job (ops/CS-043).
+5. **`weather_hourly`/`weather_daily`** — ✅ **denormalized join kept** (the sheet's embedded sales columns), for
+   workbook/ETL parity; a derived-aggregate view can be added later if the duplication becomes a problem.
+
+### RLS policy note (hardened in `0001`)
+The `tenant_isolation` policy uses `tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid` so an
+**unset or empty** `app.tenant_id` yields NULL → matches no rows (graceful fail-closed), rather than erroring on
+`''::uuid`. Applies to every domain table; `employee_pii` additionally restricts DML to the `secrets_rw` role.
 
 Resolve these in the CS-047 plan, then generate the first Alembic revision from this schema.
