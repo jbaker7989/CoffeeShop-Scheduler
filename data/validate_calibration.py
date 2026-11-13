@@ -136,6 +136,15 @@ def main():
     add("E. Back-test baseline MAPE (informational)", True,
         bt + ["[info] Weather multipliers were not applied (did not beat this baseline on 6-month data)."])
 
+    # ---- Category coverage (BUG-002): independent of the calibration code's own guard (D3) ----
+    sales_cats = set(s.product_category.dropna().unique())
+    priced_cats = set(sec_by_cat)
+    unpriced = sales_cats - priced_cats
+    add("F. Every sold category is priced in Throughput_Standards (no silent 0-labor)", not unpriced, [
+        f"Sales categories: {len(sales_cats)}; priced in Throughput_Standards: {len(priced_cats)}.",
+        f"Sold-but-unpriced categories (would be scored 0 labor): {sorted(unpriced) or 'none'}.",
+    ])
+
     ok = all(p for _, p, _ in results)
     ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     lines = [

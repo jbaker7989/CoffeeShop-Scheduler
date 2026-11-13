@@ -137,14 +137,20 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-009 — Product→category taxonomy ownership
 - **Feature:** [F29](./FEATURES.md) (part of F8) · **Priority:** P1 · **Size:** XS
-- **Status:** Not started
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~0.5d (est.)
+- **Status:** ✅ Done (2026-11-12) — F29 AC1–AC5 met; all 6 tests + taxonomy/calibration validators PASS; **BUG-002 closed**
+- **Developer:** Unassigned · **Started:** 2026-11-12 · **Duration:** ~0.5d (actual)
 - **Description:** Establish one versioned category taxonomy that forecaster, throughput table and explanation layer all read.
 - **Detailed specifications:**
   - Add a `Product_Taxonomy` table (or versioned mapping sheet) linking `product_id` → `product_category` (9 categories).
   - Pin a version; the forecast contract (CS-010b), `Throughput_Standards`, and explanation layer reference that version.
   - Add a check that flags any category present in one consumer but missing in another.
   - Blocks/feeds CS-010b (forecast contract) and CS-014 (forecaster).
+- **Delivered:**
+  - `data/build_product_taxonomy.py` (idempotent generator) → `Product_Taxonomy` (80 rows: `product_id`→detail/type/category, version-stamped) + `Taxonomy_Meta` (version `TAX-2023H1-v1`, source `2023-01-01..2023-06-30`, counts) in `coffee_shop_labor_standards.xlsx`.
+  - `data/validate_taxonomy.py` → `TAXONOMY_VALIDATION.md` (5 checks PASS, independent of the generator per D3).
+  - `coffee-scheduler/test/test_taxonomy.py` — SDD/TDD: 6 stdlib tests tagged `spec: F29.ac#`, committed failing-first before the impl.
+  - **BUG-002 fixed here:** `calibrate_standards.py` now **fails closed** (`assert_category_coverage`) on any sales category absent from `Throughput_Standards` (was silently scored 0 labor); `validate_calibration.py` gained an independent coverage check **F**. The cross-consumer check the spec asked for is exactly this guard.
+  - Scope held to XS: the forecast contract (CS-012) and explanation layer consume the pinned version later; not built here.
 
 ### CS-010 — Author AGENTS.md + SKILL.md set
 - **Feature:** [F6](./FEATURES.md) · **Priority:** P1 · **Size:** M
@@ -800,11 +806,14 @@ Bugs and unhandled corner cases found by reading + exercising the committed `dat
 the real workbooks (all four validators PASS today — these are latent defects the current green state
 hides). Each is written **SDD-first**: the *Specification* is a failing test to add to the relevant
 `validate_*.py` (or a new `test_*.py`) **before** any code change, so the fix is proven by a red→green
-test, per `test/SKILL.md`. None are fixed yet; all reproductions below were run and confirmed.
+test, per `test/SKILL.md`. Reproductions below were run and confirmed; resolved items record their
+closing regression evidence.
 
 ### BUG-001 — `build_roster_fields.py` crashes / mis-allocates when the adult÷minor partition drifts
 - **Feature:** [F2](./FEATURES.md) (regression risk in CS-002/CS-003) · **Priority:** P1 · **Size:** S
-- **Status:** 🐞 Open · **Type:** Defect (latent — green today)
+- **Status:** ✅ Fixed (2026-11-12) — proportional, largest-remainder allocation now derives quotas from
+  live cohort counts; it enforces the five-adult feasibility floor before any workbook mutation. Covered
+  by `data/test_bug_regressions.py` (`F2.ac1`–`F2.ac3`).
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~1d (est.)
 - **Description:** The generator hard-codes the home-store quotas `adult_quota={5:12,8:12,3:8}` (sum 32)
   and `minor_quota={5:3,8:3,3:2}` (sum 8) and fills each store by **positional slicing**
@@ -837,7 +846,7 @@ test, per `test/SKILL.md`. None are fixed yet; all reproductions below were run 
 
 ### BUG-002 — Calibration silently treats unknown product categories as **zero labor** (shared validator blind spot)
 - **Feature:** [F5](./FEATURES.md) (CS-008) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (latent — all 9 categories match today)
+- **Status:** ✅ Fixed (2026-11-12) under **CS-009** — `assert_category_coverage` fails closed in `calibrate_standards.py`; `validate_calibration.py` check **F** asserts coverage independently (D3); regression test `test_ac4_calibration_refuses_unknown_category`.
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
 - **Description:** In `calibrate_standards.py → throughput_capacity`, per-line labor is
   `r.transaction_qty * sec.get(r.product_category, 0)` — any sales `product_category` **absent from
@@ -862,7 +871,8 @@ test, per `test/SKILL.md`. None are fixed yet; all reproductions below were run 
 
 ### BUG-003 — `calibrate_standards.py` is not idempotent and has no re-run guard
 - **Feature:** [F5](./FEATURES.md) (CS-008) · **Priority:** P1 · **Size:** S
-- **Status:** 🐞 Open · **Type:** Defect (known limitation, not yet guarded)
+- **Status:** ✅ Fixed (2026-11-12) — `refuse_if_already_calibrated` aborts before any mutation when an
+  applicable row is already calibrated. Covered by `data/test_bug_regressions.py` (`F5.ac1`–`F5.ac3`).
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~1d (est.)
 - **Description:** The script reads `seconds_per_unit` / overhead **from the same sheet it then
   overwrites**, and flips `basis`→`CALIBRATED` in place. A second run (without a prior
@@ -920,7 +930,7 @@ test, per `test/SKILL.md`. None are fixed yet; all reproductions below were run 
 | CS-006 | F23 | P0 | S | ✅ Done |
 | CS-007 | F25 | P0 | S | ✅ Done (merged into CS-004) |
 | CS-008 | F5 | P1 | M | ✅ Done |
-| CS-009 | F29 | P1 | XS | Not started |
+| CS-009 | F29 | P1 | XS | ✅ Done |
 | CS-010 | F6 | P1 | M | Partial |
 | CS-011 | F7 | P1 | M | Scaffolded |
 | CS-012 | F8 | P1 | S | In design |
@@ -990,6 +1000,6 @@ test, per `test/SKILL.md`. None are fixed yet; all reproductions below were run 
 | Story | Feature | Priority | Size | Status |
 | --- | --- | --- | --- | --- |
 | BUG-001 | F2 | P1 | S | 🐞 Open — roster quota crash on partition drift |
-| BUG-002 | F5 | P2 | XS | 🐞 Open — unknown category = 0 labor (validator blind spot) |
+| BUG-002 | F5 | P2 | XS | ✅ Fixed (under CS-009) — fail-closed category coverage |
 | BUG-003 | F5 | P1 | S | 🐞 Open — calibration not idempotent / no re-run guard |
 | BUG-004 | F5/F9 | P2 | XS | 🐞 Open — weather multipliers compound on co-occurring conditions |

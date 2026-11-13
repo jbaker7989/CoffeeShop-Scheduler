@@ -24,6 +24,10 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Size:** M · **Priority:** P0
 - **Description:** Extend `coffee_shop_staff.xlsx` (currently identity-only) with the fields the solver needs: roles, skill levels, home location, cross-location eligibility, key-holder status, cash authorisation, Food Protection Certificate holder, hourly rate, school enrolment, availability personas, and min/max hours per week. Minor occupation restrictions map to roster roles.
 - **Expected outcome:** A roster the CP-SAT solver can actually schedule against; without this the solver has no inputs.
+- **Regression acceptance — BUG-001:**
+  1. **AC1 — complete allocation:** The generator derives each cohort's store quotas from the actual adult/minor partitions, and quota totals equal the partition totals.
+  2. **AC2 — future-date coverage:** With `AS_OF` set so the roster has 33 adults and 7 minors, generation assigns every employee and writes all 15 `NEW_COLS`; it must not raise `KeyError`.
+  3. **AC3 — infeasible roster:** If the adult partition cannot supply the per-store leadership/skill floor, generation stops before workbook mutation with a descriptive typed error that names the cohort and required minimum.
 
 ### F3. School calendar load
 - **Status:** Not started · **Size:** S · **Priority:** P0
@@ -40,6 +44,10 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Size:** M · **Priority:** P1
 - **Description:** Calibrate the synthetic/assumed numbers using the `Daily_Sales_Weather` join from F1: throughput seconds per item for all 9 categories plus per-transaction register overhead (currently overstated — no basket ID); weather multipliers in `Demand_Adjustments` (`ADJ-RAIN`, `ADJ-COLD`, `ADJ-HEAT`, `ADJ-SNOW`) derived from the join; event multipliers need a separate ingest pipeline (F27); target utilisation (85%), forecast quantile (P70), labour % targets, and the overtime budget. Deliverable includes a back-test period (e.g. last 4 weeks of the 6-month sales window) and an acceptance band (e.g. ≤±10% MAPE per category-hour) so "calibrated" is measurable. Every accepted change must append to the `Calibration_Log` sheet in `coffee_shop_labor_standards.xlsx` (id, table, row_key, planned/observed/proposed values, sample period, approver).
 - **Expected outcome:** Defensible demand and cost parameters with a logged history of every change — so forecast and solver outputs are realistic rather than arbitrary, and the trail is auditable.
+- **Regression acceptance — BUG-003:**
+  1. **AC1 — initial calibration:** A workbook whose throughput and demand-adjustment rows are uncalibrated may be calibrated once, marks the applicable rows `CALIBRATED`, and records its audit entries.
+  2. **AC2 — repeat-run protection:** A second calibration run against that workbook exits with a descriptive already-calibrated error before mutation; throughput values, demand adjustments, and `Calibration_Log` remain unchanged.
+  3. **AC3 — mixed-state protection:** If any applicable throughput or demand-adjustment row is already `CALIBRATED`, calibration refuses the mixed-state workbook before appending a log row or changing another row.
 
 ---
 
@@ -283,6 +291,14 @@ These were not in the original backlog but the data and Project Status already i
 - **Status:** Not started (part of F8) · **Size:** XS · **Priority:** P1
 - **Description:** Sales has `product_id` and `product_category`; `Throughput_Standards` maps 9 categories to seconds-per-unit; the forecaster must consume the same taxonomy. Add a `Product_Taxonomy` table (or a versioned mapping sheet) and pin it: the forecaster, throughput table, and explanation layer all read the same version. Without this, "Coffee" in the forecast and "Coffee" in throughput can silently drift.
 - **Expected outcome:** One versioned category taxonomy that every downstream consumer reads — so calibration, forecast and explanation stay aligned.
+- **Acceptance criteria (CS-009):**
+  1. **AC1 — complete mapping:** `Product_Taxonomy` has exactly one row per distinct sales `product_id` (80), each with a non-null `product_detail`, `product_type` and `product_category`.
+  2. **AC2 — category is a function of product:** no `product_id` maps to more than one `product_category` (the sales hierarchy is single-valued).
+  3. **AC3 — no drift vs source:** the set of `product_category` values in `Product_Taxonomy` equals the set in `coffee_shop_sales.xlsx` — none missing, none invented.
+  4. **AC4 — cross-consumer coverage (also BUG-002):** the taxonomy's category set equals the `Throughput_Standards` category set; the taxonomy validator names any category present in one consumer but absent from the other, and calibration refuses (does not score 0 labor) any sales category absent from `Throughput_Standards`.
+  5. **AC5 — pinned version:** a single `taxonomy_version` is recorded in `Taxonomy_Meta` and stamped on every `Product_Taxonomy` row, so downstream consumers can reference an exact version.
+  - **Edge / adversarial:** a sales row carrying a category absent from `Throughput_Standards` must make both the taxonomy validator **fail** and calibration **raise** — never silently pass or score it as zero labor.
+  - **Cross-references:** `coffee_shop_sales.xlsx` (source hierarchy), `Throughput_Standards` (consumer), F8/CS-012 (forecast contract — future consumer of the pinned version), BUG-002.
 
 ---
 
@@ -387,6 +403,67 @@ Pipelines that move external data into the Postgres schema from F47. Each is an 
 - **Status:** Not started · **Size:** S · **Priority:** P2
 - **Description:** n8n trigger that watches `labor_rules` for inserts, updates and `effective_to` changes (via Postgres `LISTEN/NOTIFY` or a polling trigger). On change: emits an OTel event, writes a `Rule_Eval_Log` row tagged `agent = "labor-compliance-agent/reload"`, and notifies the running solver to reload its rule snapshot. Idempotent — multiple changes in one window produce one notification, not N. Implements the rollout flow described in F28.
 - **Expected outcome:** A rule row added today takes effect in the running solver within minutes, with an audit trail.
+
+---
+
+## Phase 1 — SaaS multi-tenancy
+
+Convert the single-tenant deployment into a multi-tenant SaaS serving SMB coffee shops (1–10 stores per tenant). Shared schema, `tenant_id` on every domain table, Postgres Row-Level Security for isolation. Maven Roasters data becomes the demo / seed tenant. Architecture details: [`docs/architecture/saas-multi-tenancy.md`](./docs/architecture/saas-multi-tenancy.md).
+
+### F60. Tenancy model & Row-Level Security
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** Add the `tenants` table (root); add `tenant_id` to every domain table from F47; enable RLS on every domain table with a `tenant_isolation` policy that filters by `current_setting('app.tenant_id')::UUID`; add composite `(tenant_id, …)` indexes; reconfigure PgBouncer to transaction mode and set `app.tenant_id` per request. Migration: backfill Maven data as the `maven-demo` tenant before enabling RLS so application code can be deployed alongside.
+- **Expected outcome:** Every domain row is tenant-scoped; cross-tenant queries return zero rows at the database level regardless of what the application does.
+
+### F61. Auth + per-tenant RBAC
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** `tenant_users` table (per-tenant users with `owner` / `manager` / `staff` / `read_only` roles); `saas_admins` table for cross-tenant admins with MFA; argon2id password hashing; email + password login (no SSO in MVP); JWT issuance with `tenant_id`, `user_id`, `role`, `is_saas_admin` claims; impersonation flow with audit logging. Per-tenant email uniqueness — the same email can register in two tenants (common for SMB owners).
+- **Expected outcome:** Every authenticated request carries a tenant context; SaaS admins can act on any tenant with full audit trail.
+
+### F62. Tenant onboarding
+- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Description:** Signup endpoint (creates tenant + owner in one transaction); email verification (blocks solver until verified); 14-day trial period with nightly suspension job; first-run wizard (add first store, add first employee, set hours, pick plan); provisioning transaction that seeds jurisdiction-specific `labor_rules` and default `labor_standards`. Idempotent provisioning so re-running on a populated tenant is a no-op.
+- **Expected outcome:** A new SMB owner can sign up, verify email, complete the wizard, and have a working tenant in under 10 minutes.
+
+### F63. Per-tenant configuration
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Per-tenant settings: jurisdiction, operating hours (per store), coverage rules, cost targets, demand adjustments, SMS provider config (Twilio subaccount or shared pool), weather source override, branding (logo, primary color). Fast-changing per-tenant flags live in `tenants.settings` JSONB; structured config lives in dedicated tables (which get the same RLS treatment).
+- **Expected outcome:** Each tenant's behaviour is driven by their own configuration, not a shared global default.
+
+### F64. SaaS admin surface
+- **Status:** Not started · **Size:** L · **Priority:** P1
+- **Description:** A separate UI at `admin.coffeescheduler.com` (or `/admin` behind a separate auth flow): tenant list with search / filter / pagination; tenant detail with usage, last login, plan, payment status; suspend / activate / churn actions; impersonate (audit-logged); plan management (calls Stripe API); aggregate usage dashboard (MRR, active tenants, total solver runs, total SMS); audit log of every admin action. Separate React app, separate auth flow, separate deploy from the manager / C-Suite UI.
+- **Expected outcome:** A SaaS admin can find, suspend, impersonate, and re-plan any tenant without leaving the admin UI.
+
+### F65. Billing & plan tiers
+- **Status:** Not started · **Size:** L · **Priority:** P1
+- **Description:** Stripe integration — `Customer` per tenant, `Subscription` per tenant, webhooks for `customer.subscription.updated`, `invoice.paid`, `invoice.payment_failed`. Plans: Starter (1 store, 10 employees, free), Pro ($99/mo per location, up to 10 stores), Enterprise (custom). Payment failure → 7-day grace period → suspension. Plan tier limits enforced at API gateway.
+- **Expected outcome:** Tenants can sign up to a paid plan, be billed monthly, and have subscription state changes propagate to the application automatically.
+
+### F66. Usage tracking & quotas
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Per-tenant metering aggregated nightly from `rule_eval_log` (solver runs), OTel metrics (SMS sent), and Postgres size queries (storage). Stored in `tenant_usage` table; quotas enforced at API gateway with 429 responses carrying quota context. Plan-tier limits (e.g. Starter = 50 solver runs / mo) checked on every API call.
+- **Expected outcome:** A tenant exceeding their plan's quota gets a clear 429 with the relevant numbers; no over-usage billing surprises.
+
+### F67. Tenant-scoped observability
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Every OTel span gets `tenant.id` and `tenant.slug` resource attributes (extends F37). Grafana dashboards gain a `tenant` template variable. Loki log queries scope by `tenant.id`. Per-tenant alerting (e.g. "tenant X's solver has been infeasible for 3 days") without per-tenant dashboards.
+- **Expected outcome:** A support engineer can debug a single tenant's behaviour without seeing other tenants' data; a SaaS admin sees cross-tenant aggregates.
+
+### F68. Multi-tenant isolation tests
+- **Status:** Not started · **Size:** M · **Priority:** P0 (gate before any multi-tenant deploy)
+- **Description:** Automated cross-tenant attack scenarios per the SDD test classes: a user from tenant A receives 404 (not 403, to avoid existence disclosure) when accessing tenant B's resources; SQL injection attempts with `tenant_id = '<tenant_b_uuid>'` return zero rows under RLS; impersonation tokens work for the impersonated tenant but every action is logged with `impersonated_by`; suspended tenants get 403 across all endpoints. Each test tagged `spec: F68.ac#` for CI traceability.
+- **Expected outcome:** The CI suite catches any cross-tenant data leak before merge; isolation is regression-proof.
+
+### F69. Data export / delete (GDPR)
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Per-tenant data export — JSON dump of every row owned by the tenant, packaged and delivered to the requesting user. Per-tenant hard delete — removes every row across every domain table in a single transaction; audit-logged; tenant row marked `churned` rather than deleted (so historical invoices remain). Right-to-be-forgotten flow for individual users.
+- **Expected outcome:** EU customers can request data export / deletion per GDPR Article 15 and Article 17; the SaaS can fulfil both within statutory windows.
+
+### F70. Tenant routing
+- **Status:** Not started · **Size:** S · **Priority:** P0
+- **Description:** Resolve tenant from request — subdomain (`acme.coffeescheduler.com`) for production, path-prefix (`/t/acme/`) for dev. Tenant resolver middleware extracts `tenant.slug`, looks up `tenant_id`, rejects the request with 404 if the tenant doesn't exist or is suspended. TLS wildcard certificate for the subdomain pattern; the path-prefix mode shares the main certificate. Per `migration/SKILL.md` discipline, the resolver is a small, well-tested module.
+- **Expected outcome:** Every request lands in the right tenant context before any data access; routing failures are loud and fast.
 
 ---
 

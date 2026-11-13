@@ -33,11 +33,49 @@ WEATHER_ADJ = {               # adjustment_id -> (condition fn on daily row, new
 }
 
 
+class CalibrationAlreadyAppliedError(RuntimeError):
+    """Raised when a run would apply derived values to an already calibrated workbook."""
+
+
+def refuse_if_already_calibrated(wb):
+    """Protect the mutable calibration workbook from a second, compounding application."""
+    calibrated = []
+    for sheet_name, key in (("Throughput_Standards", "product_category"),
+                            ("Demand_Adjustments", "adjustment_id")):
+        ws = wb[sheet_name]
+        headers = {cell.value: index + 1 for index, cell in enumerate(ws[1])}
+        for row in range(2, ws.max_row + 1):
+            row_key = ws.cell(row, headers[key]).value
+            if row_key is None:
+                continue
+            if sheet_name == "Demand_Adjustments" and row_key not in WEATHER_ADJ:
+                continue
+            if ws.cell(row, headers["basis"]).value == "CALIBRATED":
+                calibrated.append(f"{sheet_name}:{row_key}")
+    if calibrated:
+        raise CalibrationAlreadyAppliedError(
+            "already calibrated; refusing to re-apply mutable standards "
+            f"({', '.join(calibrated[:3])}{'...' if len(calibrated) > 3 else ''})"
+        )
+
+
 def load_sales():
     s = pd.read_excel(SALES)
     s["date"] = pd.to_datetime(s.transaction_date).dt.normalize()
     s["hour"] = s.transaction_time.apply(lambda t: t.hour)
     return s
+
+
+def assert_category_coverage(sales_cats, throughput_cats):
+    """Fail closed (BUG-002): every sales product_category must be priced in Throughput_Standards.
+    Without this, `sec.get(cat, 0)` would silently score an unmapped category as 0 labor-seconds and
+    make the capacity anchor feasible on paper. Raise, naming the offenders, rather than guess."""
+    missing = set(sales_cats) - set(throughput_cats)
+    if missing:
+        raise SystemExit(
+            f"Throughput_Standards has no seconds for sales categories {sorted(missing)} — "
+            f"refusing to score them as 0 labor (BUG-002). Add them (see CS-009 Product_Taxonomy) "
+            f"before calibrating.")
 
 
 def basket_size(s):
@@ -84,12 +122,13 @@ def throughput_capacity(s, sec, overhead_corr, floor):
 
 
 def main():
+    wb = load_workbook(STD)
+    refuse_if_already_calibrated(wb)
     s = load_sales()
-    xl = pd.ExcelFile(WEATHER)
-    daily = xl.parse("Daily_Sales_Weather")
+    with pd.ExcelFile(WEATHER) as xl:
+        daily = xl.parse("Daily_Sales_Weather")
     daily["day_of_week"] = pd.to_datetime(daily.date).dt.day_name()
 
-    wb = load_workbook(STD)
     sp = wb["Store_Profile"]
     sph = {c.value: i for i, c in enumerate(sp[1])}
     floor = {}
@@ -110,6 +149,9 @@ def main():
             overhead_row = (r, float(val))
         else:
             sec[cat] = float(val)
+
+    # Fail closed if any sold category is unpriced (BUG-002) — before any derivation runs.
+    assert_category_coverage(s.product_category.dropna().unique(), sec)
 
     B = basket_size(s)
     overhead_old = overhead_row[1]
