@@ -71,18 +71,24 @@ Postgres query planner uses the leading column for tenant filtering; the second 
 
 ```sql
 ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employees FORCE ROW LEVEL SECURITY;          -- critical: see note below
 
 CREATE POLICY tenant_isolation ON employees
-  USING (tenant_id = current_setting('app.tenant_id', true)::UUID);
+  USING      (tenant_id = current_setting('app.tenant_id', true)::UUID)   -- read / update-visibility
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::UUID);  -- block cross-tenant writes
 ```
 
-The `true` second arg to `current_setting` returns NULL if the setting is missing — the policy then matches no rows, which is the desired default (deny). A superuser or a migration role bypasses RLS (`BYPASSRLS`) so ETL can run.
+The `true` second arg to `current_setting` returns NULL if the setting is missing — the policy then matches no rows, which is the desired default (deny). The explicit `WITH CHECK` stops a client from *inserting or updating* a row with another tenant's `tenant_id`; the application must always derive `tenant_id` from the request context (JWT), never from the request body.
 
-Every domain table gets this policy. The application sets `app.tenant_id` at the start of each transaction from the JWT claim; the database enforces isolation regardless of what the application code does.
+**`FORCE ROW LEVEL SECURITY` is mandatory and easy to miss:** by default Postgres does **not** apply RLS policies to the table *owner* (or any `BYPASSRLS` role). If the application connects as the role that owns the tables — the common default — every policy above is silently a no-op and isolation fails open. Two defences, used together: (1) `FORCE ROW LEVEL SECURITY` on every domain table, and (2) the application connects as a dedicated, non-owner `app_rw` role that has only DML grants and **not** `BYPASSRLS`. Only the migration/ETL role carries `BYPASSRLS`, and application code never connects as it.
+
+Every domain table gets this policy. The application sets `app.tenant_id` at the start of each transaction from the JWT claim; the database then enforces isolation regardless of what the application code does — provided the two defences above hold.
 
 ### 2.5 Connection pooling
 
 PgBouncer in **transaction mode**. Per-session `SET LOCAL app.tenant_id = ...` at the start of each transaction. PgBouncer's transaction mode is required because session-mode would hold the tenant setting across the connection's lifetime, which is incompatible with pooling.
+
+**Gotcha:** `SET LOCAL` is scoped to the *current transaction*, so every request must open an explicit transaction, set the GUC, then query. If any code path runs in autocommit (a bare `SELECT` outside `BEGIN`), the setting never takes effect and the query runs with no tenant context — which, with `FORCE` RLS, denies all rows (a visible failure, not a silent leak, which is the safe direction). The ORM session middleware must therefore wrap every request in a transaction and assert `app.tenant_id` is set before the first statement. The pooled-connection **context-bleed test** (§11) proves tenant A's `SET LOCAL` never survives into tenant B's reuse of the same physical connection.
 
 ---
 
@@ -199,9 +205,12 @@ Most configuration lives in dedicated tables (so it gets the same RLS treatment)
 | Coverage rules | `coverage_rules` (per tenant) | F11 reads |
 | Cost targets | `cost_targets` (per tenant) | F11 reads |
 | Demand adjustments | `demand_adjustments` (per tenant) | F5 calibrates per tenant |
-| SMS provider config | `tenants.settings.sms` (JSONB) — Twilio sub-account per tenant, or shared pool | Per-tenant billing for SMS |
+| SMS provider config | **non-secret** flags in `tenants.settings.sms` (shared pool vs dedicated); **credentials** in `tenant_secrets` (see below) | Per-tenant billing for SMS |
 | Weather source | `tenants.settings.weather` — Open-Meteo by default, configurable | Regional overrides |
 | Branding | `tenants.settings.branding` (logo URL, primary color) | Manager UI theming |
+| Integration secrets | `tenant_secrets(tenant_id, key, ciphertext, ...)` — **never** plaintext JSONB | Twilio/Stripe/weather keys must be encrypted at the application layer |
+
+> **Secrets never live in `tenants.settings` JSONB.** A settings blob is readable in backups, logs, the SaaS admin UI and any `SELECT *`. Per-tenant credentials (Twilio, Stripe, paid weather, future integrations) go in a dedicated `tenant_secrets` table with **application-level encryption** (envelope encryption via a KMS data key), decrypted only in the request/job path that needs them. The JSONB column holds non-secret config only.
 
 ---
 
@@ -382,3 +391,71 @@ The work splits into three waves, each gated:
 **Wave 3 — Compliance (P2):** F69. GDPR data export / delete. End state: ready for EU customers.
 
 Each wave ends with `migration/SKILL.md` schema-drift check green and the isolation test suite green before the next wave begins.
+
+---
+
+## 14. Completeness addendum — security, lifecycle & operations
+
+The sections above cover the data model, auth, onboarding, billing, observability, migration and sequencing. This addendum closes the gaps a completeness review surfaced. Each item names the feature (§10) it folds into — **no new feature IDs are minted**; these are acceptance criteria for existing ones.
+
+### 14.1 RLS enforcement correctness (→ F60, gated by F68)
+- `FORCE ROW LEVEL SECURITY` on every domain table, and the app connects as a **non-owner `app_rw` role** without `BYPASSRLS` (see §2.4). Owner-bypass is the single most common way shared-schema RLS fails open.
+- Every policy has a `WITH CHECK` so a cross-tenant **write** is rejected, not just filtered on read. `tenant_id` is always derived from the JWT/job context and stripped from request bodies.
+- `SET LOCAL` only works inside an explicit transaction (§2.5); the ORM wraps every request/job in one and asserts the GUC is set before the first statement.
+
+### 14.2 Auth hardening (→ F61)
+- **JWT:** asymmetric signing (RS256/ES256) with key rotation; validate `iss`/`aud`/`exp`; reject `alg=none`. Short-lived access token (≈15 min) + rotating refresh token with reuse detection.
+- **Revocation:** suspension/deactivation must take effect within one access-token TTL — middleware re-checks tenant `status` and user `is_active` **per request** (not just at login), backed by a revocation list for immediate logout.
+- **Password reset** (time-boxed, single-use signed token) — currently missing entirely.
+- **Login protection:** rate-limiting, account lockout / backoff, and credential-stuffing defence on `/auth/login`.
+- **MFA:** optional TOTP for `owner`/`manager` roles (today only `saas_admins` have it); payroll-adjacent data warrants it.
+
+### 14.3 Audit log (→ F61/F64)
+- A dedicated **append-only** `audit_log(id, tenant_id NULL, actor_id, actor_type, action, target_type, target_id, before, after, ip, user_agent, at)` table. The `app_rw` role has `INSERT` only — no `UPDATE`/`DELETE` — so entries are tamper-evident; retention and export are defined for compliance.
+- Covers auth events, every admin action, and impersonation (records **both** `impersonated_by` and the impersonated user).
+
+### 14.4 User & membership lifecycle (→ F61)
+- **Invitations:** `tenant_invitations(tenant_id, email, role, token, expires_at, accepted_at)`; owner invites by email → accept creates the `tenant_users` row. Today users only exist via signup — there is no way to add a manager/staff member.
+- Consider separating **identity** (`users`: email + credential) from **membership** (`tenant_memberships`: user × tenant × role) so one person can belong to several tenants without duplicate passwords — matches the "SMB owner with 2–3 shops" assumption and the tenant switcher.
+- Deactivating a user revokes their live sessions (ties to §14.2 revocation).
+
+### 14.5 PII & data minimization in the AI / observability path (→ F67, F37, Labor-Compliance & Staff-Comms agents)
+- **Span/log scrubbing:** an OTel span processor + Loki pipeline redact PII before export — no SSN/address/DOB, no raw SMS bodies, no LLM prompt/response payloads containing employee PII. Adding `tenant.id` to spans (§8) must not come with leaking the tenant's PII into traces.
+- **Prompt isolation:** agent prompt context is built only from the current tenant's data; no tenant data crosses into shared caches or any model fine-tuning.
+- Carry the existing single-tenant PII discipline (SSN/address split to `private/`, DOB-not-age) forward **per tenant**.
+
+### 14.6 Scale-safe migration (→ F60, F44)
+- The naïve single-statement backfill in §9.1 will lock and bloat large/partitioned tables (`transactions`, `rule_eval_log`, `weather_hourly` per F47). Use: **batched** backfill (chunked by PK, throttled), `CREATE INDEX CONCURRENTLY`, and add `NOT NULL` via `ADD CONSTRAINT … NOT VALID` → `VALIDATE CONSTRAINT` (non-blocking). Snapshot every table before cutover.
+- Revisit the partition key for tenant skew — `(tenant_id, date)` composite, or keep `date` partitioning with a leading-`tenant_id` index — so hot tenants don't dominate a partition.
+
+### 14.7 DB-level noisy-neighbor controls (→ F60, F66)
+- Per-tenant/role `statement_timeout`, `work_mem` caps, connection limits, and a fair-share solver-job queue, so one tenant's heavy query or schedule run can't exhaust the shared pool or CPU. §1's "one tenant can't starve another" must hold at the **database** tier, not just in n8n.
+
+### 14.8 Background-job & ETL tenant context (→ F48, F44, nightly jobs)
+- Jobs that touch many tenants (weather ingest, calibration, trial-suspension) **loop over tenants explicitly**, opening a transaction and `SET LOCAL app.tenant_id` per tenant; they run as `app_rw`, never the `BYPASSRLS` role (only the migration/ETL role bypasses). A per-tenant failure dead-letters rather than aborting the batch.
+
+### 14.9 Caching (cross-cutting, gated by F68)
+- Any shared cache (Redis, HTTP/runtime cache) keys **must** be tenant-prefixed; no cross-tenant cache reuse. Verified by an F68 cache-isolation test.
+
+### 14.10 Routing & web security (→ F70, F61)
+- **Reserved-slug denylist** enforced at signup (`admin`, `www`, `api`, `app`, `auth`, `billing`, `status`, `static`, `assets`, …) — otherwise a tenant could register `admin` and collide with `admin.coffeescheduler.com`.
+- Slug renames either keep the old subdomain redirecting or are disallowed (no orphaned links).
+- **Custom domains** for enterprise (`schedule.acme.com` via CNAME + per-domain managed TLS) are a later feature, not part of F70's "S" scope — flag the size.
+- Wildcard-cert auto-renewal is monitored; **CORS** locked to tenant origins; **CSRF** protection and secure cookie flags (`HttpOnly`, `Secure`, `SameSite`) for the session path.
+
+### 14.11 Billing completeness (→ F65, F66)
+- Stripe **webhook signature verification** + idempotency keys + an event log (webhooks retry and arrive out of order).
+- **Downgrade enforcement:** when a tenant drops to a plan its current usage exceeds (Pro→Starter with 5 stores), block the downgrade or require reduction first.
+- Proration, annual plans, **tax (Stripe Tax / VAT)**, dunning emails, and free-plan abuse controls.
+- Bill from real metered events, not a `rule_eval_log` proxy.
+
+### 14.12 Data lifecycle & compliance (→ F69)
+- **Churn timeline:** soft-delete (`churned`) → retention grace → hard delete → **backup purge**, with a reactivation window; today only the state exists, not the schedule.
+- **Employee-level** right-to-be-forgotten: an individual employee of a tenant (not just the whole tenant) can be erased — the single-tenant PII model makes this concrete.
+- **Per-tenant restore caveat:** shared-schema PITR is global; restoring one tenant without affecting others is not free. Document the limitation and provide a per-tenant export → reimport restore path. Backups encrypted.
+
+### 14.13 Multi-jurisdiction is a content dependency, not just code (→ F10, F19)
+- Provisioning seeds rules "per jurisdiction" (§4.5), but only **NY Part 146 + NYC** rules and the NYC school/holiday calendars exist today. Onboarding a non-NY tenant is **blocked** until that jurisdiction's verified rule set and calendars are authored (F19 per-jurisdiction verification). This gates the multi-jurisdiction promise and is a content/legal effort, not a schema change.
+
+### 14.14 Additional isolation & security tests (→ F68)
+Add to §11: RLS owner-bypass test (prove `FORCE` is on), `WITH CHECK` cross-tenant **insert/update** rejection, pooled-connection **context-bleed** test, JWT `alg=none`/tamper/expired-refresh tests, impersonation privilege-escalation test, cache-key isolation test, plan-downgrade enforcement test, and a PII-scrubbing assertion over emitted spans/logs.
