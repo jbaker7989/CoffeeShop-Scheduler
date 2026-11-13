@@ -800,6 +800,167 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ---
 
+## Phase 1 — SaaS multi-tenancy (CS-060 … CS-070)
+
+Stories for features **F60–F70** (see [`FEATURES.md`](./FEATURES.md) and the plan docs
+[`../PLAN.md`](../PLAN.md) / [`docs/architecture/saas-multi-tenancy.md`](./docs/architecture/saas-multi-tenancy.md)).
+Convert the single-tenant deployment to a shared-schema multi-tenant SaaS; Maven Roasters becomes the
+`maven-demo` seed tenant. Sequenced in three waves: **Wave 1 (P0 foundation)** CS-060 → CS-061 → CS-068 →
+CS-070 → CS-062; **Wave 2 (P1 SaaS surface)** CS-063/CS-067/CS-066/CS-064/CS-065; **Wave 3 (P2)** CS-069.
+CS-068 is a **gate** — no second tenant is provisioned until its suite is green. These depend on the
+Postgres data plane (F42–F47); until that lands they are **Blocked**.
+
+### CS-060 — Tenancy model & Row-Level Security (umbrella)
+- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** M
+- **Status:** Blocked (on F42–F47 Postgres data plane)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~5d (est., sum of sub-stories)
+- **Description:** The foundation: `tenant_id` on every domain table, Postgres RLS as the isolation guarantee, and the session plumbing that sets tenant context per request. Broken into three sub-stories.
+
+#### CS-060a — Schema, `tenant_id` & scale-safe migration
+- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - Add `tenants` root table; add `tenant_id UUID NOT NULL REFERENCES tenants(id)` to every F47 domain table; recreate every index / global `UNIQUE` with a leading `tenant_id` (F60.AC1).
+  - Migration is **scale-safe**: batched backfill, `CREATE INDEX CONCURRENTLY`, `NOT NULL` via `ADD CONSTRAINT … NOT VALID` → `VALIDATE` (PLAN §7, §15.6); snapshot before cutover.
+  - Backfill all existing rows to the `maven-demo` tenant; ETL (F44) gains a `tenant_id` arg.
+- **Cross-refs:** F47, F44.
+
+#### CS-060b — RLS policies + non-owner `app_rw` role
+- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Detailed specifications:**
+  - `ENABLE` **and** `FORCE ROW LEVEL SECURITY` on every domain table; `tenant_isolation` policy with both `USING` and `WITH CHECK` on `current_setting('app.tenant_id', true)::UUID` (F60.AC2).
+  - App connects as a non-owner `app_rw` role (DML only, no `BYPASSRLS`); only the migration/ETL role bypasses (F60.AC3). This is the fix for the owner-bypass fail-open.
+- **Cross-refs:** architecture §2.4 + §14.1; verified by CS-068.
+
+#### CS-060c — Per-request tenant session context
+- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Detailed specifications:**
+  - PgBouncer transaction mode; the ORM middleware opens a transaction, `SET LOCAL app.tenant_id` from the JWT, and asserts it is set before the first statement (F60.AC4; `SET LOCAL` needs an explicit txn).
+  - A query with no tenant context returns zero rows (fail-closed).
+- **Cross-refs:** architecture §2.5 + §14.1.
+
+### CS-061 — Auth + per-tenant RBAC (umbrella)
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** M
+- **Status:** Blocked (on CS-060)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~6d (est., sum of sub-stories)
+- **Description:** Identity, roles, tokens, and the full auth-hardening surface. Blocks every UI route.
+
+#### CS-061a — Core auth (users, roles, login, JWT)
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - `tenant_users` (roles `owner`/`manager`/`staff`/`read_only`, per-tenant email uniqueness) + `saas_admins` (MFA); argon2id hashing (F61.AC1).
+  - Login issues an **asymmetrically-signed** JWT (RS256/ES256; reject `alg=none`; validate `iss`/`aud`/`exp`) with tenant/user/role claims; short access token + rotating refresh with reuse detection (F61.AC2).
+- **Cross-refs:** PLAN §3; architecture §3.
+
+#### CS-061b — Auth hardening
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1.5d (est.)
+- **Detailed specifications:**
+  - Per-request revocation: middleware re-checks tenant `status` + user `is_active`, backed by a revocation list, so suspension takes effect within one access-token TTL (F61.AC3).
+  - Password reset (time-boxed single-use token), login rate-limiting / lockout, optional TOTP MFA for `owner`/`manager` (F61.AC4).
+- **Cross-refs:** PLAN §15.2; architecture §14.2.
+
+#### CS-061c — Invitations, membership & audit log
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - `tenant_invitations` + invite→email→accept flow to add members (F61.AC5); consider separating identity (`users`) from `tenant_memberships` so one person joins many tenants.
+  - **Append-only** `audit_log` (`app_rw` has INSERT only) covering auth events, admin actions, and impersonation (records `impersonated_by` + target).
+- **Cross-refs:** PLAN §15.3–15.4; architecture §14.3–14.4.
+
+### CS-062 — Tenant onboarding
+- **Feature:** [F62](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** Blocked (on CS-061, CS-070)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - Signup creates tenant + owner in one transaction; slug format + **reserved-slug denylist** validated; duplicate → 409 (F62.AC1).
+  - Email verification gates solver use; 14-day trial + nightly suspension job (F62.AC2–AC3).
+  - First-run wizard (store, employee, hours, plan); **idempotent** provisioning seeding jurisdiction rules + default standards (F62.AC4); a jurisdiction with no verified rule set is **refused**, not NY-defaulted.
+- **Cross-refs:** F10/F19 (jurisdiction rule templates); architecture §4 + §14.13.
+
+### CS-063 — Per-tenant configuration
+- **Feature:** [F63](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked (on CS-060, CS-061)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - Structured per-tenant config (jurisdiction, per-store hours, coverage rules, cost targets, demand adjustments) in RLS-protected tables; non-secret flags in `tenants.settings` JSONB (F63.AC1).
+  - Per-tenant **credentials** in an encrypted `tenant_secrets` table — never plaintext JSONB (F63.AC2); a `SELECT *` / admin UI never exposes a secret.
+- **Cross-refs:** architecture §5 + §14.1; PLAN §4.
+
+### CS-064 — SaaS admin surface (umbrella)
+- **Feature:** [F64](./FEATURES.md) · **Priority:** P1 · **Size:** L · **Status:** Blocked (on CS-061, CS-070)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~8d (est., sum of sub-stories)
+- **Description:** Separate admin app/auth/deploy for tenant operations. Broken into read UI + actions.
+
+#### CS-064a — Tenant list, detail & usage
+- **Feature:** [F64](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:** tenant list (search/filter/paginate), tenant detail (usage, last login, plan, payment status), aggregate dashboard (MRR, active tenants, totals); separate app/auth/deploy, tenant users cannot reach `/admin` (F64.AC1, AC4).
+
+#### CS-064b — Admin actions (suspend / impersonate / plan)
+- **Feature:** [F64](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:** suspend/activate/churn (append-only audit); capped-duration impersonation recording `impersonated_by`; plan management via Stripe (F64.AC2–AC3). Depends on CS-061c audit log.
+
+### CS-065 — Billing & plan tiers (umbrella)
+- **Feature:** [F65](./FEATURES.md) · **Priority:** P1 · **Size:** L · **Status:** Blocked (on CS-062)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~8d (est., sum of sub-stories)
+- **Description:** Stripe integration + plan enforcement. Broken into integration + enforcement.
+
+#### CS-065a — Stripe integration & signed webhooks
+- **Feature:** [F65](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:** `Customer` + `Subscription` per tenant; three plan tiers; webhook handler with **signature verification** + idempotency/event-log, mapping events to `tenants.plan`/`status` (F65.AC1–AC2).
+
+#### CS-065b — Plan enforcement & dunning
+- **Feature:** [F65](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:** payment-failure → 7-day grace → suspend; **downgrade enforcement** when usage exceeds the new plan; proration, tax (Stripe Tax/VAT), dunning emails (F65.AC3–AC4).
+
+### CS-066 — Usage tracking & quotas
+- **Feature:** [F66](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked (on CS-060; CS-065 for billing)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - Per-tenant metered counters from real events (solver runs, forecasts, SMS, storage, API) rolled up per period (F66.AC1).
+  - Quota enforcement with **429** + `Retry-After` + quota context (F66.AC2); DB-level noisy-neighbor guards (`statement_timeout`, `work_mem`, connection limits, fair-share solver queue) (F66.AC3).
+- **Cross-refs:** PLAN §15.7; architecture §14.7.
+
+### CS-067 — Tenant-scoped observability
+- **Feature:** [F67](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked (on CS-060; extends F37)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - `tenant.id`/`tenant.slug` as OTel **resource attributes** (not metric labels); Grafana `tenant` variable; Loki scoped by `tenant.id`; per-tenant alerting (F67.AC1–AC2).
+  - Span/log **PII-scrubbing** processor (no SSN/address/DOB, no raw SMS, no LLM payloads with PII) (F67.AC3).
+- **Cross-refs:** PLAN §15.5; architecture §14.5.
+
+### CS-068 — Multi-tenant isolation test suite (GATE)
+- **Feature:** [F68](./FEATURES.md) · **Priority:** P0 (gate) · **Size:** M · **Status:** Blocked (on CS-060, CS-061, CS-070)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - Cross-tenant read/insert/update/delete per table denied under RLS; owner-connection denied (proves `FORCE`); `WITH CHECK` write rejection; 401/403/404 behaviour (F68.AC1–AC2).
+  - **Pooled-connection context-bleed** test; JWT `alg=none`/tamper/expired-refresh; impersonation escalation; cache-key isolation; PII-scrubbing assertion (F68.AC3–AC4).
+  - Every test `spec: F68.ac#`; wired as a CI gate before any multi-tenant deploy (F68.AC5).
+- **Cross-refs:** PLAN §9 + §15.14; architecture §11 + §14.14. **No second tenant provisioned until green.**
+
+### CS-069 — Data export / delete (GDPR)
+- **Feature:** [F69](./FEATURES.md) · **Priority:** P2 · **Size:** M · **Status:** Blocked (on CS-060)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Detailed specifications:**
+  - Per-tenant export (signed, time-limited URL; completeness verified) (F69.AC1).
+  - Tenant delete timeline: soft-delete (`churned`) → grace → hard delete → **backup purge**, reactivation window, audit-logged (F69.AC2); **employee-level** right-to-be-forgotten (F69.AC3); documented **per-tenant restore** path + encrypted backups (F69.AC4).
+- **Cross-refs:** PLAN §15.12; architecture §14.12.
+
+### CS-070 — Tenant routing
+- **Feature:** [F70](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked (on CS-061)
+- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Detailed specifications:**
+  - Resolver sets tenant context from subdomain (prod) / path-prefix (dev) before any data access; unknown/suspended → 404 (F70.AC1).
+  - **Reserved-slug denylist** enforced (F70.AC2); wildcard TLS; **CORS** locked to tenant origins; **CSRF** + secure cookie flags (F70.AC3). Custom domains noted as a later feature.
+- **Cross-refs:** PLAN §15.10; architecture §14.10.
+
+---
+
 ## Defects — found by code test pass (2026-11-12)
 
 Bugs and unhandled corner cases found by reading + exercising the committed `data/*.py` scripts against
@@ -994,6 +1155,32 @@ closing regression evidence.
 | CS-057 | F57 | P2 | S | Not started |
 | CS-058 | F58 | P2 | M | Not started |
 | CS-059 | F59 | P3 | L | Not started |
+
+### Phase 1 — SaaS multi-tenancy (found 2026-11-12)
+
+| Story | Feature | Priority | Size | Status |
+| --- | --- | --- | --- | --- |
+| CS-060 | F60 | P0 | M | Blocked (umbrella) |
+| CS-060a | F60 | P0 | M | Blocked |
+| CS-060b | F60 | P0 | S | Blocked |
+| CS-060c | F60 | P0 | S | Blocked |
+| CS-061 | F61 | P0 | M | Blocked (umbrella) |
+| CS-061a | F61 | P0 | M | Blocked |
+| CS-061b | F61 | P0 | S | Blocked |
+| CS-061c | F61 | P1 | M | Blocked |
+| CS-062 | F62 | P0 | M | Blocked |
+| CS-063 | F63 | P1 | M | Blocked |
+| CS-064 | F64 | P1 | L | Blocked (umbrella) |
+| CS-064a | F64 | P1 | M | Blocked |
+| CS-064b | F64 | P1 | M | Blocked |
+| CS-065 | F65 | P1 | L | Blocked (umbrella) |
+| CS-065a | F65 | P1 | M | Blocked |
+| CS-065b | F65 | P1 | M | Blocked |
+| CS-066 | F66 | P1 | M | Blocked |
+| CS-067 | F67 | P1 | M | Blocked |
+| CS-068 | F68 | P0 | M | Blocked (gate) |
+| CS-069 | F69 | P2 | M | Blocked |
+| CS-070 | F70 | P0 | S | Blocked |
 
 ### Defects (found 2026-11-12)
 
