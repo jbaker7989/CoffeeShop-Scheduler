@@ -447,56 +447,125 @@ Convert the single-tenant deployment into a multi-tenant SaaS serving SMB coffee
 - **Status:** Not started · **Size:** M · **Priority:** P0
 - **Description:** Add the `tenants` table (root); add `tenant_id` to every domain table from F47; enable RLS on every domain table with a `tenant_isolation` policy that filters by `current_setting('app.tenant_id')::UUID`; add composite `(tenant_id, …)` indexes; reconfigure PgBouncer to transaction mode and set `app.tenant_id` per request. Migration: backfill Maven data as the `maven-demo` tenant before enabling RLS so application code can be deployed alongside.
 - **Expected outcome:** Every domain row is tenant-scoped; cross-tenant queries return zero rows at the database level regardless of what the application does.
+- **Acceptance criteria:**
+  1. **AC1** — `tenants` table exists; every F47 domain table has `tenant_id UUID NOT NULL REFERENCES tenants(id)`, and every prior index / global `UNIQUE` is recreated with a leading `tenant_id`.
+  2. **AC2** — every domain table has `ENABLE` **and** `FORCE ROW LEVEL SECURITY` with a `tenant_isolation` policy carrying both `USING` and `WITH CHECK` on `current_setting('app.tenant_id', true)::UUID`.
+  3. **AC3** — the app connects as a non-owner `app_rw` role without `BYPASSRLS`; only the migration/ETL role bypasses RLS.
+  4. **AC4** — with no `app.tenant_id` set, every domain query returns zero rows (fail-closed); with it set (via `SET LOCAL` inside an explicit transaction), only that tenant's rows are visible/writable.
+  - **Edge / adversarial:** a connection as the table owner is still denied (proves `FORCE`); an INSERT/UPDATE carrying another tenant's `tenant_id` is rejected by `WITH CHECK`; backfill is batched + `CONCURRENTLY` (no table-lock on big partitioned tables). Verified in F68.
+  - **Cross-refs:** PLAN §2 + §7 + §15.1; architecture §2 + §14.1.
 
 ### F61. Auth + per-tenant RBAC
 - **Status:** Not started · **Size:** M · **Priority:** P0
 - **Description:** `tenant_users` table (per-tenant users with `owner` / `manager` / `staff` / `read_only` roles); `saas_admins` table for cross-tenant admins with MFA; argon2id password hashing; email + password login (no SSO in MVP); JWT issuance with `tenant_id`, `user_id`, `role`, `is_saas_admin` claims; impersonation flow with audit logging. Per-tenant email uniqueness — the same email can register in two tenants (common for SMB owners).
 - **Expected outcome:** Every authenticated request carries a tenant context; SaaS admins can act on any tenant with full audit trail.
+- **Acceptance criteria:**
+  1. **AC1** — `tenant_users` (roles `owner`/`manager`/`staff`/`read_only`, per-tenant email uniqueness) and `saas_admins` (MFA) exist; passwords hashed with argon2id.
+  2. **AC2** — login issues an asymmetrically-signed JWT (RS256/ES256; `alg=none` rejected; `iss`/`aud`/`exp` validated) with `tenant_id`/`user_id`/`role`/`is_saas_admin`; short access token + rotating refresh token with reuse detection.
+  3. **AC3** — suspension/deactivation takes effect within one access-token TTL: middleware re-checks tenant `status` + user `is_active` **per request**, backed by a revocation list.
+  4. **AC4** — password reset (time-boxed single-use token), login rate-limiting / lockout, and optional TOTP MFA for `owner`/`manager` all exist.
+  5. **AC5** — user **invitations** (`tenant_invitations`) create members by email; impersonation records **both** `impersonated_by` and the target in an **append-only** `audit_log`.
+  - **Edge / adversarial:** a JWT issued before suspension is rejected on the next request; a deactivated user's live sessions are revoked; a tampered/expired refresh token is refused.
+  - **Cross-refs:** PLAN §3 + §15.2–15.4; architecture §3 + §14.2–14.4.
 
 ### F62. Tenant onboarding
 - **Status:** Not started · **Size:** M · **Priority:** P0
 - **Description:** Signup endpoint (creates tenant + owner in one transaction); email verification (blocks solver until verified); 14-day trial period with nightly suspension job; first-run wizard (add first store, add first employee, set hours, pick plan); provisioning transaction that seeds jurisdiction-specific `labor_rules` and default `labor_standards`. Idempotent provisioning so re-running on a populated tenant is a no-op.
 - **Expected outcome:** A new SMB owner can sign up, verify email, complete the wizard, and have a working tenant in under 10 minutes.
+- **Acceptance criteria:**
+  1. **AC1** — signup creates tenant + owner in **one transaction** (both commit or both roll back); slug validated against format and the **reserved-slug denylist**; duplicate slug → 409.
+  2. **AC2** — email verification blocks solver invocation until verified; unverified owners can sign in but not schedule.
+  3. **AC3** — 14-day trial (`status='trial'`); a nightly job suspends expired, unconverted trials; suspension blocks all API calls except `/billing/*`.
+  4. **AC4** — provisioning seeds jurisdiction-specific `labor_rules` + default `labor_standards` and is **idempotent** (re-run on a populated tenant is a no-op).
+  - **Edge / adversarial:** a non-NY jurisdiction with no verified rule set is **refused** at provisioning (see F19 dependency), not seeded with NY rules by default.
+  - **Cross-refs:** PLAN §15.13; architecture §4 + §14.10 + §14.13.
 
 ### F63. Per-tenant configuration
 - **Status:** Not started · **Size:** M · **Priority:** P1
 - **Description:** Per-tenant settings: jurisdiction, operating hours (per store), coverage rules, cost targets, demand adjustments, SMS provider config (Twilio subaccount or shared pool), weather source override, branding (logo, primary color). Fast-changing per-tenant flags live in `tenants.settings` JSONB; structured config lives in dedicated tables (which get the same RLS treatment).
 - **Expected outcome:** Each tenant's behaviour is driven by their own configuration, not a shared global default.
+- **Acceptance criteria:**
+  1. **AC1** — structured config (jurisdiction, per-store hours, coverage rules, cost targets, demand adjustments) lives in dedicated RLS-protected tables; only non-secret fast-changing flags live in `tenants.settings` JSONB.
+  2. **AC2** — per-tenant **credentials** (Twilio, Stripe, paid weather) live in an encrypted `tenant_secrets` table, **never** plaintext JSONB; decrypted only in the path that needs them.
+  3. **AC3** — the solver/forecaster/rule-engine read the current tenant's config; changing one tenant's config never affects another.
+  - **Edge / adversarial:** a `SELECT *` on `tenants` or the admin UI never exposes a secret value.
+  - **Cross-refs:** PLAN §4 + §15.1; architecture §5 (secrets note) + §14.1.
 
 ### F64. SaaS admin surface
 - **Status:** Not started · **Size:** L · **Priority:** P1
 - **Description:** A separate UI at `admin.coffeescheduler.com` (or `/admin` behind a separate auth flow): tenant list with search / filter / pagination; tenant detail with usage, last login, plan, payment status; suspend / activate / churn actions; impersonate (audit-logged); plan management (calls Stripe API); aggregate usage dashboard (MRR, active tenants, total solver runs, total SMS); audit log of every admin action. Separate React app, separate auth flow, separate deploy from the manager / C-Suite UI.
 - **Expected outcome:** A SaaS admin can find, suspend, impersonate, and re-plan any tenant without leaving the admin UI.
+- **Acceptance criteria:**
+  1. **AC1** — tenant list (search by name/slug/email, filter by plan/status, paginated) and tenant detail (usage, last login, plan, payment status).
+  2. **AC2** — suspend / activate / churn set `tenants.status` and take effect on the next tenant request; actions are append-only audit-logged (admin, target, timestamp, IP).
+  3. **AC3** — impersonation issues a capped-duration token recording `impersonated_by`; every impersonated action is logged.
+  4. **AC4** — the admin app is a **separate** deploy / auth flow from the manager / C-Suite UI; a SaaS admin cannot accidentally land in a tenant's view, and a tenant user cannot reach `/admin`.
+  - **Cross-refs:** PLAN §8 (SaaS admin) + §15.3; architecture §6 + §14.3.
 
 ### F65. Billing & plan tiers
 - **Status:** Not started · **Size:** L · **Priority:** P1
 - **Description:** Stripe integration — `Customer` per tenant, `Subscription` per tenant, webhooks for `customer.subscription.updated`, `invoice.paid`, `invoice.payment_failed`. Plans: Starter (1 store, 10 employees, free), Pro ($99/mo per location, up to 10 stores), Enterprise (custom). Payment failure → 7-day grace period → suspension. Plan tier limits enforced at API gateway.
 - **Expected outcome:** Tenants can sign up to a paid plan, be billed monthly, and have subscription state changes propagate to the application automatically.
+- **Acceptance criteria:**
+  1. **AC1** — one Stripe `Customer` + one active `Subscription` per tenant; the three plan tiers exist with their documented limits.
+  2. **AC2** — the webhook handler **verifies Stripe signatures**, is idempotent (dedupes retried/out-of-order events via an event log), and maps `subscription.updated`/`invoice.paid`/`invoice.payment_failed` to `tenants.plan`/`status`.
+  3. **AC3** — payment failure → 7-day grace → suspension; **downgrade is enforced** (a plan whose limits the tenant currently exceeds is blocked or requires reduction first).
+  4. **AC4** — proration, tax (Stripe Tax/VAT), and dunning emails are handled (or explicitly deferred with a tracked follow-up).
+  - **Cross-refs:** PLAN §8 (billing) + §12 + §15.11; architecture §7 + §14.11.
 
 ### F66. Usage tracking & quotas
 - **Status:** Not started · **Size:** M · **Priority:** P1
 - **Description:** Per-tenant metering aggregated nightly from `rule_eval_log` (solver runs), OTel metrics (SMS sent), and Postgres size queries (storage). Stored in `tenant_usage` table; quotas enforced at API gateway with 429 responses carrying quota context. Plan-tier limits (e.g. Starter = 50 solver runs / mo) checked on every API call.
 - **Expected outcome:** A tenant exceeding their plan's quota gets a clear 429 with the relevant numbers; no over-usage billing surprises.
+- **Acceptance criteria:**
+  1. **AC1** — per-tenant metered counters (solver runs, forecast calls, SMS, storage, API calls) incremented from **real events** (not a `rule_eval_log` proxy), rolled up per period.
+  2. **AC2** — plan-tier limits enforced at the gateway; over-quota returns **429** with `Retry-After` and quota context identifying the tenant.
+  3. **AC3** — DB-level noisy-neighbor guards (`statement_timeout`, `work_mem`, connection limits per role; fair-share solver queue) stop one tenant exhausting the shared pool/CPU.
+  - **Cross-refs:** PLAN §8 (usage) + §15.7; architecture §7.3 + §14.7.
 
 ### F67. Tenant-scoped observability
 - **Status:** Not started · **Size:** M · **Priority:** P1
 - **Description:** Every OTel span gets `tenant.id` and `tenant.slug` resource attributes (extends F37). Grafana dashboards gain a `tenant` template variable. Loki log queries scope by `tenant.id`. Per-tenant alerting (e.g. "tenant X's solver has been infeasible for 3 days") without per-tenant dashboards.
 - **Expected outcome:** A support engineer can debug a single tenant's behaviour without seeing other tenants' data; a SaaS admin sees cross-tenant aggregates.
+- **Acceptance criteria:**
+  1. **AC1** — every span/metric/log carries `tenant.id` + `tenant.slug` as **resource attributes** (not high-cardinality metric labels); Grafana gains a `tenant` template variable; Loki queries scope by `tenant.id`.
+  2. **AC2** — per-tenant alerting works without per-tenant dashboards (e.g. "tenant X solver infeasible 3 days").
+  3. **AC3** — a span/log **PII-scrubbing** processor strips SSN/address/DOB, raw SMS bodies, and LLM prompt/response payloads with employee PII before export.
+  - **Cross-refs:** PLAN §8 (observability) + §15.5; architecture §8 + §14.5; extends F37.
 
 ### F68. Multi-tenant isolation tests
 - **Status:** Not started · **Size:** M · **Priority:** P0 (gate before any multi-tenant deploy)
 - **Description:** Automated cross-tenant attack scenarios per the SDD test classes: a user from tenant A receives 404 (not 403, to avoid existence disclosure) when accessing tenant B's resources; SQL injection attempts with `tenant_id = '<tenant_b_uuid>'` return zero rows under RLS; impersonation tokens work for the impersonated tenant but every action is logged with `impersonated_by`; suspended tenants get 403 across all endpoints. Each test tagged `spec: F68.ac#` for CI traceability.
 - **Expected outcome:** The CI suite catches any cross-tenant data leak before merge; isolation is regression-proof.
+- **Acceptance criteria:**
+  1. **AC1** — cross-tenant read/insert/update/delete attempts against every domain table return zero rows / are rejected under RLS; a table-owner connection is still denied (proves `FORCE`).
+  2. **AC2** — a `WITH CHECK` violation (write with another tenant's `tenant_id`) is rejected; a request with no JWT → 401; a suspended tenant → 403; cross-tenant resource access → 404 (no existence disclosure).
+  3. **AC3** — a pooled-connection **context-bleed** test proves tenant A's `SET LOCAL` never survives into tenant B's reuse of the same physical connection.
+  4. **AC4** — JWT `alg=none`/tamper/expired-refresh rejected; impersonation cannot escalate beyond the target tenant; any shared cache is tenant-keyed; emitted spans/logs pass the PII-scrubbing assertion.
+  5. **AC5** — every test tagged `spec: F68.ac#`; the suite is a **CI gate** before any multi-tenant deploy.
+  - **Cross-refs:** PLAN §9 + §15.14; architecture §11 + §14.14.
 
 ### F69. Data export / delete (GDPR)
 - **Status:** Not started · **Size:** M · **Priority:** P2
 - **Description:** Per-tenant data export — JSON dump of every row owned by the tenant, packaged and delivered to the requesting user. Per-tenant hard delete — removes every row across every domain table in a single transaction; audit-logged; tenant row marked `churned` rather than deleted (so historical invoices remain). Right-to-be-forgotten flow for individual users.
 - **Expected outcome:** EU customers can request data export / deletion per GDPR Article 15 and Article 17; the SaaS can fulfil both within statutory windows.
+- **Acceptance criteria:**
+  1. **AC1** — per-tenant export packages every row the tenant owns (signed, time-limited URL); completeness verified against row counts.
+  2. **AC2** — tenant hard-delete runs a defined timeline: soft-delete (`churned`) → retention grace → hard delete across every domain table → **backup purge**; audit-logged; a reactivation window exists.
+  3. **AC3** — **employee-level** right-to-be-forgotten erases a single employee's PII (not just whole-tenant), consistent with the single-tenant PII model.
+  4. **AC4** — the **per-tenant restore** path is documented (shared-schema PITR is global → restore via export/reimport); backups encrypted.
+  - **Cross-refs:** PLAN §8 (GDPR) + §15.12; architecture §9 + §14.12.
 
 ### F70. Tenant routing
 - **Status:** Not started · **Size:** S · **Priority:** P0
 - **Description:** Resolve tenant from request — subdomain (`acme.coffeescheduler.com`) for production, path-prefix (`/t/acme/`) for dev. Tenant resolver middleware extracts `tenant.slug`, looks up `tenant_id`, rejects the request with 404 if the tenant doesn't exist or is suspended. TLS wildcard certificate for the subdomain pattern; the path-prefix mode shares the main certificate. Per `migration/SKILL.md` discipline, the resolver is a small, well-tested module.
 - **Expected outcome:** Every request lands in the right tenant context before any data access; routing failures are loud and fast.
+- **Acceptance criteria:**
+  1. **AC1** — resolver extracts the tenant from subdomain (prod) or path-prefix (dev), looks up `tenant_id`, and sets the request context before any data access; unknown/suspended tenant → 404.
+  2. **AC2** — the **reserved-slug denylist** (`admin`, `www`, `api`, `app`, `auth`, `billing`, `status`, …) is enforced so no tenant collides with the admin/API surface.
+  3. **AC3** — wildcard TLS for `*.coffeescheduler.com`; **CORS** locked to tenant origins; **CSRF** protection and secure cookie flags (`HttpOnly`/`Secure`/`SameSite`) on the session path.
+  - **Edge / adversarial:** enterprise **custom domains** (CNAME + per-domain TLS) are noted as a later feature beyond this `S` scope.
+  - **Cross-refs:** PLAN §3 + §15.10; architecture §14.10.
 
 ---
 
