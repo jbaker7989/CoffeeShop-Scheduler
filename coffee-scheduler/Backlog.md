@@ -531,7 +531,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-044 — Idempotent Excel-to-Postgres ETL
 - **Feature:** [F44](./FEATURES.md) · **Priority:** P0 · **Size:** M
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-12) — `scripts/etl_excel_to_postgres.py` imports the workbook fixtures as an idempotent tenant-scoped snapshot, validates invariants before mutation, uses COPY staging for high-volume tables, and keeps PII opt-in.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Load all current workbook fixtures into the schema without data loss or duplicate rows.
 - **Detailed specifications:**

@@ -353,9 +353,17 @@ Move the project off `.xlsx` as the source of truth onto PostgreSQL. The Excel f
 - **Expected outcome:** A fresh checkout can `docker compose up postgres && alembic upgrade head` and have a working database.
 
 ### F44. ETL: Excel → Postgres
-- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Status:** Done (2026-11-12 via CS-044) · **Size:** M · **Priority:** P0
 - **Description:** Idempotent ETL script (`scripts/etl_excel_to_postgres.py`) that reads each `coffee_shop_*.xlsx` and `weather_forecast.xlsx` and writes to the Postgres schema defined in F47. Uses `COPY` for the big tables (`transactions`, `weather_hourly`, `weather_daily`, `rule_eval_log`). Validates row counts after load and asserts known invariants (e.g. "every rule in `labor_rules` has a `rule_id`"; "every transaction has a valid `store_id`"). Reports per-table counts and any anomalies. Safe to re-run; uses upserts / `ON CONFLICT` everywhere. Tagged and runnable from CI on a schedule.
 - **Expected outcome:** A single command migrates the current Excel data into Postgres with no manual steps and no data loss; the script is idempotent.
+- **Acceptance criteria (CS-044):**
+  1. **AC1 — complete public load:** A load for `maven-demo` imports every supported public source sheet into its F47 table and reports equal source and target counts for each table.
+  2. **AC2 — idempotent snapshot:** A second successful load of identical workbooks has the same target counts and natural-key rows, with no duplicate transactions, weather rows, or audit entries.
+  3. **AC3 — bulk-path parity:** `transactions`, `weather_hourly`, `weather_daily`, and `rule_eval_log` are staged through PostgreSQL `COPY`, then have the same source and target counts as the other tables.
+  4. **AC4 — atomic fail-closed validation:** A missing `labor_rules.rule_id`, unknown transaction `store_id`, unmapped taxonomy category, or invalid typed value produces a descriptive error and leaves no partial target changes.
+  5. **AC5 — PII isolation:** Default execution neither reads nor writes `employee_pii`; `--include-pii` loads its private workbook only when explicitly requested and available.
+  - **Edge / adversarial:** empty optional log sheets load as zero rows; Excel blanks normalize to SQL NULL only for nullable columns; a source row removed from a fixture is removed from the selected tenant's source-backed snapshot; an unknown tenant, unmigrated database, missing source workbook, or malformed typed cell fails before mutation.
+  - **Cross-references:** F43/CS-043 (migrated PostgreSQL service), F47/CS-047 (`docs/schema.md` and migration `0001`), F29/CS-009 (taxonomy), F2/CS-002–003 (roster), F5/CS-008 (calibration), F26 (coverage-rule reconciliation), and `migration/SKILL.md`.
 
 ### F45. Agent data-access layer
 - **Status:** Not started · **Size:** M · **Priority:** P1

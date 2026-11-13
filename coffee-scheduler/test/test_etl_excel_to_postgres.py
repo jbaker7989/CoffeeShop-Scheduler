@@ -1,0 +1,82 @@
+"""CS-044 / F44 specifications for the Excel-to-Postgres loader.
+
+Run with: python3 coffee-scheduler/test/test_etl_excel_to_postgres.py
+Set DATABASE_URL to run the database integration test.
+"""
+import copy
+import importlib.util
+import os
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+DATA = ROOT / "data"
+SCRIPT = ROOT / "scripts" / "etl_excel_to_postgres.py"
+
+
+def load_etl():
+    spec = importlib.util.spec_from_file_location("etl_excel_to_postgres", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ExcelToPostgresSpecifications(unittest.TestCase):
+    # spec: F44.ac1
+    def test_public_snapshot_covers_every_supported_table(self):
+        etl = load_etl()
+        snapshot = etl.read_snapshot(DATA, include_pii=False)
+        self.assertNotIn("employee_pii", snapshot.tables)
+        self.assertEqual(len(snapshot.tables["employees"]), 40)
+        self.assertEqual(len(snapshot.tables["stores"]), 3)
+        self.assertEqual(len(snapshot.tables["store_hours"]), 21)
+        self.assertEqual(len(snapshot.tables["transactions"]), 149_116)
+        self.assertEqual(len(snapshot.tables["weather_hourly"]), 9_231)
+        self.assertEqual(len(snapshot.tables["weather_daily"]), 543)
+        self.assertEqual(len(snapshot.tables["weather_codes"]), 28)
+
+    # spec: F44.ac2
+    @unittest.skipUnless(os.environ.get("DATABASE_URL"), "DATABASE_URL required for PostgreSQL integration")
+    def test_second_load_is_an_identical_snapshot(self):
+        etl = load_etl()
+        first = etl.load_snapshot(os.environ["DATABASE_URL"], "maven-demo", DATA)
+        second = etl.load_snapshot(os.environ["DATABASE_URL"], "maven-demo", DATA)
+        self.assertEqual(first.target_counts, second.target_counts)
+        self.assertEqual(second.anomalies, [])
+
+    # spec: F44.ac3
+    def test_bulk_tables_use_copy_staging_path(self):
+        etl = load_etl()
+        self.assertEqual(etl.BULK_TABLES,
+                         {"transactions", "weather_hourly", "weather_daily", "rule_eval_log"})
+
+    # spec: F44.ac4
+    def test_invalid_store_fails_before_any_database_mutation(self):
+        etl = load_etl()
+        snapshot = etl.read_snapshot(DATA, include_pii=False)
+        invalid = copy.deepcopy(snapshot)
+        invalid.tables["transactions"][0]["store_id"] = 999
+        with self.assertRaisesRegex(etl.ETLValidationError, "store_id.*999"):
+            etl.validate_snapshot(invalid)
+
+    # spec: F44.ac4
+    def test_missing_rule_id_fails_closed(self):
+        etl = load_etl()
+        snapshot = etl.read_snapshot(DATA, include_pii=False)
+        invalid = copy.deepcopy(snapshot)
+        invalid.tables["labor_rules"][0]["rule_id"] = None
+        with self.assertRaisesRegex(etl.ETLValidationError, "rule_id"):
+            etl.validate_snapshot(invalid)
+
+    # spec: F44.ac5
+    def test_pii_requires_explicit_opt_in(self):
+        etl = load_etl()
+        public = etl.read_snapshot(DATA, include_pii=False)
+        private = etl.read_snapshot(DATA, include_pii=True)
+        self.assertNotIn("employee_pii", public.tables)
+        self.assertEqual(len(private.tables["employee_pii"]), len(private.tables["employees"]))
+
+
+if __name__ == "__main__":
+    unittest.main()
