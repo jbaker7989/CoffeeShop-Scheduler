@@ -75,7 +75,10 @@ class LoadReport:
 def null(value):
     if value is None or pd.isna(value):
         return None
-    return value
+    # Coerce whole-number floats (pandas reads nullable integer columns as float, e.g.
+    # 89250.0) back to int so they COPY into integer columns. Strings are left untouched,
+    # so zero-padded text identifiers read as text keep their leading zeros (BUG-005).
+    return int(value) if isinstance(value, float) and value.is_integer() else value
 
 
 def rows(path, sheet):
