@@ -39,10 +39,32 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/6432' || exit 1"]
+      # The edoburu image ships sh (no bash) plus pg_isready; use it to confirm the pooler is accepting.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U coffeeshop"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+# The app should connect to PgBouncer (6432) rather than Postgres (5432) directly.
+# To set the tenant context, the application runs at the start of each transaction:
+#   SET LOCAL app.tenant_id = '<tenant-uuid>';
+# PgBouncer's transaction mode is required because session-mode would hold the setting
+# across the connection's lifetime, which is incompatible with connection pooling.
+# See: coffee-scheduler/docs/schema.md §5 and F60 tenant isolation policy.
+
+# The app container's DATABASE_URL should point at 127.0.0.1:6432, e.g.
+# postgresql://coffeeshop:coffeeshop@127.0.0.1:6432/coffeeshop
+#
+# When running via Docker Compose:
+#   docker compose up
+#   # then in another shell:
+#   docker compose exec app psql -U coffeeshop -d coffeeshop -c "SET LOCAL app.tenant_id = '<uuid>'"
+#
+# If the app.tenant_id is unset or empty, RLS matches no rows (fail-closed, per the
+# tenant_isolation policy in 0001). This is the desired default — it prevents any
+# tenant from reading another tenant's rows even when the setting is missing.
+
+# A restore drill is documented in docs/postgres-backup.md
 
 volumes:
   coffeeshop_pgdata:
