@@ -353,7 +353,7 @@ Move the project off `.xlsx` as the source of truth onto PostgreSQL. The Excel f
 - **Expected outcome:** A fresh checkout can `docker compose up postgres && alembic upgrade head` and have a working database.
 
 ### F44. ETL: Excel → Postgres
-- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Status:** Done (2026-11-12 via CS-044) · **Size:** M · **Priority:** P0
 - **Description:** Idempotent ETL script (`scripts/etl_excel_to_postgres.py`) that reads each `coffee_shop_*.xlsx` and `weather_forecast.xlsx` and writes to the Postgres schema defined in F47. Uses `COPY` for the big tables (`transactions`, `weather_hourly`, `weather_daily`, `rule_eval_log`). Validates row counts after load and asserts known invariants (e.g. "every rule in `labor_rules` has a `rule_id`"; "every transaction has a valid `store_id`"). Reports per-table counts and any anomalies. Safe to re-run; uses upserts / `ON CONFLICT` everywhere. Tagged and runnable from CI on a schedule.
 - **Expected outcome:** A single command migrates the current Excel data into Postgres with no manual steps and no data loss; the script is idempotent.
 - **Acceptance criteria (CS-044):**
