@@ -187,7 +187,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-013 — Labor-compliance rule engine (core)
 - **Feature:** [F10](./FEATURES.md) · **Priority:** P1 · **Size:** L
-- **Status:** Not started (rules table exists, needs verification via CS-021)
+- **Status:** ✅ Done (2026-11-12) — `coffee-scheduler/compliance/engine.py`; unverified rules still bind, `claims_legal_accuracy` stays false until CS-021
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~8d (est.)
 - **Description:** The authoritative legality service: evaluates effective-dated rules with strictest-wins and exposes hard constraints to the solver and explanations to the LLM.
 - **Detailed specifications:**
@@ -199,7 +199,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-013a — Rule_Eval_Log write path
 - **Feature:** [F10](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-12) — append-only insert into Postgres `rule_eval_log` as `app_rw`; xlsx is not the write path
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
 - **Description:** Every rule evaluation is logged — no silent passes.
 - **Detailed specifications:**
@@ -209,7 +209,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-013b — Waiver expiry evaluation on shift date
 - **Feature:** [F10](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-12) — half-open waiver window; WV-0001 stops applying on 2027-06-26
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
 - **Description:** Re-check consent waivers against the actual shift date on every generation, not just at rule load.
 - **Detailed specifications:**
@@ -219,7 +219,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-013c — Coverage_Rules ↔ Labor_Rules fail-closed reconciliation
 - **Feature:** [F10](./FEATURES.md) + [F26](./FEATURES.md) · **Priority:** P1 · **Size:** XS
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-12) — `reconcile_coverage` fails closed on a missing or non-blocking LAW citation. The VERIFIED-only CI gate stays with CS-021 / CS-022.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~0.5d (est.)
 - **Description:** A coverage rule can never silently contradict a legal rule.
 - **Detailed specifications:**
@@ -916,6 +916,114 @@ closing regression evidence.
 - **Risk if unfixed:** CS-014 inherits a silent multi-condition bias on exactly the extreme days that
   matter most for staffing.
 
+### BUG-005 — ETL `null()` coerces every whole-number value to `int`, corrupting zero-padded identifier strings
+- **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P1 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (silent data corruption — dormant on current fixtures) · **Pattern:** D7
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
+- **Description:** `scripts/etl_excel_to_postgres.py → null()` returns
+  `int(value) if isinstance(value, float) and value.is_integer() else value`. The coercion is applied by
+  **value shape, not by target column type**, so any field that *looks* numeric but is semantically a
+  string is silently converted to an integer before it reaches the typed Postgres column. The clearest
+  victim is `employee_pii.zipcode`: all 40 rows are coerced to `int` (verified). A New-England ZIP such
+  as `02134` becomes `2134` — the leading zero is lost on write to a text column, silently and with no
+  error. The same hazard applies to any zero-padded or long numeric-looking identifier (SSN, phone,
+  external POS codes).
+- **Reproduction (verified 2026-11-12):** `read_snapshot(include_pii=True)` → every `zipcode` is
+  `type int`; current fixtures are all NYC (`10001`…`11215`) so no leading zero is lost **today**, but
+  the coercion itself is unconditional. Inject a `02134` ZIP → stored value becomes `2134`.
+- **Specification (write first):**
+  - A test asserting that identifier/text-destined fields (`zipcode`, `ssn`, any column typed `text` in
+    migration `0001`) retain their **string** form through `read_snapshot`, including leading zeros — a
+    `02134` fixture must round-trip as `"02134"`, never `2134`.
+- **Proposed fix:** coerce by **declared target column type** (drive from the migration's column types, or
+  an explicit per-field policy), not by `value.is_integer()`. Numeric columns int-ify; text columns keep
+  the string. Never apply a blanket shape-based transform to values bound for text columns.
+- **Risk if unfixed:** silent PII/address corruption the moment real employee data outside NYC is loaded,
+  or a POS feed (CS-049) brings zero-padded product codes — with the loader reporting success.
+
+### BUG-006 — ETL `columns()` infers the column set from `data[0]` only; keys unique to later rows are silently dropped
+- **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P1 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (silent data loss — dormant on current fixtures) · **Pattern:** D8
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
+- **Description:** `columns(rows)` returns `list(rows[0])` — the keys of the **first row only**.
+  `copy_stage` then stages/COPYs just those columns and `upsert` inserts only them, writing `row.get(c)`
+  for each. Any key that appears on a **later** row but not on row 0 is dropped from the load entirely,
+  with no error. The `read_snapshot` path adds keys per-row conditionally (`labor_rules` sets
+  `value_text`/`notes` only when a value fails the time regex, lines ~164-169), so a row-0-without /
+  row-N-with divergence is one data change away.
+- **Reproduction (verified 2026-11-12):** `columns([{"a":1},{"a":2,"b":99}])` → `["a"]`; the `b=99` cell
+  is silently excluded from COPY. Current workbooks are homogeneous (every sheet column present on every
+  row, confirmed), so nothing is dropped **today**.
+- **Specification (write first):**
+  - A test that stages a two-row snapshot where only the second row carries an extra populated column and
+    asserts that column's value **reaches the target** (or that the loader raises on a ragged snapshot) —
+    never a silent drop.
+- **Proposed fix:** compute the column set as the **union of keys across all rows** (or assert all rows
+  share row 0's keys and fail loudly on a ragged snapshot). Do not infer a table's schema from a single
+  sampled row.
+- **Risk if unfixed:** a future workbook or transform that populates a column on only some rows loads a
+  partial table and passes every count check (the dropped column isn't a key).
+
+### BUG-007 — ETL `validate_snapshot` never validates `employee_pii` (key/null checks skip the most sensitive table)
+- **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (validation-coverage gap — fails closed at the DB, not in the ETL) · **Pattern:** D9
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
+- **Description:** The pre-load key/null-uniqueness loop iterates `PUBLIC_TABLES & set(snapshot.tables)`,
+  and `employee_pii` is **not in `PUBLIC_TABLES`** (verified `False`). So when `--include-pii` is set, the
+  one table carrying SSNs and addresses is the one table whose natural key (`tenant_id, employee_id`) is
+  **not** checked for duplicates or nulls before mutation. It still fails closed at the DB PK, but that
+  contradicts F44.ac4's "validate before any database mutation" contract — and does so for PII.
+- **Reproduction (verified 2026-11-12):** `"employee_pii" in PUBLIC_TABLES` → `False`; a duplicate or
+  NULL PII `employee_id` would pass `validate_snapshot` and only surface as a DB error mid-load.
+- **Specification (write first):**
+  - A test injecting a duplicate (and a NULL) `employee_id` into an `include_pii=True` snapshot and
+    asserting `validate_snapshot` **raises** — i.e. the validator's table set covers **every** table that
+    gets loaded, PII included.
+- **Proposed fix:** validate the full set of tables present in the snapshot (derive the validated set from
+  `KEYS`/`LOAD_ORDER`, not a separate `PUBLIC_TABLES` constant that can drift), so no loaded table escapes
+  the key/null check.
+- **Risk if unfixed:** the validator's coverage silently diverges from what the loader writes; the
+  "validate first" guarantee is false for new or restricted tables.
+
+### BUG-008 — ETL derives `shifts`/`schedules` one-row-per-eval, aborting on the normal many-evals-per-shift case
+- **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (brittle cardinality assumption — fails closed) · **Pattern:** D1
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
+- **Description:** `t["shifts"]` is built one row per `rule_eval_log` row carrying a `shift_id`
+  (lines ~176-177). `shifts`'s natural key is `(tenant_id, shift_id)`, so two rule evaluations for the
+  **same** shift — the normal case, since many rules are evaluated per shift — produce duplicate keys and
+  `validate_snapshot` aborts the whole load. The derivation implicitly assumes ≤1 eval per shift.
+- **Reproduction (verified 2026-11-12):** current `Rule_Eval_Log` has exactly **1** row with a `shift_id`
+  (1 shift, 0 duplicates), so the path is effectively untested; a realistic multi-eval log would raise
+  `duplicate natural key`.
+- **Specification (write first):**
+  - A test with two `rule_eval_log` rows sharing one `shift_id` asserting the snapshot yields **one**
+    `shifts` row (deduped) and a valid `schedules`/`shifts` set — not a duplicate-key abort.
+- **Proposed fix:** derive `shifts` (and `schedules`) from the **distinct** `shift_id`/`schedule_id`
+  values across the eval log, mirroring how `schedules` is already built from a set.
+- **Risk if unfixed:** the ETL cannot load any realistic rule-evaluation history; the derivation is a
+  1-row stub.
+
+### BUG-009 — ETL orphan-delete for the global `weather_codes` uses `scope = TRUE`, clobbering across tenants
+- **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P3 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (multi-tenant isolation hazard — latent until F60+) · **Pattern:** —
+- **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
+- **Description:** The post-load orphan-delete (line ~265) removes target rows absent from the current
+  load. For every tenant-scoped table the scope is `t.tenant_id = %s` (safe), but for the global
+  `weather_codes` the scope is `TRUE` — it deletes **all** codes not in this load. Single-tenant today
+  that is intended, but once a second tenant loads a different code subset (F60+ multi-tenancy), its load
+  deletes codes the first tenant relies on. A shared reference table shouldn't be pruned by a
+  single-tenant ETL run.
+- **Reproduction (by construction):** two sequential loads with differing `Weather_Codes` sheets leave
+  only the second load's codes; the first tenant's extra codes are gone.
+- **Specification (write first):**
+  - A test (or documented decision) pinning that a global reference load is **upsert-only** (no delete),
+    or is explicitly owned by a single global-admin path — not pruned by a per-tenant ETL run.
+- **Proposed fix:** make `weather_codes` upsert-only in the per-tenant ETL (skip the orphan-delete for
+  global tables), or gate global-table pruning behind an explicit `--manage-global-refs` flag.
+- **Risk if unfixed:** the first multi-tenant load silently removes another tenant's weather reference
+  data.
+
 ---
 
 ## Backlog summary
@@ -1003,3 +1111,8 @@ closing regression evidence.
 | BUG-002 | F5 | P2 | XS | ✅ Fixed (under CS-009) — fail-closed category coverage |
 | BUG-003 | F5 | P1 | S | 🐞 Open — calibration not idempotent / no re-run guard |
 | BUG-004 | F5/F9 | P2 | XS | 🐞 Open — weather multipliers compound on co-occurring conditions |
+| BUG-005 | F44 | P1 | XS | 🐞 Open — ETL `null()` int-coerces strings, drops ZIP leading zeros (D7) |
+| BUG-006 | F44 | P1 | XS | 🐞 Open — ETL `columns()` samples row 0; later-row keys silently dropped (D8) |
+| BUG-007 | F44 | P2 | XS | 🐞 Open — `validate_snapshot` skips `employee_pii` key/null checks (D9) |
+| BUG-008 | F44 | P2 | XS | 🐞 Open — `shifts` derivation aborts on many-evals-per-shift (D1) |
+| BUG-009 | F44 | P3 | XS | 🐞 Open — `weather_codes` orphan-delete `scope=TRUE` clobbers across tenants |
