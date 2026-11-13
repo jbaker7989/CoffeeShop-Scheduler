@@ -256,6 +256,30 @@ class LaborComplianceSpecifications(unittest.TestCase):
             evaluate(proposal(), snapshot=snapshot([bad]))
 
     # spec: F10.ac12
+    def test_unknown_vocabulary_cannot_be_hidden_behind_an_employer_flag(self):
+        bad = rule(
+            rule_id="HIDDEN-NEW", metric="not_a_metric", operator=">=", unit="HOURS",
+            requires_employer_flag="fww_covered=TRUE",
+        )
+        with self.assertRaises(ComplianceConfigError):
+            evaluate(proposal(), snapshot=snapshot([bad], employer_flags={"fww_covered": False}))
+
+    # spec: F10.ac5
+    def test_naive_or_backwards_shift_timestamps_raise(self):
+        naive_start = datetime(2026, 11, 18, 9, 0)
+        with self.assertRaises(ComplianceConfigError):
+            evaluate(
+                proposal(start_at=naive_start, end_at=naive_start + timedelta(hours=6)),
+                snapshot=snapshot([rule()]),
+            )
+        start = datetime(2026, 11, 18, 9, 0, tzinfo=NY)
+        with self.assertRaises(ComplianceConfigError):
+            evaluate(
+                proposal(start_at=start, end_at=start - timedelta(hours=1)),
+                snapshot=snapshot([rule()]),
+            )
+
+    # spec: F10.ac12
     def test_sheet_vocabulary_matches_the_pinned_handlers(self):
         import pandas as pd
         frame = pd.read_excel(ROOT / "data" / "coffee_shop_labor_rules.xlsx", sheet_name="Labor_Rules")

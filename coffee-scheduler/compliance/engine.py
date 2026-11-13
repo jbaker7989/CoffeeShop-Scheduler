@@ -227,6 +227,7 @@ def evaluate(proposal: Proposal, *, snapshot: Snapshot | None = None, persist: b
              clock: datetime | None = None, dsn: str | None = None, log: MemoryLog | None = None) -> Evaluation:
     if proposal.breaks is None:
         raise ComplianceConfigError("breaks is required; pass [] when no break is scheduled")
+    _validate_proposal_times(proposal)
     if snapshot is None:
         snapshot = load_snapshot(proposal, dsn=dsn)
     evaluation = judge(snapshot, proposal)
@@ -258,6 +259,12 @@ def reconcile_coverage(rules, coverage_rows) -> None:
 def judge(snapshot: Snapshot, proposal: Proposal) -> Evaluation:
     if not snapshot.timezone or not snapshot.rules:
         raise ComplianceUnavailable("no timezone or no rules; refusing to treat the shift as legal")
+    unknown = [
+        rule.rule_id for rule in snapshot.rules
+        if vocab_key(rule.metric, rule.operator, rule.unit) not in SUPPORTED
+    ]
+    if unknown:
+        raise ComplianceConfigError(f"unsupported rule vocabulary: {unknown}")
     if snapshot.employee.dob is None:
         raise ComplianceUnavailable(f"employee {proposal.employee_id} has no dob")
     zone = ZoneInfo(snapshot.timezone)
@@ -286,9 +293,6 @@ def judge(snapshot: Snapshot, proposal: Proposal) -> Evaluation:
         if not _trigger_ok(rule, proposal):
             continue
         applicable.append(rule)
-    unknown = [rule.rule_id for rule in applicable if vocab_key(rule.metric, rule.operator, rule.unit) not in SUPPORTED]
-    if unknown:
-        raise ComplianceConfigError(f"unsupported rule vocabulary: {unknown}")
     _require_context(applicable, proposal)
     results = []
     for rule in sorted(applicable, key=lambda item: (item.rule_id, item.effective_from)):
@@ -452,6 +456,15 @@ def _log_row(proposal, result, when) -> dict:
         "agent": AGENT,
         "notes": note,
     }
+
+
+def _validate_proposal_times(proposal) -> None:
+    if proposal.start_at.tzinfo is None or proposal.start_at.utcoffset() is None:
+        raise ComplianceConfigError("start_at must be timezone-aware")
+    if proposal.end_at.tzinfo is None or proposal.end_at.utcoffset() is None:
+        raise ComplianceConfigError("end_at must be timezone-aware")
+    if proposal.end_at <= proposal.start_at:
+        raise ComplianceConfigError("end_at must be after start_at")
 
 
 def _judge_rule(rule, snapshot, proposal, zone, shift_day) -> RuleResult:
