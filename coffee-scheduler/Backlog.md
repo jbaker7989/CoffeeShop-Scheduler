@@ -1086,6 +1086,83 @@ closing regression evidence.
 - **Risk if unfixed:** a scheduler on a UTC (or any non-tenant-tz) host silently miscomputes weekly hours
   and meal-break compliance for shifts whose secondary inputs arrive naive — wrong legality with no error.
 
+### BUG-012 — PgBouncer healthcheck requires `bash`, which the pinned image does not contain
+- **Feature:** [F43](./FEATURES.md) (CS-043) · **Priority:** P0 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (availability gate falsely fails) · **Pattern:** deployment healthcheck mismatch
+- **Developer:** Unassigned · **Found:** 2026-11-13 · **Duration:** ~0.5d (est.)
+- **Description:** The tracked `docker-compose.yml` declares PgBouncer healthy only when this command
+  succeeds: `timeout 2 bash -c '</dev/tcp/127.0.0.1/6432'`. The pinned
+  `edoburu/pgbouncer:v1.23.1-p2` image intentionally ships a minimal userspace and does **not** include
+  `bash`. Docker therefore records every probe as `timeout: can't execute 'bash': No such file or
+  directory`, leaving the service permanently `unhealthy` even though PgBouncer has started and clients
+  can execute SQL through port 6432. This is not cosmetic: F43 AC1 promises that both services become
+  healthy, and downstream Compose `depends_on: condition: service_healthy`, CI gates, and an operator's
+  readiness decision must treat an unhealthy pooler as unavailable.
+- **Reproduction (verified 2026-11-13):** `docker compose ps` reports PostgreSQL as healthy and PgBouncer
+  as unhealthy. `docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}'
+  coffeeshop-pgbouncer-1` returns the missing-`bash` error repeatedly, while a psycopg connection to
+  `localhost:6432/coffeeshop` succeeds.
+- **Specification (write these tests first):**
+  - A Compose/lifecycle test starts the pinned services and asserts the `postgres` **and** `pgbouncer`
+    containers reach `healthy` within the configured retry window; a merely-running PgBouncer container
+    is not sufficient.
+  - The PgBouncer health command must use an executable that exists in the pinned image and validate an
+    actual listener or authenticated lightweight query, not only container process existence.
+  - An adversarial test temporarily targets an unused listener/incorrect port and asserts PgBouncer becomes
+    unhealthy; the replacement probe must not turn every configuration error into a false positive.
+  - The test must report the container health log on timeout so the missing binary, authentication failure,
+    DNS failure, and closed listener are distinguishable.
+- **Proposed fix:** replace the shell-specific probe with a POSIX-available command supplied by the image
+  (or an authenticated PgBouncer-native query via its installed client), pin the probe to `127.0.0.1:6432`,
+  and prove it both passes for the real service and fails for a closed/wrong port. Do not install `bash`
+  ad hoc into the runtime image merely to retain a brittle `/dev/tcp` probe.
+- **Cross-references:** F43 AC1, `docker-compose.yml`, CS-043 lifecycle validation, PgBouncer image
+  contract, and CI service-readiness checks.
+- **Risk if unfixed:** every fresh environment advertises a failed data plane despite a listening pooler;
+  automated deployments may block forever or operators may normalize/ignore an unhealthy signal and miss
+  a real subsequent outage.
+
+### BUG-013 — Compliance session setup uses non-local `SET ROLE`, leaking privileges across PgBouncer transaction-pool backends
+- **Feature:** [F43](./FEATURES.md) + [F10](./FEATURES.md) (CS-043 / CS-013) · **Priority:** P0 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (pooled authorization state leaks between transactions) · **Pattern:** pooled-session state leak
+- **Developer:** Unassigned · **Found:** 2026-11-13 · **Duration:** ~0.5d (est.)
+- **Description:** `coffee-scheduler/compliance/engine.py → prepare_session()` executes `SET ROLE app_rw`,
+  then sets the tenant GUC with `set_config('app.tenant_id', ..., true)`. PgBouncer is configured for
+  **transaction pooling**, so a backend is returned to the pool after commit/rollback. The `true` GUC is
+  transaction-local and clears correctly, but `SET ROLE` is session-scoped. With PgBouncer's default
+  `server_reset_query_always = 0`, the next client assigned that backend inherits `current_user = app_rw`
+  even if it never requested a role. Current RLS remains fail-closed when the tenant GUC is absent, so the
+  observed path exposes zero rows rather than another tenant's rows; nevertheless, authorization state
+  leaks and a future policy/change that relies on role separation can convert this into cross-client access.
+  It also violates F43 AC4's explicit transaction-local role/session contract.
+- **Reproduction (verified 2026-11-13):** connect through PgBouncer on `6432`, begin a transaction, call
+  `prepare_session(..., tenant_id)`, commit, then obtain a fresh pooled connection without calling
+  `prepare_session`. `SELECT current_user` can return `app_rw`, proving role state outlives the request.
+  `SELECT current_setting('app.tenant_id', true)` is empty, which explains why the current RLS predicate
+  still returns no tenant rows.
+- **Specification (write these tests first):**
+  - A two-client PgBouncer integration test runs `prepare_session` for client A, commits, then opens client
+    B without preparation; client B must see its authenticated baseline role and no tenant context.
+  - Within one explicit transaction, the compliance engine must set both `SET LOCAL ROLE app_rw` and
+    `set_config('app.tenant_id', tenant_id, true)` before repository reads/writes; it must successfully
+    read/write only that tenant's permitted rows.
+  - After commit **and** after rollback, a subsequent pooled transaction must have neither `app_rw` role
+    elevation nor a tenant GUC. Test both paths because failed compliance evaluations are expected.
+  - An adversarial test calls the engine outside the transaction wrapper and asserts a descriptive failure
+    rather than silently issuing session-scoped role changes.
+  - The test must use PgBouncer port `6432`, not a direct PostgreSQL connection, so it detects the actual
+    pooling behavior.
+- **Proposed fix:** make `prepare_session` require an active transaction and replace `SET ROLE app_rw` with
+  `SET LOCAL ROLE app_rw`; retain `set_config(..., true)` in that same transaction. Add a narrow database
+  session helper so every compliance read/log write follows this ordering. Do **not** rely solely on
+  `server_reset_query_always = 1`: reset configuration is defense in depth, while transaction-local SQL
+  is the application-level correctness guarantee.
+- **Cross-references:** F43 AC4, F10/CS-013 compliance engine, `tenant_isolation` RLS policy in migration
+  `0001`, `docker-compose.yml` PgBouncer transaction mode, and CS-045 future repository layer.
+- **Risk if unfixed:** a pooled backend can carry privileges from one client to another. The current tenant
+  GUC limits impact, but the system's authorization model becomes fragile, non-compositional, and unsafe to
+  extend.
+
 ---
 
 ## Backlog summary
@@ -1180,3 +1257,5 @@ closing regression evidence.
 | BUG-009 | F44 | P3 | XS | ✅ Fixed (`9151e2f`) — `weather_codes` excluded from per-tenant prune |
 | BUG-010 | F10 | P2 | XS | 🐞 Open — vocab check (`6e39b61`) halts on superseded/foreign rules (D1/D3) |
 | BUG-011 | F10 | P2 | XS | 🐞 Open — `_validate_proposal_times` skips week_shifts/breaks; naive→server tz (D6) |
+| BUG-012 | F43 | P0 | XS | 🐞 Open — PgBouncer healthcheck requires missing `bash`; AC1 fails |
+| BUG-013 | F43/F10 | P0 | XS | 🐞 Open — non-local `SET ROLE` leaks privilege state across pooled backends |
