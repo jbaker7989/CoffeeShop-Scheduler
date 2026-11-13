@@ -79,12 +79,29 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Expected outcome:** A forecaster that drives staffing need per hour with honest uncertainty — the demand input to the solver.
 
 ### F10. Labor-compliance rule engine
-- **Status:** Not started (rules table exists, needs verification) · **Size:** L · **Priority:** P1
+- **Status:** Done (CS-013, 2026-11-12) · **Size:** L · **Priority:** P1
 - **Description:** Build the engine that evaluates the effective-dated rules with strictest-wins resolution and exposes them as hard constraints to the solver and as explanations to the LLM. Covers meal breaks, spread-of-hours (Part 146), Fair Workweek premiums & clopening (per-employer flag), Earned Safe/Sick Time (no requirement for a sick employee to find cover), Food Protection Certificate on site, and minor hours/occupation limits computed from DOB on the shift date. **Sub-tasks the engine must own explicitly:**
-  - **Rule_Eval_Log write path** — every evaluation appends to `Rule_Eval_Log` in `coffee_shop_labor_rules.xlsx` (eval_id, schedule_id, shift_id, employee_id, rule_id, result, premium_cost_usd, evaluated_at, agent). No silent passes.
+  - **Rule_Eval_Log write path** — every evaluation inserts into Postgres `rule_eval_log` (`eval_id, schedule_id, shift_id, employee_id, rule_id, result, premium_cost_usd, evaluated_at, agent`). The xlsx sheet is not the write target. No silent passes.
   - **Waiver expiry evaluation** — for any rule marked `waivable_by_consent`, re-check `Consent_Waivers.valid_from` / `valid_to` against the shift date on every shift generation, not just at rule load. Example: WV-0001 (EMP-1033, NY-MINOR-1617-SCH-WINDOW) expires 2027-06-26.
   - **Coverage_Rules ↔ Labor_Rules reconciliation** — `Coverage_Rules.COV-FPC` says "LAW — see NYC-FPC-COVERAGE"; the engine must fail closed if a coverage rule and a legal rule ever disagree about whether a constraint is HARD vs SOFT.
-- **Expected outcome:** A single authoritative legality service that writes every decision to Rule_Eval_Log, honours waiver expiry on the actual shift date, and never silently contradicts the coverage rules — the solver and LLM never compute legality themselves.
+- **Acceptance criteria:**
+  1. **AC1** — A complete adult proposal with a sufficient break returns one result per applicable rule, all `PASS` or waived `PASS`, and `binding` is empty.
+  2. **AC2** — An applicable hard violation returns `FAIL` with that `rule_id` in `binding` and in `reason`. The function does not change the shift.
+  3. **AC3** — Two applicable rules on the same metric both appear in `results`; `binding` keeps only the stricter hard bound.
+  4. **AC4** — A waiver whose `valid_to` is the shift date does not waive; the previous local date does.
+  5. **AC5** — Age, school day, and spread use the tenant timezone and the shift date, not `date.today()` or the UTC date.
+  6. **AC6** — An enrolled employee with no `school_calendar_days` row for the shift date raises; it does not pass.
+  7. **AC7** — `week_complete=false`, or omitted crew when an on-site rule applies, raises; it does not pass.
+  8. **AC8** — Fair Workweek rules do not apply when `fww_covered` is false, and do apply when it is true.
+  9. **AC9** — A sick call-out cannot be satisfied by requiring the employee to find cover; the ESSTA rule id is in the reason.
+  10. **AC10** — `persist=True` inserts one append-only row per applicable rule and raises if `shift_id` is not in `shifts`.
+  11. **AC11** — Evaluation with no visible tenant, or as a role that bypasses RLS, raises. It does not return `PASS`.
+  12. **AC12** — An unknown `(metric, operator, unit)` raises before any shift is judged legal.
+  13. **AC13** — `reconcile_coverage` raises when a `LAW` coverage row cites a missing rule or a non-blocking legal rule.
+  14. **AC14** — `claims_legal_accuracy` is false when any applied rule is not `VERIFIED`, and the illegal shift still fails.
+- **Edge / adversarial:** Waiver expiry is half-open. Age flips on the birthday. A 05:15 start must take a midway meal when the early-start rule's condition matches. Prose occupation text raises for a 14–15 year old instead of passing. Empty tenant context is an error, not an all-pass.
+- **Cross-references:** `labor_rules`, `consent_waivers`, `school_calendar_days`, `employer_config`, `coverage_rules`, `rule_eval_log`. CS-004 calendar. CS-021 owns the VERIFIED gate. CS-016 consumes `binding` and does not recompute legality.
+- **Expected outcome:** A single authoritative legality service that writes every decision to `rule_eval_log`, honours waiver expiry on the actual shift date, and never silently contradicts the coverage rules — the solver and LLM never compute legality themselves.
 
 ### F11. CP-SAT schedule solver
 - **Status:** Blocked (on F2, F4, F9, F10) · **Size:** L · **Priority:** P1
