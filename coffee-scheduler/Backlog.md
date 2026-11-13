@@ -1024,6 +1024,68 @@ closing regression evidence.
 - **Risk if unfixed:** the first multi-tenant load silently removes another tenant's weather reference
   data.
 
+### BUG-010 — Compliance pre-judge vocabulary check halts on superseded / foreign-jurisdiction rules
+- **Feature:** [F10](./FEATURES.md) (CS-013) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (regression introduced by `6e39b61`, over-broad fail-closed) · **Pattern:** D1/D3
+- **Developer:** Unassigned · **Found:** 2026-11-13 · **Duration:** ~0.5d (est.)
+- **Description:** Commit `6e39b61` moved the unsupported-vocabulary guard in
+  `compliance/engine.py → judge()` so it now runs over **every** rule in the snapshot before any
+  applicability filter. The intent was correct (an unsupported rule must not be hidden by an inapplicable
+  employer flag — the old check only scanned `applicable` rules, so a flag/age/school/season/trigger
+  filter could swallow a rule the engine cannot handle). But `load_snapshot` loads the **entire**
+  `labor_rules` table, and effective-dating deliberately retains superseded rows. The new check therefore
+  raises `ComplianceConfigError: unsupported rule vocabulary` for rules that can **never** bind this shift:
+  a superseded rule (`effective_to` in the past), a future-dated rule (`effective_from` ahead), or a rule
+  for a jurisdiction the tenant does not operate in. One such row halts **all** compliance evaluation for
+  the tenant.
+- **Reproduction (verified 2026-11-13):** a snapshot with a supported current rule plus
+  (a) a rule `effective_from=2019-01-01, effective_to=2020-01-01` with `metric="legacy_metric"`, or
+  (b) a `CA-STATE` rule with unknown vocab while the tenant is NY — each raises
+  `unsupported rule vocabulary ['OLD-2019' | 'CA-ONLY']` instead of evaluating the shift. **Latent today:**
+  the live `labor_rules` table has 31 rows, 0 superseded, 0 future-dated, jurisdictions all NY/NYC/US-FED,
+  so nothing triggers it yet — it fires the first time effective-dating produces a superseded row (a core
+  CS-013 feature) or a multi-jurisdiction tenant lands (F60+).
+- **Specification (write first):**
+  - A test with a supported in-force rule **plus** a superseded (`effective_to` past) rule and a
+    foreign-jurisdiction rule, both carrying unsupported vocabulary, asserting evaluation **succeeds** on
+    the applicable rule and does **not** raise.
+  - A test preserving `6e39b61`'s intent: an **in-force, in-jurisdiction** rule whose vocabulary is
+    unsupported but which is filtered out by an employer flag must still **raise** (the hole the commit
+    closed stays closed).
+- **Proposed fix:** scope the pre-judge vocabulary check to rules that pass the **structural** filters
+  (`_in_force` + `_jurisdiction_ok`) — rules that could bind for *some* employee this period — rather than
+  the full snapshot or only the fully-`applicable` set. Keep it ahead of the employee-specific filters
+  (flag / age / school / season / trigger) so a rule hidden by those still fails closed.
+- **Risk if unfixed:** the first superseded rule or multi-jurisdiction tenant makes the compliance engine
+  refuse every shift — a hard outage of the legality service — on data the design explicitly supports.
+
+### BUG-011 — `_validate_proposal_times` ignores `week_shifts` / `breaks`; naive datetimes assume server-local tz
+- **Feature:** [F10](./FEATURES.md) (CS-013) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (fail-open on a contract violation — dormant) · **Pattern:** D6
+- **Developer:** Unassigned · **Found:** 2026-11-13 · **Duration:** ~0.5d (est.)
+- **Description:** The guard `_validate_proposal_times` added in `6e39b61` rejects a timezone-naive or
+  `end_at <= start_at` **main** shift, but it does not look at the secondary timestamp inputs — the
+  `ShiftSpan`s in `proposal.week_shifts` and the `Break`s in `proposal.breaks`. Those datetimes flow into
+  `_week_hours`, `_rest_gap`, `_day_hours`, `_span_hours`, `_midway_break`, and `_break_minutes_inside`,
+  all of which call `.astimezone(zone)`. In Python, `.astimezone()` on a **naive** datetime silently
+  interprets it as **server-local** time rather than raising. On any host whose local timezone differs
+  from the tenant's, weekly-hours totals and meal-window placement are then computed against the wrong
+  wall clock — the exact UTC-vs-local hazard the engine's own AC5 test pins for the main shift, left open
+  for the inputs that feed the weekly and break rules.
+- **Reproduction (verified 2026-11-13):** a proposal with a **naive** `ShiftSpan` in `week_shifts`
+  evaluates a `hours_per_week` rule with **no raise**; a proposal with a **naive** `Break` evaluates a
+  `break_minutes` meal rule with **no raise**. Both should fail closed on the contract violation.
+  **Latent today:** current callers pass tz-aware datetimes.
+- **Specification (write first):**
+  - A test asserting `evaluate` **raises** `ComplianceConfigError` when any `week_shifts` `ShiftSpan`
+    start/end is timezone-naive.
+  - A test asserting the same for a timezone-naive `Break` start/end.
+  - (Optional) a test that a `ShiftSpan`/`Break` with `end <= start` is rejected, matching the main-shift rule.
+- **Proposed fix:** extend `_validate_proposal_times` to assert tz-awareness (and `end > start`) for every
+  `week_shifts` and `breaks` datetime, reusing the same check applied to the main shift.
+- **Risk if unfixed:** a scheduler on a UTC (or any non-tenant-tz) host silently miscomputes weekly hours
+  and meal-break compliance for shifts whose secondary inputs arrive naive — wrong legality with no error.
+
 ---
 
 ## Backlog summary
@@ -1116,3 +1178,5 @@ closing regression evidence.
 | BUG-007 | F44 | P2 | XS | ✅ Fixed (`9151e2f`) — `validate_snapshot` covers `employee_pii` via `KEYS` (D9) |
 | BUG-008 | F44 | P2 | XS | ✅ Fixed (`9151e2f`) — `shifts` deduped from a set (D1) |
 | BUG-009 | F44 | P3 | XS | ✅ Fixed (`9151e2f`) — `weather_codes` excluded from per-tenant prune |
+| BUG-010 | F10 | P2 | XS | 🐞 Open — vocab check (`6e39b61`) halts on superseded/foreign rules (D1/D3) |
+| BUG-011 | F10 | P2 | XS | 🐞 Open — `_validate_proposal_times` skips week_shifts/breaks; naive→server tz (D6) |
