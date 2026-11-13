@@ -32,6 +32,8 @@ PII_COLS = ["ssn", "line1-address", "line2-address", "city-address", "state-addr
 STORES = [5, 8, 3]                      # location_ids: Lower Manhattan, Hell's Kitchen, Astoria
 SCHOOL_CAL = "NYC-DOE-2026-27"
 PT_PERSONAS = ["Part-time-mornings", "Part-time-evenings", "Weekends-only"]
+STORE_WEIGHTS = {5: 12, 8: 12, 3: 8}
+MIN_ADULTS_PER_STORE = 5  # 3 key-holders + 2 skill-3 baristas
 
 # New scheduling columns, in output order (appended after the A-E identity columns).
 NEW_COLS = [
@@ -62,6 +64,10 @@ DATA_DICTIONARY = [
 ]
 
 
+class RosterAllocationError(ValueError):
+    """Raised when a roster cannot satisfy the per-store staffing floor."""
+
+
 def age_on(d):
     return AS_OF.year - d.year - ((AS_OF.month, AS_OF.day) < (d.month, d.day))
 
@@ -71,6 +77,57 @@ def minor_hours(age):
     if age <= 15:
         return 6, 15          # NY 14-15 school week <= 18
     return 8, 24              # NY 16-17 school week <= 28
+
+
+def allocate_store_counts(total, cohort, minimum_per_store=0):
+    """Allocate a cohort by STORE_WEIGHTS using largest remainder, then enforce its floor.
+
+    Ties are resolved in STORES order, keeping generation deterministic.  The initial proportional
+    allocation preserves the historical 32-adult (12/12/8) and 8-minor (3/3/2) distributions.
+    """
+    required = minimum_per_store * len(STORES)
+    if total < required:
+        raise RosterAllocationError(
+            f"{cohort} partition has {total} employees; minimum {required} is required "
+            f"({minimum_per_store} per store) for roster feasibility"
+        )
+
+    weight_total = sum(STORE_WEIGHTS[sid] for sid in STORES)
+    raw = {sid: total * STORE_WEIGHTS[sid] / weight_total for sid in STORES}
+    counts = {sid: int(raw[sid]) for sid in STORES}
+    remainder = total - sum(counts.values())
+    for sid in sorted(STORES, key=lambda store: (- (raw[store] - counts[store]), STORES.index(store)))[:remainder]:
+        counts[sid] += 1
+
+    # Move employees from the largest surplus stores until every required location reaches its floor.
+    for recipient in STORES:
+        while counts[recipient] < minimum_per_store:
+            donors = [sid for sid in STORES if counts[sid] > minimum_per_store]
+            if not donors:  # defensive: total floor check above should make this unreachable
+                raise RosterAllocationError(
+                    f"{cohort} partition cannot satisfy minimum {minimum_per_store} per store"
+                )
+            donor = max(donors, key=lambda sid: (counts[sid], -STORES.index(sid)))
+            counts[donor] -= 1
+            counts[recipient] += 1
+    return counts
+
+
+def assign_by_store(pool, quotas, assign):
+    """Assign every sorted employee exactly once, before the workbook is changed."""
+    by_store, start = {}, 0
+    for sid in STORES:
+        stop = start + quotas[sid]
+        by_store[sid] = pool[start:stop]
+        for employee in by_store[sid]:
+            employee["_store"] = sid
+        start = stop
+    if start != len(pool):
+        raise RosterAllocationError(
+            f"{len(pool)} employees were provided but store quotas total {start}"
+        )
+    for sid in STORES:
+        assign(by_store[sid])
 
 
 def assign_store_adults(adults):
@@ -142,25 +199,22 @@ def main():
         emps.append({"employee_id": eid, "_age": age_on(dobd)})
         pii.append([eid] + [ws.cell(r, col[c]).value for c in PII_COLS])
 
-    # Partition and allocate home stores (bigger stores get more): adults 12/12/8, minors 3/3/2.
+    # Partition and allocate home stores. Quotas are derived from actual cohort sizes so a DOB or
+    # AS_OF change cannot strand an employee; adult allocation fails closed below its skill floor.
     emps.sort(key=lambda e: e["employee_id"])
     adults = [e for e in emps if e["_age"] >= 18]
     minors = [e for e in emps if e["_age"] < 18]
-    adult_quota = {5: 12, 8: 12, 3: 8}
-    minor_quota = {5: 3, 8: 3, 3: 2}
-    for pool, quota, assign in ((adults, adult_quota, assign_store_adults),
-                                (minors, minor_quota, assign_minors)):
-        by_store, k = {}, 0
-        for sid in STORES:
-            n = quota[sid]
-            for e in pool[k:k + n]:
-                e["_store"] = sid
-            by_store[sid] = pool[k:k + n]
-            k += n
-        for sid in STORES:
-            assign(by_store[sid])
+    adult_quota = allocate_store_counts(len(adults), "adult", MIN_ADULTS_PER_STORE)
+    minor_quota = allocate_store_counts(len(minors), "minor")
+    assign_by_store(adults, adult_quota, assign_store_adults)
+    assign_by_store(minors, minor_quota, assign_minors)
 
     fields = {e["employee_id"]: e for e in emps}
+    incomplete = [e["employee_id"] for e in emps if any(name not in e for name in NEW_COLS)]
+    if incomplete:
+        raise RosterAllocationError(
+            f"scheduling fields missing after allocation for employee_ids: {', '.join(incomplete)}"
+        )
 
     # Rewrite the Staff sheet: drop PII columns, append scheduling columns (keep A-E in place).
     first_pii = min(col[c] for c in PII_COLS)

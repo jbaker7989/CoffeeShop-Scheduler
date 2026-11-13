@@ -806,11 +806,14 @@ Bugs and unhandled corner cases found by reading + exercising the committed `dat
 the real workbooks (all four validators PASS today — these are latent defects the current green state
 hides). Each is written **SDD-first**: the *Specification* is a failing test to add to the relevant
 `validate_*.py` (or a new `test_*.py`) **before** any code change, so the fix is proven by a red→green
-test, per `test/SKILL.md`. None are fixed yet; all reproductions below were run and confirmed.
+test, per `test/SKILL.md`. Reproductions below were run and confirmed; resolved items record their
+closing regression evidence.
 
 ### BUG-001 — `build_roster_fields.py` crashes / mis-allocates when the adult÷minor partition drifts
 - **Feature:** [F2](./FEATURES.md) (regression risk in CS-002/CS-003) · **Priority:** P1 · **Size:** S
-- **Status:** 🐞 Open · **Type:** Defect (latent — green today)
+- **Status:** ✅ Fixed (2026-11-12) — proportional, largest-remainder allocation now derives quotas from
+  live cohort counts; it enforces the five-adult feasibility floor before any workbook mutation. Covered
+  by `data/test_bug_regressions.py` (`F2.ac1`–`F2.ac3`).
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~1d (est.)
 - **Description:** The generator hard-codes the home-store quotas `adult_quota={5:12,8:12,3:8}` (sum 32)
   and `minor_quota={5:3,8:3,3:2}` (sum 8) and fills each store by **positional slicing**
@@ -868,7 +871,8 @@ test, per `test/SKILL.md`. None are fixed yet; all reproductions below were run 
 
 ### BUG-003 — `calibrate_standards.py` is not idempotent and has no re-run guard
 - **Feature:** [F5](./FEATURES.md) (CS-008) · **Priority:** P1 · **Size:** S
-- **Status:** 🐞 Open · **Type:** Defect (known limitation, not yet guarded)
+- **Status:** ✅ Fixed (2026-11-12) — `refuse_if_already_calibrated` aborts before any mutation when an
+  applicable row is already calibrated. Covered by `data/test_bug_regressions.py` (`F5.ac1`–`F5.ac3`).
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~1d (est.)
 - **Description:** The script reads `seconds_per_unit` / overhead **from the same sheet it then
   overwrites**, and flips `basis`→`CALIBRATED` in place. A second run (without a prior
