@@ -77,6 +77,41 @@ class ExcelToPostgresSpecifications(unittest.TestCase):
         self.assertNotIn("employee_pii", public.tables)
         self.assertEqual(len(private.tables["employee_pii"]), len(private.tables["employees"]))
 
+    # spec: F44.ac4 — BUG-005: text identifiers retain leading zeros.
+    def test_text_like_values_are_not_shape_coerced(self):
+        etl = load_etl()
+        self.assertEqual(etl.null("02134"), "02134")
+        self.assertEqual(etl.null("001-02-0003"), "001-02-0003")
+
+    # spec: F44.ac3 — BUG-006: all row keys participate in COPY staging.
+    def test_columns_are_the_union_of_every_row(self):
+        etl = load_etl()
+        self.assertEqual(etl.columns([{"a": 1}, {"a": 2, "b": 99}]), ["a", "b"])
+
+    # spec: F44.ac4 — BUG-007: private rows receive the same preflight validation.
+    def test_duplicate_private_employee_is_rejected_before_load(self):
+        etl = load_etl()
+        snapshot = etl.read_snapshot(DATA, include_pii=True)
+        snapshot.tables["employee_pii"].append(dict(snapshot.tables["employee_pii"][0]))
+        with self.assertRaisesRegex(etl.ETLValidationError, "employee_pii.*duplicate"):
+            etl.validate_snapshot(snapshot)
+
+    # spec: F44.ac2 — BUG-008: multiple evaluations can share a legacy shift.
+    def test_legacy_shift_derivation_deduplicates_many_evaluations(self):
+        etl = load_etl()
+        logs = [{"tenant_id": etl.TENANT, "schedule_id": etl.legacy_uuid("SCH-1"),
+                 "shift_id": etl.legacy_uuid("SH-1")},
+                {"tenant_id": etl.TENANT, "schedule_id": etl.legacy_uuid("SCH-1"),
+                 "shift_id": etl.legacy_uuid("SH-1")}]
+        schedules, shifts = etl.derive_legacy_schedule_rows(logs)
+        self.assertEqual(len(schedules), 1)
+        self.assertEqual(len(shifts), 1)
+
+    # spec: F44.ac2 — BUG-009: tenant loads never prune global references.
+    def test_global_weather_codes_are_upsert_only(self):
+        etl = load_etl()
+        self.assertNotIn("weather_codes", etl.tables_to_prune({"weather_codes": [], "employees": []}))
+
 
 if __name__ == "__main__":
     unittest.main()
