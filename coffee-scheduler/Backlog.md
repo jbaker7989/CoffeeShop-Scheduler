@@ -1079,7 +1079,7 @@ closing regression evidence.
 
 ### BUG-005 — ETL `null()` coerces every whole-number value to `int`, corrupting zero-padded identifier strings
 - **Feature:** [F44](./FEATURES.md) (CS-044) · **Priority:** P1 · **Size:** XS
-- **Status:** ◑ Mostly fixed (2026-11-13) · **Pattern:** D7 — The first fix (`9151e2f`, `null()`→`return value`) over-corrected and broke integer-column COPY (`89250.0` into an `integer` column); `706b33a` restored whole-number float→int coercion, which leaves strings untouched and passes the string-preservation regression test. **Residual follow-up:** a ZIP/SSN *stored numerically* in the workbook is already lossy before `null()` sees it — the complete fix is reading identifier columns as `dtype=str`. Low priority (current fixtures store none numerically).
+- **Status:** ✅ Fixed (2026-11-14) — declared `Staff_PII` text-column read policy preserves textual identifier values through `read_snapshot`; regression coverage also retains integer-column coercion. Excel cells stored numerically remain intrinsically unable to retain a discarded leading zero.
 - **Developer:** Unassigned · **Found:** 2026-11-12 · **Duration:** ~0.5d (est.)
 - **Description:** `scripts/etl_excel_to_postgres.py → null()` returns
   `int(value) if isinstance(value, float) and value.is_integer() else value`. The coercion is applied by
@@ -1187,7 +1187,7 @@ closing regression evidence.
 
 ### BUG-010 — Compliance pre-judge vocabulary check halts on superseded / foreign-jurisdiction rules
 - **Feature:** [F10](./FEATURES.md) (CS-013) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (regression introduced by `6e39b61`, over-broad fail-closed) · **Pattern:** D1/D3
+- **Status:** ✅ Fixed (2026-11-14) — vocabulary validation is scoped to structurally in-force, in-jurisdiction rules while remaining fail-closed for applicable current rules.
 - **Developer:** Unassigned · **Found:** 2026-11-13 · **Duration:** ~0.5d (est.)
 - **Description:** Commit `6e39b61` moved the unsupported-vocabulary guard in
   `compliance/engine.py → judge()` so it now runs over **every** rule in the snapshot before any
@@ -1222,7 +1222,7 @@ closing regression evidence.
 
 ### BUG-011 — `_validate_proposal_times` ignores `week_shifts` / `breaks`; naive datetimes assume server-local tz
 - **Feature:** [F10](./FEATURES.md) (CS-013) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (fail-open on a contract violation — dormant) · **Pattern:** D6
+- **Status:** ✅ Fixed (2026-11-14) — every shift, week-shift and break interval is required to be timezone-aware and positive.
 - **Developer:** Unassigned · **Found:** 2026-11-13 · **Duration:** ~0.5d (est.)
 - **Description:** The guard `_validate_proposal_times` added in `6e39b61` rejects a timezone-naive or
   `end_at <= start_at` **main** shift, but it does not look at the secondary timestamp inputs — the
@@ -1249,7 +1249,7 @@ closing regression evidence.
 
 ### BUG-012 — PgBouncer healthcheck requires `bash`, which the pinned image does not contain
 - **Feature:** [F43](./FEATURES.md) (CS-043) · **Priority:** P0 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (availability gate falsely fails) · **Pattern:** deployment healthcheck mismatch
+- **Status:** ✅ Fixed (2026-11-14) — the `pg_isready` healthcheck is image-native; isolated Compose regressions verify healthy services and a closed-port failure.
 - **Developer:** Unassigned · **Found:** 2026-11-13 · **Duration:** ~0.5d (est.)
 - **Description:** The tracked `docker-compose.yml` declares PgBouncer healthy only when this command
   succeeds: `timeout 2 bash -c '</dev/tcp/127.0.0.1/6432'`. The pinned
@@ -1285,7 +1285,7 @@ closing regression evidence.
 
 ### BUG-013 — Compliance session setup uses non-local `SET ROLE`, leaking privileges across PgBouncer transaction-pool backends
 - **Feature:** [F43](./FEATURES.md) + [F10](./FEATURES.md) (CS-043 / CS-013) · **Priority:** P0 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (pooled authorization state leaks between transactions) · **Pattern:** pooled-session state leak
+- **Status:** ✅ Fixed (2026-11-14) — session setup requires a transaction and uses transaction-local role and tenant state; PgBouncer commit/rollback regressions pass.
 - **Developer:** Unassigned · **Found:** 2026-11-13 · **Duration:** ~0.5d (est.)
 - **Description:** `coffee-scheduler/compliance/engine.py → prepare_session()` executes `SET ROLE app_rw`,
   then sets the tenant GUC with `set_config('app.tenant_id', ..., true)`. PgBouncer is configured for
@@ -1326,7 +1326,7 @@ closing regression evidence.
 
 ### BUG-014 — Rules-admin verification gate keys off the merged `after` state, not the edit
 - **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P1 · **Size:** S
-- **Status:** 🐞 Open · **Type:** Defect (AC2/AC6 correctness — one bypass is a compliance hole) · **Pattern:** D2
+- **Status:** ✅ Fixed (2026-11-14) — verification gates evaluate the proposed transition and require newly supplied rationale/evidence where required.
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** `compliance/rules_admin.py → _verification_gate(before, after)` decides purely from the
   merged `after` row (`after = before + changes`) and never checks whether the **edit** actually touched
@@ -1363,7 +1363,7 @@ closing regression evidence.
 
 ### BUG-015 — AC3 effective-date overlap is unreachable with unbounded coverage validity, and its "overlap = conflict" semantics are suspect
 - **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P2 · **Size:** S
-- **Status:** 🐞 Open · **Type:** Defect (dead code + semantic gap) · **Pattern:** D5
+- **Status:** ✅ Fixed (2026-11-14) — reconciliation detects coverage date gaps and handles unbounded validity as always-in-effect.
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** `reconcile_for_admin` only evaluates the `effective_date_overlap` branch when a coverage
   row's `validity` is **bounded** (`validity.lower is not None or validity.upper is not None`). But the ETL
@@ -1387,7 +1387,7 @@ closing regression evidence.
 
 ### BUG-016 — Rules-admin only ever reads/edits the latest effective-dated version of a rule
 - **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P2 · **Size:** S
-- **Status:** 🐞 Open · **Type:** Defect (effective-dating limitation) · **Pattern:** D6
+- **Status:** ✅ Fixed (2026-11-14) — rules-admin reads and updates address the effective-dated version, not merely the latest `rule_id` row.
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** `_rule_row` selects `... WHERE rule_id=%s ORDER BY effective_from DESC LIMIT 1`, so
   `get_rule`/`patch_rule` always act on the **newest** version of a rule_id. `list_rules` returns **every**
@@ -1407,7 +1407,7 @@ closing regression evidence.
 
 ### BUG-017 — Rules-admin RLS context is silently lost on an autocommit connection; a null tenant timezone crashes waiver listing
 - **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P3 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (unenforced transaction contract + unguarded edge) · **Pattern:** D2
+- **Status:** ✅ Fixed (2026-11-14) — autocommit session setup is rejected and invalid/missing tenant timezones produce typed validation failures.
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** Every entry point calls `prepare_session` which uses **transaction-local** `SET LOCAL
   ROLE app_rw` + `set_config(..., true)`. These only persist within one open transaction. On an
@@ -1427,7 +1427,7 @@ closing regression evidence.
 
 ### BUG-018 — Rules-admin `source_url` handling: unverified citations satisfy the gate, every detail view makes a blocking external fetch, DNS-rebinding TOCTOU
 - **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P2 · **Size:** S
-- **Status:** 🐞 Open · **Type:** Defect (weak gate + network-in-request-path + residual SSRF) · **Pattern:** D2
+- **Status:** ✅ Fixed (2026-11-14) — verified-status evidence is required for the gate and rules-admin detail reads make no DNS or HTTP requests for manager URLs.
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** Three issues around `validate_source_url` / `source_url`:
   1. **Gate too weak (ties to BUG-014):** `_verification_gate` accepts any non-empty
@@ -1558,21 +1558,21 @@ closing regression evidence.
 
 | Story | Feature | Priority | Size | Status |
 | --- | --- | --- | --- | --- |
-| BUG-001 | F2 | P1 | S | 🐞 Open — roster quota crash on partition drift |
+| BUG-001 | F2 | P1 | S | ✅ Fixed — proportional allocation and feasibility-floor regressions |
 | BUG-002 | F5 | P2 | XS | ✅ Fixed (under CS-009) — fail-closed category coverage |
-| BUG-003 | F5 | P1 | S | 🐞 Open — calibration not idempotent / no re-run guard |
+| BUG-003 | F5 | P1 | S | ✅ Fixed — re-run guard prevents mutable calibration input reuse |
 | BUG-004 | F5/F9 | P2 | XS | ✅ Fixed (`9151e2f`) — dominant weather effect, not a compound product (D5) |
-| BUG-005 | F44 | P1 | XS | ◑ Mostly fixed (`9151e2f`+`706b33a`) — float→int restored; numeric-stored ID dtype follow-up (D7) |
+| BUG-005 | F44 | P1 | XS | ✅ Fixed — declared PII text-column read policy preserves textual identifiers |
 | BUG-006 | F44 | P1 | XS | ✅ Fixed (`9151e2f`) — `columns()` unions all rows' keys (D8) |
 | BUG-007 | F44 | P2 | XS | ✅ Fixed (`9151e2f`) — `validate_snapshot` covers `employee_pii` via `KEYS` (D9) |
 | BUG-008 | F44 | P2 | XS | ✅ Fixed (`9151e2f`) — `shifts` deduped from a set (D1) |
 | BUG-009 | F44 | P3 | XS | ✅ Fixed (`9151e2f`) — `weather_codes` excluded from per-tenant prune |
-| BUG-010 | F10 | P2 | XS | 🐞 Open — vocab check (`6e39b61`) halts on superseded/foreign rules (D1/D3) |
-| BUG-011 | F10 | P2 | XS | 🐞 Open — `_validate_proposal_times` skips week_shifts/breaks; naive→server tz (D6) |
-| BUG-012 | F43 | P0 | XS | 🐞 Open — PgBouncer healthcheck requires missing `bash`; AC1 fails |
-| BUG-013 | F43/F10 | P0 | XS | 🐞 Open — non-local `SET ROLE` leaks privilege state across pooled backends |
-| BUG-014 | F34 | P1 | S | 🐞 Open — verification gate reads `after` state not the edit: AC6 bypass via pre-existing notes + over-blocks unrelated edits (D2) |
-| BUG-015 | F34 | P2 | S | 🐞 Open — AC3 effective-date overlap unreachable w/ unbounded validity + inverted semantics (D5) |
-| BUG-016 | F34 | P2 | S | 🐞 Open — only the latest effective-dated rule version is viewable/editable (D6) |
-| BUG-017 | F34 | P3 | XS | 🐞 Open — RLS context lost on autocommit conn; null tenant tz crashes waiver listing (D2) |
-| BUG-018 | F34 | P2 | S | 🐞 Open — `source_url`: junk citations satisfy gate, blocking fetch per view, DNS-rebind TOCTOU (D2) |
+| BUG-010 | F10 | P2 | XS | ✅ Fixed — structural vocabulary scope retains fail-closed validation |
+| BUG-011 | F10 | P2 | XS | ✅ Fixed — secondary shift and break timestamps are validated |
+| BUG-012 | F43 | P0 | XS | ✅ Fixed — image-native PgBouncer healthcheck and lifecycle regression coverage |
+| BUG-013 | F43/F10 | P0 | XS | ✅ Fixed — transaction-local role and tenant context under pooling |
+| BUG-014 | F34 | P1 | S | ✅ Fixed — transition-scoped verification gate |
+| BUG-015 | F34 | P2 | S | ✅ Fixed — coverage-gap reconciliation with unbounded validity semantics |
+| BUG-016 | F34 | P2 | S | ✅ Fixed — effective-dated version addressing |
+| BUG-017 | F34 | P3 | XS | ✅ Fixed — explicit transaction contract and timezone validation |
+| BUG-018 | F34 | P2 | S | ✅ Fixed — verified evidence gate and no read-path URL networking |

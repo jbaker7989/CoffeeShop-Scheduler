@@ -112,7 +112,7 @@ class RulesAdminSecurityRegressionTests(unittest.TestCase):
                 "enforcement": "HARD", "verification_status": "VERIFY",
                 "source_citation": "unverified assertion", "source_url": "https://example.test/law",
                 "notes": None,
-            })
+            }, {"enforcement": "HARD", "verification_status": "VERIFY"})
 
     # spec: F34.ac1 — rule detail reads do not invoke the URL verifier.
     def test_get_rule_does_not_make_source_url_validation_call(self):
