@@ -129,8 +129,8 @@ class RulesAdminSecurityRegressionTests(unittest.TestCase):
 
     # spec: F34.ac6 — source URL validation cannot route a request after DNS resolution.
     def test_source_url_validation_never_resolves_or_opens_a_connection(self):
-        with mock.patch.object(rules_admin.socket, "getaddrinfo") as resolve, \
-             mock.patch.object(rules_admin.urllib.request, "build_opener") as open_request:
+        with mock.patch("socket.getaddrinfo") as resolve, \
+             mock.patch("urllib.request.build_opener") as open_request:
             self.assertFalse(rules_admin.validate_source_url("https://rebind.example.test/law"))
         resolve.assert_not_called()
         open_request.assert_not_called()

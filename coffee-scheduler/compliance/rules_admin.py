@@ -233,7 +233,8 @@ def get_rule(conn, rule_id, *, tenant_id=None, effective_from=None):
     row["reconciliation_status"] = status
     row["reconciliation_warnings"] = warnings
     row["waiver_warnings"] = list_waivers(conn, rule_id, tenant_id=tenant_id, tz=None)
-    row["source_url_valid"] = validate_source_url(row["source_url"]) if row.get("source_url") else None
+    # URL verification is deferred so detail reads never make attacker-directed requests.
+    row["source_url_valid"] = None
     row.pop("_xmin", None)
     return row
 
@@ -339,31 +340,20 @@ def list_waivers(conn, rule_id, *, tenant_id=None, today=None, tz=None):
     return rows
 
 
-class _NoCrossHostRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if urllib.parse.urlparse(newurl).hostname != urllib.parse.urlparse(req.full_url).hostname:
-            raise urllib.error.HTTPError(newurl, code, "cross-host redirect", headers, fp)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
 def validate_source_url(value):
-    """Advisory SSRF-safe HTTPS probe; any failure is simply False."""
+    """Return False until an out-of-band verifier records URL evidence.
+
+    This service intentionally makes no DNS or HTTP request for manager supplied URLs:
+    urllib would resolve the hostname after any separate screening lookup, reopening a
+    DNS-rebinding route.  A verifier that can pin a vetted connection belongs outside
+    this request path; callers may save the URL as an unverified manager attestation.
+    """
     if not value:
         return False
-    try:
-        parsed = urllib.parse.urlparse(value)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-            return False
-        for item in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-            ip = ipaddress.ip_address(item[4][0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
-                return False
-        opener = urllib.request.build_opener(_NoCrossHostRedirect)
-        request = urllib.request.Request(value, method="HEAD")
-        with opener.open(request, timeout=3) as response:
-            return 200 <= response.status < 300
-    except Exception:
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         return False
+    return False
 
 
 def export_csv(conn, *, tenant_id=None):
