@@ -36,6 +36,20 @@ class ExcelToPostgresSpecifications(unittest.TestCase):
         self.assertEqual(len(snapshot.tables["weather_daily"]), 543)
         self.assertEqual(len(snapshot.tables["weather_codes"]), 28)
 
+    # spec: F34.ac3 — coverage rules load with an unbounded (always-in-effect) validity,
+    # never NULL, so a fresh load matches migration 0002's backfill.
+    def test_coverage_rules_carry_unbounded_validity(self):
+        etl = load_etl()
+        snapshot = etl.read_snapshot(DATA, include_pii=False)
+        coverage = snapshot.tables["coverage_rules"]
+        self.assertTrue(coverage)
+        for row in coverage:
+            validity = row.get("validity")
+            self.assertIsNotNone(validity, f"{row.get('rule_id')} has no validity")
+            # unbounded both ends = always in effect
+            self.assertIsNone(validity.lower)
+            self.assertIsNone(validity.upper)
+
     # spec: F44.ac2
     @unittest.skipUnless(os.environ.get("DATABASE_URL"), "DATABASE_URL required for PostgreSQL integration")
     def test_second_load_is_an_identical_snapshot(self):

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 import psycopg
+from psycopg.types.range import Range
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -135,6 +136,11 @@ def read_snapshot(data_dir=DEFAULT_DATA, include_pii=False):
         for row in t[table]:
             if not isinstance(row.get("location_id"), (int, float)):
                 row["location_id"] = None
+    # Coverage rules carry no effective dates in the source — they apply whenever the store is
+    # open. Populate the F34 / migration 0002 `validity` daterange with an unbounded (always-in-
+    # effect) range so a fresh load matches 0002's backfill and is never NULL (F34 AC3).
+    for row in t["coverage_rules"]:
+        row["validity"] = Range(None, None, "[)")
     fixed = []
     for row in t["fixed_tasks"]:
         raw_locations = str(row.get("location_id"))
