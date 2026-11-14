@@ -264,6 +264,20 @@ class LaborComplianceSpecifications(unittest.TestCase):
         with self.assertRaises(ComplianceConfigError):
             evaluate(proposal(), snapshot=snapshot([bad], employer_flags={"fww_covered": False}))
 
+    # spec: F10.ac12
+    def test_unknown_vocabulary_on_superseded_or_foreign_rule_does_not_block(self):
+        current = rule(rule_id="CURRENT")
+        superseded = rule(
+            rule_id="OLD-2019", metric="legacy_metric", operator=">=", unit="HOURS",
+            effective_from=date(2019, 1, 1), effective_to=date(2020, 1, 1),
+        )
+        foreign = rule(
+            rule_id="CA-ONLY", jurisdiction="CA-STATE", metric="unknown_ca_metric",
+            operator=">=", unit="HOURS",
+        )
+        evaluation = evaluate(proposal(), snapshot=snapshot([current, superseded, foreign]))
+        self.assertEqual([row.rule_id for row in evaluation.results], ["CURRENT"])
+
     # spec: F10.ac5
     def test_naive_or_backwards_shift_timestamps_raise(self):
         naive_start = datetime(2026, 11, 18, 9, 0)
