@@ -6,8 +6,11 @@ Set DATABASE_URL to run the database integration test.
 import copy
 import importlib.util
 import os
+import tempfile
 import unittest
 from pathlib import Path
+
+from openpyxl import Workbook
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +23,27 @@ def load_etl():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def write_private_pii_workbook(path, rows):
+    """Create textual PII cells without committing a PII fixture."""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Staff_PII"
+    sheet.append(["employee_id", "ssn", "zipcode-address"])
+    for row in rows:
+        sheet.append(row)
+    workbook.save(path)
+
+
+def snapshot_data_dir_with_private_pii(tmp_dir, pii_rows):
+    """Expose the public fixture set plus a synthetic private workbook."""
+    for source in DATA.glob("*.xlsx"):
+        (tmp_dir / source.name).symlink_to(source)
+    private_dir = tmp_dir / "private"
+    private_dir.mkdir()
+    write_private_pii_workbook(private_dir / "coffee_shop_staff_pii.xlsx", pii_rows)
+    return tmp_dir
 
 
 class ExcelToPostgresSpecifications(unittest.TestCase):
@@ -96,6 +120,24 @@ class ExcelToPostgresSpecifications(unittest.TestCase):
         etl = load_etl()
         self.assertEqual(etl.null("02134"), "02134")
         self.assertEqual(etl.null("001-02-0003"), "001-02-0003")
+
+    # spec: F44.ac4 — BUG-005 / D7: read by declared destination type, not value shape.
+    def test_snapshot_preserves_textual_pii_identifiers_and_integer_targets(self):
+        etl = load_etl()
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = snapshot_data_dir_with_private_pii(Path(tmp), [
+                [1001, "001020003", "02134"],
+            ])
+            snapshot = etl.read_snapshot(data_dir, include_pii=True)
+
+        pii = snapshot.tables["employee_pii"][0]
+        self.assertEqual(pii["ssn"], "001020003")
+        self.assertIsInstance(pii["ssn"], str)
+        self.assertEqual(pii["zipcode"], "02134")
+        self.assertIsInstance(pii["zipcode"], str)
+        # `skill_level` targets an integer column; numeric whole numbers stay integers.
+        self.assertEqual(snapshot.tables["employees"][0]["skill_level"], 1)
+        self.assertIsInstance(snapshot.tables["employees"][0]["skill_level"], int)
 
     # spec: F44.ac3 — BUG-006: all row keys participate in COPY staging.
     def test_columns_are_the_union_of_every_row(self):
