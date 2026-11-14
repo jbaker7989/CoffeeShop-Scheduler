@@ -111,9 +111,13 @@ class ExcelToPostgresSpecifications(unittest.TestCase):
     def test_pii_requires_explicit_opt_in(self):
         etl = load_etl()
         public = etl.read_snapshot(DATA, include_pii=False)
-        private = etl.read_snapshot(DATA, include_pii=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = snapshot_data_dir_with_private_pii(Path(tmp), [
+                [1001, "001020003", "02134"],
+            ])
+            private = etl.read_snapshot(data_dir, include_pii=True)
         self.assertNotIn("employee_pii", public.tables)
-        self.assertEqual(len(private.tables["employee_pii"]), len(private.tables["employees"]))
+        self.assertEqual(len(private.tables["employee_pii"]), 1)
 
     # spec: F44.ac4 — BUG-005: text identifiers retain leading zeros.
     def test_text_like_values_are_not_shape_coerced(self):
@@ -147,7 +151,11 @@ class ExcelToPostgresSpecifications(unittest.TestCase):
     # spec: F44.ac4 — BUG-007: private rows receive the same preflight validation.
     def test_duplicate_private_employee_is_rejected_before_load(self):
         etl = load_etl()
-        snapshot = etl.read_snapshot(DATA, include_pii=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = snapshot_data_dir_with_private_pii(Path(tmp), [
+                [1001, "001020003", "02134"],
+            ])
+            snapshot = etl.read_snapshot(data_dir, include_pii=True)
         snapshot.tables["employee_pii"].append(dict(snapshot.tables["employee_pii"][0]))
         with self.assertRaisesRegex(etl.ETLValidationError, "employee_pii.*duplicate"):
             etl.validate_snapshot(snapshot)
