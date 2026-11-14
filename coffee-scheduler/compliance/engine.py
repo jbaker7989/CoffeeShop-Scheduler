@@ -463,12 +463,20 @@ def _log_row(proposal, result, when) -> dict:
 
 
 def _validate_proposal_times(proposal) -> None:
-    if proposal.start_at.tzinfo is None or proposal.start_at.utcoffset() is None:
-        raise ComplianceConfigError("start_at must be timezone-aware")
-    if proposal.end_at.tzinfo is None or proposal.end_at.utcoffset() is None:
-        raise ComplianceConfigError("end_at must be timezone-aware")
-    if proposal.end_at <= proposal.start_at:
-        raise ComplianceConfigError("end_at must be after start_at")
+    _validate_span_times(proposal.start_at, proposal.end_at, "shift")
+    for index, item in enumerate(proposal.week_shifts or []):
+        _validate_span_times(item.start, item.end, f"week_shifts[{index}]")
+    for index, item in enumerate(proposal.breaks):
+        _validate_span_times(item.start, item.end, f"breaks[{index}]")
+
+
+def _validate_span_times(start, end, label) -> None:
+    if start.tzinfo is None or start.utcoffset() is None:
+        raise ComplianceConfigError(f"{label}.start must be timezone-aware")
+    if end.tzinfo is None or end.utcoffset() is None:
+        raise ComplianceConfigError(f"{label}.end must be timezone-aware")
+    if end <= start:
+        raise ComplianceConfigError(f"{label}.end must be after {label}.start")
 
 
 def _judge_rule(rule, snapshot, proposal, zone, shift_day) -> RuleResult:
