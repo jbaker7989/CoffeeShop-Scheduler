@@ -1601,6 +1601,141 @@ closing regression evidence.
 - **Risk if unfixed:** AC6 is satisfiable with junk citations; rule views depend on an external host's
   availability; a determined actor can still probe internal hosts.
 
+### BUG-019 — `test_rules_admin.py` has no `unittest.main()` → runs 0 tests when invoked as a script
+- **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (tests silently do not run) · **Pattern:** —
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.1d (est.)
+- **Description:** `coffee-scheduler/test/test_rules_admin.py` defines 18 test methods but has **no**
+  `if __name__ == "__main__": unittest.main()` block (every other test file in the repo has one). Its own
+  docstring says to run it with `python3 coffee-scheduler/test/test_rules_admin.py`, but that invocation
+  defines the classes and then exits 0 with **no output and zero tests run** — so the BUG-014..018
+  regression tests silently guard nothing in the repo's normal (script) workflow. They only execute under
+  `python3 -m unittest` discovery.
+- **Reproduction (verified 2026-11-14):** `python3 coffee-scheduler/test/test_rules_admin.py` → no output,
+  exit 0; `python3 -m unittest -v …test_rules_admin` → runs 18 tests, OK.
+- **Specification (write first):** none needed — the fix *is* the runnability. Add a CI/convention check
+  (or a tiny meta-test) that every `test_*.py` ends with a `unittest.main()` entrypoint.
+- **Proposed fix:** append `if __name__ == "__main__":\n    unittest.main()` to `test_rules_admin.py`.
+- **Risk if unfixed:** the F34 regressions appear green but never run as invoked; a future regression lands
+  undetected.
+
+### BUG-020 — F60: the `tenants` root table has no RLS → cross-tenant enumeration
+- **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P1 · **Size:** S · **Pattern:** D2
+- **Status:** 🐞 Open · **Type:** Defect (multi-tenant isolation hole — confirmed exploitable)
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** F60/CS-060 scopes RLS to *domain* tables but leaves the **root `tenants` table**
+  unprotected: `tenants` has `relrowsecurity=false, relforcerowsecurity=false` and `app_rw` holds `SELECT`
+  on it. So any tenant's application session can read **every** tenant row — `slug`, `name`, `timezone`,
+  `jurisdiction` — a direct cross-tenant information leak the isolation guarantee is supposed to prevent.
+- **Reproduction (verified 2026-11-14):** as `app_rw` with `app.tenant_id = maven-demo`,
+  `SELECT slug FROM tenants` returned **two** tenants (`maven-demo` and an injected `rival`). Expected: one.
+- **Specification (write first):** a test that an `app_rw` session scoped to tenant A sees exactly **one**
+  `tenants` row (its own) and cannot read tenant B's metadata.
+- **Proposed fix:** enable+force RLS on `tenants` with a self-scoping policy
+  (`id = NULLIF(current_setting('app.tenant_id', true), '')::uuid`), **or** revoke `app_rw` SELECT on
+  `tenants` and expose only the caller's tenant through a scoped view/function. Update F60.AC1/AC2 to name
+  the root table explicitly.
+- **Risk if unfixed:** tenants enumerate each other (competitor discovery, jurisdiction/config leakage) the
+  moment a second tenant exists.
+
+### BUG-021 — F60: default partitions of partitioned tables lack RLS/FORCE
+- **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P2 · **Size:** S · **Pattern:** D2/D9
+- **Status:** 🐞 Open · **Type:** Defect (isolation gap — latent, mitigated only by grant absence)
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** `transactions_default`, `weather_hourly_default`, and `rule_eval_log_default` (the catch-all
+  partitions created by migration `0001`) have `relrowsecurity=false, relforcerowsecurity=false`, while
+  F60.AC2 requires FORCE RLS on **every** domain table. A query through the partitioned *parent* is isolated
+  (the parent has RLS+FORCE), but a **direct** read of a default partition is not. Today this is not
+  exploitable — `app_rw` has **no grant** on the default partitions (direct read → `InsufficientPrivilege`)
+  — so isolation currently rests on *grant absence*, not RLS, which is fragile defense-in-depth.
+- **Reproduction (verified 2026-11-14):** `pg_class` shows the three `*_default` partitions with
+  `rls=false, force=false`; direct `SELECT FROM transactions_default` as `app_rw` → permission denied (grant
+  absence is the only thing stopping it).
+- **Specification (write first):** a test asserting FORCE RLS is present on every partition (parent **and**
+  each child, including default + future partitions), and that no app role can read a partition directly
+  without RLS applying.
+- **Proposed fix:** ENABLE + FORCE RLS and the `tenant_isolation` policy on each partition (default and
+  per-period), and make the partition-creation path apply RLS to every new partition; never rely on grant
+  absence alone.
+- **Risk if unfixed:** any future grant to a partition, or a new non-RLS partition, becomes a silent
+  cross-tenant read via direct partition access.
+
+### BUG-022 — F60: RLS policy cast is not fail-closed for empty/invalid tenant context
+- **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P2 · **Size:** XS · **Pattern:** D2
+- **Status:** 🐞 Open · **Type:** Defect (spec bug + unhandled edge; impl partially fixed)
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** Two related gaps around the policy expression:
+  1. **Spec bug:** F60.AC2 specifies the filter as `current_setting('app.tenant_id', true)::UUID`. With the
+     GUC reset/`SET LOCAL ''`, that is `''::UUID` → `invalid input syntax for type uuid`, which **contradicts
+     AC4's** "no context → zero rows." Migration `0001` already fixed the *implementation* with
+     `NULLIF(current_setting(...), '')::uuid`, but the AC still mandates the throwing form.
+  2. **Unhandled edge:** `NULLIF` only neutralizes the empty string. A middleware bug or hostile token that
+     does `SET LOCAL app.tenant_id = '<non-uuid>'` makes **every** query raise a 500 on the cast — not the
+     safe "zero rows" AC4 promises.
+- **Reproduction:** `SELECT ''::uuid` and `SELECT 'not-a-uuid'::uuid` both raise `invalid input syntax for
+  type uuid`; the live `labor_rules` policy uses the `NULLIF` form (empty handled, non-uuid still throws).
+- **Specification (write first):** tests that (a) an unset and an empty `app.tenant_id` both yield zero rows
+  (never an error), and (b) a non-UUID `app.tenant_id` yields zero rows (or a typed, caught error), never a
+  raw cast 500.
+- **Proposed fix:** correct AC2 to mandate the `NULLIF` form; make the policy tolerate a malformed value
+  (e.g. a `SECURITY DEFINER` helper that returns NULL on bad input, or validate/normalize `app.tenant_id`
+  in the session-context middleware before any statement runs).
+- **Risk if unfixed:** the published AC is wrong (fails AC4 if built literally), and a malformed tenant
+  context DoSes the tenant with 500s instead of failing closed.
+
+### BUG-023 — F60: "every domain table gets `tenant_id`" is over-broad for global reference tables
+- **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P3 · **Size:** XS · **Pattern:** D5
+- **Status:** 🐞 Open · **Type:** Defect (spec over-generalization) · relates to [[BUG-009]]
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.25d (est.)
+- **Description:** F60.AC1 says **every** domain table gets `tenant_id UUID NOT NULL`. But global reference
+  tables are correctly tenant-less: `weather_codes` has no `tenant_id` and only `SELECT` for `app_rw`
+  (verified). Applying `tenant_id` to shared reference data would be wrong (it is the same for all tenants),
+  and the story never states the **write** policy for global tables (which tenant, if any, may mutate them).
+- **Specification (write first):** a documented list of global/reference tables that are exempt from
+  `tenant_id`, plus a test that `app_rw` cannot write them (read-only) and the ETL/global-admin owns their
+  writes (ties to the BUG-009 per-tenant-prune guard).
+- **Proposed fix:** carve out a named set of global reference tables in F60.AC1; state their grant/write
+  policy explicitly.
+- **Risk if unfixed:** a literal implementation adds spurious `tenant_id` to reference data, or leaves
+  global-table writes ungoverned.
+
+### BUG-024 — F60: scale-safe migration gotchas (CONCURRENTLY on partitioned parents; backfill write window)
+- **Feature:** [F60](./FEATURES.md) (CS-060a) · **Priority:** P2 · **Size:** S · **Pattern:** D5
+- **Status:** 🐞 Open · **Type:** Defect (migration plan will fail / leave gaps as written)
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** CS-060a's "scale-safe" recipe has two flaws for the partitioned tables (`transactions`,
+  `weather_hourly`, `rule_eval_log`):
+  1. **`CREATE INDEX CONCURRENTLY` is not supported on a partitioned parent** — Postgres rejects it; you must
+     create the index on each partition and `ATTACH`, or create it on the parent `ONLY` and build children
+     concurrently. The blanket recipe fails on exactly the big tables it targets.
+  2. **Backfill write window:** between `ADD COLUMN tenant_id` (nullable) and `VALIDATE … NOT NULL`,
+     concurrent INSERTs (the story deploys app code "alongside") can land `NULL tenant_id`, which is then
+     invisible under RLS and blocks `VALIDATE`. No DEFAULT/trigger covers the window.
+- **Specification (write first):** a migration test on a partitioned table proving the index path works and
+  that no row can acquire a `NULL tenant_id` during the window.
+- **Proposed fix:** per-partition `CREATE INDEX CONCURRENTLY` + `ATTACH` (or parent `ONLY` + children); set a
+  temporary `DEFAULT`/`BEFORE INSERT` trigger that stamps the cutover tenant during the backfill window, then
+  `VALIDATE` and drop the default.
+- **Risk if unfixed:** the migration errors out mid-flight on big tables, or silently orphans concurrently
+  written rows with `NULL tenant_id`.
+
+### BUG-025 — F60: per-request tenant context is lost on an autocommit connection; role not pinned under pooling
+- **Feature:** [F60](./FEATURES.md) (CS-060c) · **Priority:** P2 · **Size:** XS · **Pattern:** D2
+- **Status:** 🐞 Open · **Type:** Defect (session-context gap) · relates to [[BUG-013]], [[BUG-017]]
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** CS-060c sets tenant context with `SET LOCAL app.tenant_id`, which only persists inside an
+  explicit transaction. On an **autocommit** connection the setting evaporates before the next statement →
+  every query returns zero rows with no error (silent empty results), and nothing in the story requires the
+  middleware to assert `not autocommit`. Separately, CS-060c pins the tenant GUC but says nothing about the
+  **role**; the data-plane services use non-local `SET ROLE` (BUG-013), which leaks across pooled backends —
+  CS-060c should mandate `SET LOCAL ROLE app_rw` alongside the tenant GUC for pooling safety.
+- **Specification (write first):** tests that the middleware refuses (typed error) an autocommit connection,
+  and that both the role and the tenant GUC are transaction-local (do not leak to the next pooled client).
+- **Proposed fix:** the session-context middleware opens an explicit transaction, asserts `not autocommit`,
+  and issues `SET LOCAL ROLE app_rw` + `SET LOCAL app.tenant_id = …` together before the first statement.
+- **Risk if unfixed:** silent empty results under a misconfigured pool, and role state bleeding across
+  tenants' pooled connections.
+
 ---
 
 ## Backlog summary
@@ -1744,3 +1879,10 @@ closing regression evidence.
 | BUG-016 | F34 | P2 | S | ✅ Fixed — effective-dated version addressing |
 | BUG-017 | F34 | P3 | XS | ✅ Fixed — explicit transaction contract and timezone validation |
 | BUG-018 | F34 | P2 | S | ✅ Fixed — verified evidence gate and no read-path URL networking |
+| BUG-019 | F34 | P2 | XS | 🐞 Open — `test_rules_admin.py` missing `unittest.main()`; runs 0 tests as a script |
+| BUG-020 | F60 | P1 | S | 🐞 Open — `tenants` root table has no RLS → cross-tenant enumeration (confirmed) |
+| BUG-021 | F60 | P2 | S | 🐞 Open — default partitions lack RLS/FORCE (latent; mitigated only by grant absence) |
+| BUG-022 | F60 | P2 | XS | 🐞 Open — RLS policy cast not fail-closed for empty/invalid tenant context (AC2 spec bug) |
+| BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
+| BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
+| BUG-025 | F60 | P2 | XS | 🐞 Open — tenant context lost on autocommit conn; role not pinned under pooling |
