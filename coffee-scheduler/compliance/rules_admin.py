@@ -91,8 +91,14 @@ def _etag(row):
     return hashlib.sha256(f"{row['rule_id']}:{row['_xmin']}:{row['effective_from']}".encode()).hexdigest()
 
 
-def _rule_row(conn, rule_id):
-    rows = _rows(conn, "SELECT labor_rules.*, xmin::text AS _xmin FROM labor_rules WHERE rule_id=%s ORDER BY effective_from DESC LIMIT 1", (rule_id,))
+def _rule_row(conn, rule_id, effective_from=None):
+    query = "SELECT labor_rules.*, xmin::text AS _xmin FROM labor_rules WHERE rule_id=%s"
+    params = [rule_id]
+    if effective_from is not None:
+        query += " AND effective_from=%s"
+        params.append(effective_from)
+    query += " ORDER BY effective_from DESC LIMIT 1"
+    rows = _rows(conn, query, params)
     if not rows:
         raise NotFound("rule not found")
     row = rows[0]
@@ -220,10 +226,10 @@ def list_rules(conn, filters):
     return rows
 
 
-def get_rule(conn, rule_id, *, tenant_id=None):
+def get_rule(conn, rule_id, *, tenant_id=None, effective_from=None):
     tenant_id = tenant_id or _tenant_from_session(conn)
     prepare_session(conn, _tenant_from(tenant_id=tenant_id))
-    row = _rule_row(conn, rule_id)
+    row = _rule_row(conn, rule_id, effective_from)
     all_rows = _rows(conn, "SELECT labor_rules.*, xmin::text AS _xmin FROM labor_rules")
     status, warnings = _status(conn, row, all_rows)
     row["reconciliation_status"] = status
@@ -264,12 +270,12 @@ def _verification_gate(before, after, changes):
         raise ValidationError("rule not yet verified; verify in CS-021 first.")
 
 
-def patch_rule(conn, rule_id, changes, *, if_match, principal, today=None):
+def patch_rule(conn, rule_id, changes, *, if_match, principal, today=None, effective_from=None):
     if not _has_capability(principal):
         raise Forbidden("rules_manager capability required")
     tenant = _tenant_from(principal=principal)
     prepare_session(conn, tenant)
-    before = _rule_row(conn, rule_id)
+    before = _rule_row(conn, rule_id, effective_from)
     if if_match != before["etag"]:
         raise Conflict("etag does not match current rule")
     unknown = set(changes) - EDITABLE
@@ -295,7 +301,7 @@ def patch_rule(conn, rule_id, changes, *, if_match, principal, today=None):
     notes = json.dumps({"action": "rule_edit", "before": {k: str(v) if isinstance(v, (date, datetime)) else v for k, v in before.items() if k not in {"_xmin", "etag"}}, "after": {k: str(v) if isinstance(v, (date, datetime)) else v for k, v in audit_after.items()}, "manager_id": str(principal.get("id"))}, default=str)
     conn.execute("""INSERT INTO rule_eval_log (tenant_id, schedule_id, shift_id, employee_id, rule_id, result, premium_cost_usd, agent, notes)
                     VALUES (%s, NULL, NULL, NULL, %s, 'PASS', 0, 'rules-admin-agent', %s)""", (tenant, rule_id, notes))
-    fresh = _rule_row(conn, rule_id)
+    fresh = _rule_row(conn, rule_id, after["effective_from"])
     return {"matched": True, "modified": True, "etag": fresh["etag"], "source_url_valid": source_valid}
 
 
