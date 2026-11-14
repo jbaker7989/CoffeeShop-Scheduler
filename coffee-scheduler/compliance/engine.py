@@ -317,15 +317,18 @@ def load_snapshot(proposal: Proposal, *, dsn: str | None = None) -> Snapshot:
 
     url = dsn or os.environ.get("DATABASE_URL") or "postgresql://coffeeshop:coffeeshop@localhost:5432/coffeeshop"
     with psycopg.connect(url) as conn:
-        prepare_session(conn, proposal.tenant_id)
-        return _read_snapshot(conn, proposal)
+        with conn.transaction():
+            prepare_session(conn, proposal.tenant_id)
+            return _read_snapshot(conn, proposal)
 
 
 def prepare_session(conn, tenant_id: str) -> None:
     if not tenant_id:
         raise ComplianceUnavailable("tenant_id is required")
+    if getattr(conn, "autocommit", False) or getattr(getattr(conn, "info", None), "transaction_status", None) != 2:
+        raise ComplianceUnavailable("prepare_session requires an active transaction with autocommit disabled")
     try:
-        conn.execute("SET ROLE app_rw")
+        conn.execute("SET LOCAL ROLE app_rw")
     except Exception as exc:
         raise ComplianceUnavailable(f"SET ROLE app_rw failed: {exc}") from exc
     who = conn.execute("SELECT current_user").fetchone()[0]
@@ -427,23 +430,23 @@ def _persist(proposal, evaluation, when, *, dsn, log):
     import psycopg
     url = dsn or os.environ.get("DATABASE_URL") or "postgresql://coffeeshop:coffeeshop@localhost:5432/coffeeshop"
     with psycopg.connect(url) as conn:
-        prepare_session(conn, proposal.tenant_id)
-        if proposal.shift_id is not None:
-            found = conn.execute(
-                "SELECT 1 FROM shifts WHERE shift_id = %s", (proposal.shift_id,)
-            ).fetchone()
-            if found is None:
-                raise ShiftNotPersisted(proposal.shift_id)
-        for row in rows:
-            conn.execute(
-                """INSERT INTO rule_eval_log
-                   (tenant_id, schedule_id, shift_id, employee_id, rule_id, result,
-                    premium_cost_usd, evaluated_at, agent, notes)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (row["tenant_id"], row["schedule_id"], row["shift_id"], row["employee_id"], row["rule_id"],
-                 row["result"], row["premium_cost_usd"], row["evaluated_at"], row["agent"], row["notes"]),
-            )
-        conn.commit()
+        with conn.transaction():
+            prepare_session(conn, proposal.tenant_id)
+            if proposal.shift_id is not None:
+                found = conn.execute(
+                    "SELECT 1 FROM shifts WHERE shift_id = %s", (proposal.shift_id,)
+                ).fetchone()
+                if found is None:
+                    raise ShiftNotPersisted(proposal.shift_id)
+            for row in rows:
+                conn.execute(
+                    """INSERT INTO rule_eval_log
+                       (tenant_id, schedule_id, shift_id, employee_id, rule_id, result,
+                        premium_cost_usd, evaluated_at, agent, notes)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (row["tenant_id"], row["schedule_id"], row["shift_id"], row["employee_id"], row["rule_id"],
+                     row["result"], row["premium_cost_usd"], row["evaluated_at"], row["agent"], row["notes"]),
+                )
 
 
 def _log_row(proposal, result, when) -> dict:
