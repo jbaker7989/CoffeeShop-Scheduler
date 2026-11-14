@@ -7,15 +7,11 @@ transaction-pooling proxy.
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
-import socket
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import replace
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from psycopg import sql
 from psycopg.rows import dict_row
@@ -55,6 +51,8 @@ def prepare_session(conn, tenant_id: str) -> None:
     """Apply the mandatory, transaction-local app role and tenant scope."""
     if not tenant_id:
         raise TenantContextMissing("tenant context missing")
+    if conn.autocommit:
+        raise TenantContextMissing("rules-admin requires a caller-managed transaction")
     try:
         conn.execute("SET LOCAL ROLE app_rw")
         who = conn.execute("SELECT current_user").fetchone()[0]
@@ -313,7 +311,16 @@ def list_waivers(conn, rule_id, *, tenant_id=None, today=None, tz=None):
     tenant = _tenant_from(tenant_id=tenant_id) if tenant_id else _tenant_from_session(conn)
     prepare_session(conn, tenant)
     if today is None:
-        zone = ZoneInfo(tz) if tz else ZoneInfo(_rows(conn, "SELECT timezone FROM tenants WHERE id=%s", (tenant,))[0]["timezone"])
+        timezone_name = tz
+        if timezone_name is None:
+            tenant_rows = _rows(conn, "SELECT timezone FROM tenants WHERE id=%s", (tenant,))
+            timezone_name = tenant_rows[0]["timezone"] if tenant_rows else None
+        if not isinstance(timezone_name, str) or not timezone_name.strip():
+            raise ValidationError("tenant timezone is missing or invalid")
+        try:
+            zone = ZoneInfo(timezone_name)
+        except (TypeError, ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValidationError("tenant timezone is missing or invalid") from exc
         today = datetime.now(zone).date()
     rows = _rows(conn, "SELECT waiver_id, employee_id, rule_id, valid_from, valid_to, doc_reference, notes FROM consent_waivers WHERE rule_id=%s ORDER BY waiver_id", (rule_id,))
     for row in rows:
