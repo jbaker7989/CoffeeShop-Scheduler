@@ -376,7 +376,7 @@ OpenTelemetry is the chosen observability framework. F18 ("Observability across 
 Move the project off `.xlsx` as the source of truth onto PostgreSQL. The Excel files stay in git as historical fixtures and as a read-side export (F46). F47 is the schema design; F42–F46 are the platform that runs it.
 
 ### F42. PostgreSQL implementation (umbrella)
-- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Status:** Done (CS-042, 2026-11-14) · **Size:** M · **Priority:** P0 · Platform doc: [docs/data-platform.md](./docs/data-platform.md)
 - **Description:** Move the project off `.xlsx` as the source of truth onto PostgreSQL. This umbrella owns: the Postgres version pin, the connection-string convention (`.env.example`, never committed), the migration tool (Alembic), the role / user model (read-only agent role, read-write agent role, manager role), and the path from current workbooks to schema-versioned tables. **F23 (data directory decision) is settled here: Postgres is the canonical store.** The Excel files become fixtures and exports.
 - **Expected outcome:** Every agent reads from and writes to Postgres; Excel is a derived artefact, not a source.
 
