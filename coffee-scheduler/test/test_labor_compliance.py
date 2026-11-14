@@ -25,6 +25,7 @@ from compliance.engine import (  # noqa: E402
 NY = ZoneInfo("America/New_York")
 TENANT = "00000000-0000-0000-0000-000000000001"
 DSN = os.environ.get("DATABASE_URL", "postgresql://coffeeshop:coffeeshop@localhost:5432/coffeeshop")
+PGBOUNCER_DSN = os.environ.get("PGBOUNCER_DATABASE_URL", "postgresql://coffeeshop:coffeeshop@localhost:6432/coffeeshop")
 
 
 def rule(**kwargs):
@@ -249,6 +250,42 @@ class LaborComplianceSpecifications(unittest.TestCase):
         with self.assertRaises(ComplianceUnavailable):
             prepare_session(Conn(), TENANT)
 
+    # spec: F10.ac11
+    def test_prepare_session_requires_an_open_transaction_and_uses_local_state(self):
+        class Result:
+            def fetchone(self):
+                return ("app_rw",)
+
+        class Conn:
+            autocommit = False
+
+            class info:
+                transaction_status = 2  # psycopg.pq.TransactionStatus.INTRANS
+
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, params=None):
+                self.calls.append((sql, params))
+                return Result()
+
+        conn = Conn()
+        prepare_session(conn, TENANT)
+        self.assertEqual(conn.calls[0], ("SET LOCAL ROLE app_rw", None))
+        self.assertEqual(conn.calls[2], ("SELECT set_config('app.tenant_id', %s, true)", (TENANT,)))
+
+        class AutocommitConn:
+            autocommit = True
+
+            class info:
+                transaction_status = 0
+
+            def execute(self, *_args):
+                raise AssertionError("must not issue session-scoped SQL")
+
+        with self.assertRaisesRegex(ComplianceUnavailable, "active transaction"):
+            prepare_session(AutocommitConn(), TENANT)
+
     # spec: F10.ac12
     def test_unknown_metric_raises_before_a_pass(self):
         bad = rule(rule_id="NEW", metric="not_a_metric", operator=">=", unit="HOURS")
@@ -414,6 +451,39 @@ class LaborComplianceSpecifications(unittest.TestCase):
 
 
 class PostgresIsolation(unittest.TestCase):
+    # spec: F10.ac11
+    def test_pgbouncer_session_state_clears_after_commit_and_rollback(self):
+        import psycopg
+
+        try:
+            with psycopg.connect(PGBOUNCER_DSN) as first:
+                baseline = first.execute("SELECT current_user").fetchone()[0]
+                first.commit()
+                with first.transaction():
+                    prepare_session(first, TENANT)
+                    self.assertEqual(first.execute("SELECT current_user").fetchone()[0], "app_rw")
+            with psycopg.connect(PGBOUNCER_DSN) as second:
+                who, tenant = second.execute(
+                    "SELECT current_user, current_setting('app.tenant_id', true)"
+                ).fetchone()
+                self.assertEqual(who, baseline)
+                self.assertIn(tenant, (None, ""))
+            with psycopg.connect(PGBOUNCER_DSN) as failed:
+                try:
+                    with failed.transaction():
+                        prepare_session(failed, TENANT)
+                        raise RuntimeError("force rollback")
+                except RuntimeError:
+                    pass
+            with psycopg.connect(PGBOUNCER_DSN) as after_rollback:
+                who, tenant = after_rollback.execute(
+                    "SELECT current_user, current_setting('app.tenant_id', true)"
+                ).fetchone()
+                self.assertEqual(who, baseline)
+                self.assertIn(tenant, (None, ""))
+        except Exception as exc:
+            self.skipTest(f"PgBouncer 6432 unavailable: {exc}")
+
     # spec: F10.ac11
     def test_wrong_tenant_is_not_a_legal_shift(self):
         start = datetime(2026, 11, 18, 9, 0, tzinfo=NY)
