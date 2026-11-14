@@ -201,13 +201,29 @@ def _has_capability(principal):
     return "rules_manager" in (principal or {}).get("capabilities", set())
 
 
-def _verification_gate(before, after):
-    blocking = after["enforcement"] in BLOCKING_ENFORCEMENT
-    verified_source = bool(after.get("source_citation")) and bool(after.get("source_url"))
-    rationale = bool(str(after.get("notes") or "").strip())
-    if blocking and after.get("verification_status") != "VERIFIED" and not (verified_source or rationale):
+def _verification_gate(before, after, changes):
+    """Guard only transitions this edit introduces, never inherited row state."""
+    touches_verification = bool({"enforcement", "verification_status"} & changes.keys())
+    blocking_unverified = (
+        after["enforcement"] in BLOCKING_ENFORCEMENT
+        and after.get("verification_status") != "VERIFIED"
+    )
+    # A prior note cannot silently justify a newly binding rule.  A verified
+    # source is deliberately tied to the proposed status, not string presence.
+    verified_source = (
+        after.get("verification_status") == "VERIFIED"
+        and bool(after.get("source_citation"))
+        and bool(after.get("source_url"))
+    )
+    new_rationale = "notes" in changes and bool(str(changes.get("notes") or "").strip())
+    if touches_verification and blocking_unverified and not (verified_source or new_rationale):
         raise ValidationError("design decision required for unverified LAW rule.")
-    if after.get("verification_status") == "VERIFY" and not verified_source and not blocking:
+    if (
+        "verification_status" in changes
+        and after.get("verification_status") == "VERIFY"
+        and after["enforcement"] not in BLOCKING_ENFORCEMENT
+        and not verified_source
+    ):
         raise ValidationError("rule not yet verified; verify in CS-021 first.")
 
 
@@ -224,7 +240,7 @@ def patch_rule(conn, rule_id, changes, *, if_match, principal, today=None):
         raise ValidationError(f"fields are not editable: {sorted(unknown)}")
     after = {k: v for k, v in before.items() if k not in {"_xmin", "etag"}}
     after.update(changes)
-    _verification_gate(before, after)
+    _verification_gate(before, after, changes)
     all_rows = _rows(conn, "SELECT labor_rules.*, xmin::text AS _xmin FROM labor_rules")
     conflicts = reconcile_for_admin(after, all_rows, _coverage_rows(conn))
     if conflicts:
