@@ -51,6 +51,18 @@ class MigrationRoundTripTests(unittest.TestCase):
             "SELECT rolname FROM pg_roles WHERE rolname IN ('app_rw', 'app_ro', 'secrets_rw')"
         )
 
+    def coverage_rules_validity_type(self) -> str | None:
+        import psycopg
+
+        url = os.environ["DATABASE_URL"]
+        with psycopg.connect(url) as conn:
+            row = conn.execute(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'coverage_rules' "
+                "AND column_name = 'validity'"
+            ).fetchone()
+        return None if row is None else row[0]
+
     def test_upgrade_downgrade_upgrade_leaves_only_alembic_metadata_at_base(self) -> None:
         self.alembic("upgrade", "head")
         self.assertTrue(EXPECTED_TABLES <= self.public_tables())
@@ -63,6 +75,17 @@ class MigrationRoundTripTests(unittest.TestCase):
         self.alembic("upgrade", "head")
         self.assertTrue(EXPECTED_TABLES <= self.public_tables())
         self.assertEqual(EXPECTED_ROLES, self.roles())
+
+    # spec: F34.ac3 — Coverage rules retain an effective daterange through a migration round-trip.
+    def test_coverage_rules_validity_round_trips(self) -> None:
+        self.alembic("upgrade", "head")
+        self.assertEqual("daterange", self.coverage_rules_validity_type())
+
+        self.alembic("downgrade", "-1")
+        self.assertIsNone(self.coverage_rules_validity_type())
+
+        self.alembic("upgrade", "head")
+        self.assertEqual("daterange", self.coverage_rules_validity_type())
 
 
 if __name__ == "__main__":
