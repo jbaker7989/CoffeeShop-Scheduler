@@ -40,6 +40,8 @@ class RulesAdminRegressionTests(unittest.TestCase):
         after = {**before, "enforcement": "HARD"}
         with self.assertRaisesRegex(rules_admin.ValidationError, "design decision required"):
             rules_admin._verification_gate(before, after, {"enforcement": "HARD"})
+        with self.assertRaisesRegex(rules_admin.ValidationError, "design decision required"):
+            rules_admin._verification_gate(before, after, {"enforcement": "HARD", "notes": "old decision"})
 
         # Existing unverified states must not make unrelated typo fixes impossible.
         rules_admin._verification_gate(after, {**after, "priority": 9}, {"priority": 9})

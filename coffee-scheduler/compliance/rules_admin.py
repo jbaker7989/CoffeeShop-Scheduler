@@ -258,7 +258,11 @@ def _verification_gate(before, after, changes):
         and bool(after.get("source_citation"))
         and bool(after.get("source_url"))
     )
-    new_rationale = "notes" in changes and bool(str(changes.get("notes") or "").strip())
+    new_rationale = (
+        "notes" in changes
+        and changes["notes"] != before.get("notes")
+        and bool(str(changes.get("notes") or "").strip())
+    )
     if touches_verification and blocking_unverified and not (verified_source or new_rationale):
         raise ValidationError("design decision required for unverified LAW rule.")
     if (
