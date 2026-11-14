@@ -286,6 +286,32 @@ class LaborComplianceSpecifications(unittest.TestCase):
                 proposal(start_at=naive_start, end_at=naive_start + timedelta(hours=6)),
                 snapshot=snapshot([rule()]),
             )
+
+    # spec: F10.ac5
+    def test_naive_or_non_positive_secondary_timestamps_raise(self):
+        start = datetime(2026, 11, 18, 9, 0, tzinfo=NY)
+        weekly = rule(rule_id="WEEK", metric="hours_per_week", operator="<=", value_num=Decimal("40"), unit="HOURS")
+        with self.assertRaises(ComplianceConfigError):
+            evaluate(
+                proposal(week_shifts=[ShiftSpan(datetime(2026, 11, 17, 9, 0), datetime(2026, 11, 17, 17, 0))]),
+                snapshot=snapshot([weekly]),
+            )
+        with self.assertRaises(ComplianceConfigError):
+            evaluate(
+                proposal(week_shifts=[ShiftSpan(start, start)]),
+                snapshot=snapshot([weekly]),
+            )
+        meal = rule(rule_id="MEAL", metric="break_minutes", operator=">=", value_num=Decimal("30"), unit="MINUTES")
+        with self.assertRaises(ComplianceConfigError):
+            evaluate(
+                proposal(start_at=start, end_at=start + timedelta(hours=7), breaks=[Break(datetime(2026, 11, 18, 12, 0), datetime(2026, 11, 18, 12, 30))]),
+                snapshot=snapshot([meal]),
+            )
+        with self.assertRaises(ComplianceConfigError):
+            evaluate(
+                proposal(start_at=start, end_at=start + timedelta(hours=7), breaks=[Break(start, start)]),
+                snapshot=snapshot([meal]),
+            )
         start = datetime(2026, 11, 18, 9, 0, tzinfo=NY)
         with self.assertRaises(ComplianceConfigError):
             evaluate(
