@@ -1324,6 +1324,131 @@ closing regression evidence.
   GUC limits impact, but the system's authorization model becomes fragile, non-compositional, and unsafe to
   extend.
 
+### BUG-014 — Rules-admin verification gate keys off the merged `after` state, not the edit
+- **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P1 · **Size:** S
+- **Status:** 🐞 Open · **Type:** Defect (AC2/AC6 correctness — one bypass is a compliance hole) · **Pattern:** D2
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** `compliance/rules_admin.py → _verification_gate(before, after)` decides purely from the
+  merged `after` row (`after = before + changes`) and never checks whether the **edit** actually touched
+  `enforcement` or `verification_status`. Because the "design-decision rationale" is read as
+  `rationale = bool(after['notes'])` and the "verified source" as merely non-empty
+  `source_citation` **and** `source_url` (not actually `VERIFIED`), three wrong outcomes follow:
+  1. **AC6 bypass (security/compliance):** a rule with **pre-existing** `notes` can be switched to a
+     blocking `enforcement` (`HARD`/`PROCESS`) while still unverified **without any new justification** —
+     the gate treats the inherited note as the rationale. 22 of 31 seed rules carry notes, so the bypass is
+     broadly available. AC6 requires this to be blocked.
+  2. **Over-block (usability):** editing an **unrelated** field (e.g. `priority`) on a rule that is already
+     `HARD` + not-`VERIFIED` **and** has no notes is rejected with "design decision required…", so a typo
+     fix is impossible without re-justifying.
+  3. **AC2 over-fire (usability):** editing an unrelated field on an already-`VERIFY`, non-blocking rule is
+     rejected with "rule not yet verified; verify in CS-021 first.", even though the edit changed neither
+     status nor enforcement.
+- **Reproduction (verified 2026-11-14, pure `_verification_gate`):**
+  - `SOFT_COST→HARD` on an unverified rule with pre-existing notes → **ALLOWED** (should be BLOCKED).
+  - edit `priority` only on a HARD+unverified no-notes rule → **BLOCKED** (should be ALLOWED).
+  - edit `value_text` only on a VERIFY non-blocking rule → **BLOCKED** (should be ALLOWED).
+- **Specification (write first):**
+  - A test asserting the gate fires **only** when `enforcement` or `verification_status` is in `changes`
+    and the edit introduces a blocking/unverified transition.
+  - A test that the justification must come from **this** edit: a `HARD`-making edit with no new
+    `source_citation`/`source_url`/`notes` in `changes` is **blocked** even if the row already had notes.
+  - A test that an unrelated-field edit on a `HARD`+unverified or `VERIFY` rule is **allowed**.
+- **Proposed fix:** gate on the **transition** — compute `blocking_introduced = after.enforcement ∈ BLOCKING
+  and ('enforcement' in changes or 'verification_status' in changes)`; require the rationale/source to be
+  present in `changes` (not inherited); and define "verified source" as an actually-`VERIFIED` citation,
+  not two non-empty strings.
+- **Risk if unfixed:** managers silently promote unverified rules to legally-binding `HARD` with no audit
+  justification (defeats the assumption-vs-law guard F34 exists to enforce), while legitimate edits are
+  blocked.
+
+### BUG-015 — AC3 effective-date overlap is unreachable with unbounded coverage validity, and its "overlap = conflict" semantics are suspect
+- **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P2 · **Size:** S
+- **Status:** 🐞 Open · **Type:** Defect (dead code + semantic gap) · **Pattern:** D5
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** `reconcile_for_admin` only evaluates the `effective_date_overlap` branch when a coverage
+  row's `validity` is **bounded** (`validity.lower is not None or validity.upper is not None`). But the ETL
+  (post wiring) sets **every** coverage row's `validity` to an **unbounded** `[,)` range, so the branch is
+  now **unreachable on real data** — AC3's date-conflict can never fire. Separately, the branch treats an
+  **overlap** of coverage-vs-law dates as a *conflict*, which is likely inverted: a coverage rule being in
+  effect at the same time as the legal rule it cites is normal; the real conflict is a coverage window with
+  **no** backing in-effect legal rule.
+- **Reproduction (verified 2026-11-14):** `reconcile_for_admin(proposed, [proposed], [coverage with
+  unbounded validity])` returns `[]` — no overlap conflict considered.
+- **Specification (write first):**
+  - A test with a **bounded** coverage validity that does **not** cover the legal rule's effective window,
+    asserting the intended conflict is raised; and a test that an unbounded (always-in-effect) coverage row
+    cited by an in-effect legal rule is **clean**.
+  - Pin the intended semantics explicitly (gap vs overlap) before anyone builds UI on it.
+- **Proposed fix:** decide and document the rule: flag a coverage window **not fully covered** by an
+  in-effect, `VERIFIED` legal rule (gap), rather than flagging mere overlap; make the check independent of
+  whether validity happens to be bounded.
+- **Risk if unfixed:** AC3 reports `clean` for genuinely mis-dated coverage/law pairs — a silent
+  false-negative in exactly the guard F34 advertises.
+
+### BUG-016 — Rules-admin only ever reads/edits the latest effective-dated version of a rule
+- **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P2 · **Size:** S
+- **Status:** 🐞 Open · **Type:** Defect (effective-dating limitation) · **Pattern:** D6
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** `_rule_row` selects `... WHERE rule_id=%s ORDER BY effective_from DESC LIMIT 1`, so
+  `get_rule`/`patch_rule` always act on the **newest** version of a rule_id. `list_rules` returns **every**
+  version (each with an `etag` keyed on `effective_from`), but a PATCH of any older version fetches the
+  latest as `before`, so the caller's `If-Match` (computed from the older row) never matches → **409
+  Conflict**. Older effective-dated versions are therefore unviewable in detail and uneditable. Latent
+  today (0 rules have >1 version) but effective-dating is a first-class F10/F47 feature.
+- **Reproduction (by construction):** two `labor_rules` rows sharing a `rule_id` with different
+  `effective_from`; `get_rule`/`patch_rule` on the older one is impossible (always targets the latest;
+  PATCH → 409).
+- **Specification (write first):** a test with two versions of one rule_id asserting both are individually
+  viewable and editable (address the version, not just rule_id).
+- **Proposed fix:** key the admin API on `(rule_id, effective_from)` (or a surrogate version id), not
+  `rule_id` alone; `_rule_row`/UPDATE/etag must carry the version.
+- **Risk if unfixed:** when rules are effective-dated, the admin silently edits the wrong (latest) row or
+  refuses with a confusing 409.
+
+### BUG-017 — Rules-admin RLS context is silently lost on an autocommit connection; a null tenant timezone crashes waiver listing
+- **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P3 · **Size:** XS
+- **Status:** 🐞 Open · **Type:** Defect (unenforced transaction contract + unguarded edge) · **Pattern:** D2
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** Every entry point calls `prepare_session` which uses **transaction-local** `SET LOCAL
+  ROLE app_rw` + `set_config(..., true)`. These only persist within one open transaction. On an
+  **autocommit** connection each statement is its own transaction, so the role/tenant GUC evaporate before
+  the subsequent query — RLS context is lost (wrong role, or fail-closed zero rows) with no error. Nothing
+  enforces or documents that the caller must pass a single non-autocommit transaction (the tests happen to).
+  Separately, `list_waivers` with `today=None, tz=None` does `ZoneInfo(<tenants.timezone>)`; a null/empty
+  tenant timezone raises an unhandled exception instead of a typed error.
+- **Specification (write first):** a test that `prepare_session` on an autocommit connection raises a typed
+  error (or the service opens its own transaction); a test that a tenant with null timezone yields a typed
+  `ValidationError`, not a raw `ZoneInfoNotFoundError`.
+- **Proposed fix:** assert `not conn.autocommit` in `prepare_session` (or wrap work in an explicit
+  transaction); validate the tenant timezone and raise a typed error on null/unknown.
+- **Risk if unfixed:** an integrator wiring the HTTP adapter with an autocommit pool gets silent
+  cross-tenant-safe-but-empty results or a role bypass; a mis-seeded tenant 500s on waiver views.
+- **Note:** related to [[BUG-013]] (session-role handling under pooling).
+
+### BUG-018 — Rules-admin `source_url` handling: unverified citations satisfy the gate, every detail view makes a blocking external fetch, DNS-rebinding TOCTOU
+- **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P2 · **Size:** S
+- **Status:** 🐞 Open · **Type:** Defect (weak gate + network-in-request-path + residual SSRF) · **Pattern:** D2
+- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
+- **Description:** Three issues around `validate_source_url` / `source_url`:
+  1. **Gate too weak (ties to BUG-014):** `_verification_gate` accepts any non-empty
+     `source_citation` + `source_url` as a "verified source" without checking the URL resolved 200 or the
+     rule is `VERIFIED`, so AC6 can be satisfied with arbitrary unverified strings.
+  2. **Blocking fetch on read:** `get_rule` calls `validate_source_url` (a live HTTPS `HEAD`, 3 s timeout)
+     on **every** rule detail view, putting an external, latency-bound, failure-prone network call on the
+     read path — a self-inflicted DoS/latency vector and a per-view outbound request.
+  3. **DNS-rebinding TOCTOU:** the guard resolves the host and screens the IPs, then `urllib` re-resolves
+     by hostname for the actual request, so a rebinding host can pass the screen and still be fetched
+     (internal reach). Impact is bounded today (advisory; only the HTTP status is used, no body returned),
+     but it is a real residual SSRF.
+- **Specification (write first):** a test that a non-`VERIFIED` citation does **not** satisfy the LAW gate;
+  a test that `get_rule` performs **no** network call (validation is explicit/deferred, or cached); a test
+  that a rebinding/resolve-then-connect path cannot reach a private IP (pin the resolved IP for the request).
+- **Proposed fix:** make `source_url` validation explicit/opt-in (not on every read) and cache
+  `source_url_valid` + `verified_on`; require an actually-`VERIFIED` citation for the LAW gate; connect to
+  the **pinned** screened IP (Host header preserved) to close the rebinding window.
+- **Risk if unfixed:** AC6 is satisfiable with junk citations; rule views depend on an external host's
+  availability; a determined actor can still probe internal hosts.
+
 ---
 
 ## Backlog summary
@@ -1446,3 +1571,8 @@ closing regression evidence.
 | BUG-011 | F10 | P2 | XS | 🐞 Open — `_validate_proposal_times` skips week_shifts/breaks; naive→server tz (D6) |
 | BUG-012 | F43 | P0 | XS | 🐞 Open — PgBouncer healthcheck requires missing `bash`; AC1 fails |
 | BUG-013 | F43/F10 | P0 | XS | 🐞 Open — non-local `SET ROLE` leaks privilege state across pooled backends |
+| BUG-014 | F34 | P1 | S | 🐞 Open — verification gate reads `after` state not the edit: AC6 bypass via pre-existing notes + over-blocks unrelated edits (D2) |
+| BUG-015 | F34 | P2 | S | 🐞 Open — AC3 effective-date overlap unreachable w/ unbounded validity + inverted semantics (D5) |
+| BUG-016 | F34 | P2 | S | 🐞 Open — only the latest effective-dated rule version is viewable/editable (D6) |
+| BUG-017 | F34 | P3 | XS | 🐞 Open — RLS context lost on autocommit conn; null tenant tz crashes waiver listing (D2) |
+| BUG-018 | F34 | P2 | S | 🐞 Open — `source_url`: junk citations satisfy gate, blocking fetch per view, DNS-rebind TOCTOU (D2) |
