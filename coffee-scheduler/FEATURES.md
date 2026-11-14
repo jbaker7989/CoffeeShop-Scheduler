@@ -585,6 +585,215 @@ Convert the single-tenant deployment into a multi-tenant SaaS serving SMB coffee
 
 ---
 
+## Phase 2 — Employee experience, actuals & workforce ops
+
+This phase closes the employee side of the loop (the manager/exec surfaces F30–F35 / F52–F59 have no
+employee-facing counterpart) and the **actuals** loop (nothing today captures what actually happened).
+The core principle is unchanged: the LLM only converses/routes/explains, ML forecasts, OR-Tools schedules.
+These add new **inputs** (availability, actuals, credentials), new **solver objectives** (fairness), and
+new **surfaces** (employee app, publish gate) — never LLM-authored schedules.
+
+### F71. Employee self-service surface (umbrella)
+- **Status:** Not started · **Size:** L · **Priority:** P1
+- **Description:** The employee-facing counterpart to the manager UI (F30). A mobile-first web surface where
+  staff see their published schedule, set availability, request time off (F72), clock in/out (F73), and
+  claim/offer shifts (F75). Authenticated via F61 with an `employee` role (not `manager`), RLS-scoped to the
+  signed-in employee: they see only their own rows plus open shifts at location(s) they are eligible for.
+  No new agent authority — this is a read/write surface over the same Postgres and the existing F14 workflow.
+- **Acceptance criteria:**
+  1. **AC1** — An authenticated employee sees only their own shifts, punches, availability, requests and
+     credentials; a request for another employee's data returns 404 (no existence disclosure), enforced by
+     RLS plus an `employee_id = current principal` scope.
+  2. **AC2** — The surface is read/write only through the F72–F75 service layers; it never writes
+     `labor_rules`, schedules, or another employee's data.
+  3. **AC3** — Works at phone width; a published schedule renders offline-cached (last-fetched) when the
+     network drops, with a clear "last updated" stamp.
+- **Edge / adversarial:** an employee crafting a request with another `employee_id` or another `tenant_id`
+  gets 404; a suspended/terminated employee loses access immediately (F61).
+- **Cross-references:** F30 (manager UI pattern), F61 (auth/RBAC), F60 (RLS), F14 (swap workflow), F72–F75.
+- **Expected outcome:** Staff self-serve the things that today only exist as assumptions or SMS, on their phone.
+
+### F72. Availability & time-off / PTO intake
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Structured, effective-dated employee availability plus a time-off/leave request workflow.
+  Replaces the static `availability_persona` assumption with real data the solver (F11) and legality engine
+  (F10, minor hours) consume. New tables: `employee_availability` (recurring weekly pattern + dated
+  exceptions, `DATERANGE`/time windows, RLS by employee), `time_off_requests` (requested → approved/denied
+  state machine, manager-approved, blocks the solver when approved).
+- **Acceptance criteria:**
+  1. **AC1** — An approved availability window or time-off becomes a **hard** unavailable constraint the
+     solver honors; an employee is never scheduled outside their stated availability without an explicit
+     manager override that is logged.
+  2. **AC2** — Availability is **effective-dated**; the solver reads the window in force for the shift date
+     (tenant-local), not "today's" availability (mirrors the F10 as-of discipline).
+  3. **AC3** — A time-off request has an auditable approval trail (who/when); approval before the schedule
+     is generated removes the employee from that day; a request after publish routes through F74 re-publish.
+  4. **AC4** — Overlapping/contradictory availability rows are rejected at write (GiST exclusion), not
+     silently merged.
+- **Edge / adversarial:** a minor's availability interacts with school-day limits (F10) — the stricter of
+  availability and legality wins; a time-off request spanning an already-published shift surfaces the
+  conflict rather than silently dropping the shift.
+- **Cross-references:** F11 (solver constraints), F10 (minor hours), F24 (roster fields), F74 (re-publish).
+- **Expected outcome:** The solver schedules against real availability and approved leave, not a persona.
+
+### F73. Time & attendance (actuals & no-show)
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** Capture **actual** clock-in/out against scheduled shifts — the system has no source of
+  truth for what actually happened today. New `time_entries` (punch in/out, break punches, tied to
+  `shift_id`, RLS by tenant/employee). Computes actual vs scheduled hours, late/early-out, and **no-show**
+  detection. No-show auto-triggers the F14 cover workflow; actuals feed payroll (F78) and forecast feedback
+  (F80). The manager approves/edits exceptions (missed punch) with an audit trail.
+- **Acceptance criteria:**
+  1. **AC1** — A punch is recorded against the correct `shift_id` with tenant-local timestamps; actual
+     hours are computed half-open and DST-correct (reuse the F10 time helpers, not naive wall-clock).
+  2. **AC2** — A shift with no clock-in by a configurable grace window past start is flagged **no-show** and
+     emits the F14 cover trigger exactly once (idempotent).
+  3. **AC3** — Actual-vs-scheduled variance is queryable per employee/day/store and exported to payroll (F78).
+  4. **AC4** — A missing/edited punch requires a manager correction with reason; the correction is audited
+     and never silently overwrites the raw punch.
+- **Edge / adversarial:** a punch outside any scheduled shift (unscheduled work) is captured and flagged,
+  not dropped; a shift crossing midnight attributes hours to the correct business day; duplicate punches are
+  idempotent.
+- **Cross-references:** F10 (time helpers), F14 (no-show cover), F78 (payroll), F80 (forecast feedback), F11.
+- **Expected outcome:** A reliable "actual labor" record closes the payroll and forecast-accuracy loops.
+
+### F74. Schedule review, edit & publish workflow
+- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Description:** The human-in-the-loop gate on the solver output (F11/F12) — today F31 only *views* a
+  schedule and there is no way to edit or publish it. A manager reviews the generated week, hand-edits
+  assignments, and **every edit is re-validated live against F10 (legality) and coverage (F26)** before it
+  can be saved; then approves and **publishes**, which notifies staff (F15/F71) and locks the version.
+  Draft → published state machine with a republish diff; the LLM explains changes (F13) but never edits.
+- **Acceptance criteria:**
+  1. **AC1** — A manual assignment edit is rejected if it fails F10 legality or coverage, with the specific
+     rule/constraint cited inline (reuses the F34/F10 evaluation path); the schedule is not saved invalid.
+  2. **AC2** — Publishing transitions the schedule `draft → published`, writes an immutable version, and
+     notifies affected employees once (idempotent); edits after publish create a new version with a diff.
+  3. **AC3** — A published schedule is the one employees see (F71); a draft is never visible to staff.
+  4. **AC4** — Every publish/edit is audited (who/when/what) in the rule-eval/audit log.
+- **Edge / adversarial:** two managers editing the same week → optimistic concurrency (version/etag) blocks
+  the stale save; publishing a week with an unresolved hard violation is refused, not warned.
+- **Cross-references:** F11/F12 (solver output), F10/F26/F34 (live validation), F13 (explanation), F15/F71
+  (notify), F31 (view).
+- **Expected outcome:** Managers can trust, adjust, and ship the generated schedule without breaking legality.
+
+### F75. Open-shift & shift-swap marketplace
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Extends the F14 call-out/swap workflow into a marketplace. Managers (or the solver, for
+  unfilled demand) post **open shifts**; eligible employees claim them (first-come or manager-approved).
+  Employees offer/claim **swaps** with each other. Every claim/swap passes F10 legality + coverage (skills,
+  minor limits, rest, FPC/key-holder) **before** confirmation and is audited; an ineligible claim is
+  refused with the reason.
+- **Acceptance criteria:**
+  1. **AC1** — An open shift is claimable only by an employee who passes F10 legality and coverage for that
+     specific shift; an ineligible claim is refused with the citing rule, never silently accepted.
+  2. **AC2** — A claim/swap is atomic: two employees claiming the same open shift → exactly one wins; the
+     loser sees "already taken" (no double-book).
+  3. **AC3** — Manager-approval mode holds the claim pending; first-come mode confirms immediately; both
+     write an audit row and notify (F15/F71).
+  4. **AC4** — Confirmed claims/swaps route through F74 as a published-schedule change (versioned).
+- **Edge / adversarial:** a claim that would push the employee into overtime/clopening surfaces the premium
+  (F10) before confirm; a swap that is legal for one party but not the other is refused for both.
+- **Cross-references:** F14 (swap workflow), F10 (legality), F74 (publish), F11 (open demand), F71.
+- **Expected outcome:** Gaps fill themselves — staff pick up and swap shifts within the legal guardrails.
+
+### F76. Fair & equitable scheduling objectives
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** Add fairness terms to the CP-SAT objective (F11), which today optimizes cost + legality
+  only. Equitable distribution of desirable/undesirable shifts (opens/closes/weekends), clopening-load
+  balancing, preference-satisfaction score (from F72 availability/preferences), hours-equity against
+  contracted min/max, and optional seniority weighting. Weights are per-tenant config (F63) and the chosen
+  trade-off is **explainable** (F13 cites why one person got the close over another).
+- **Acceptance criteria:**
+  1. **AC1** — Fairness is a **soft** objective: it never overrides a hard legality (F10) or coverage
+     constraint; a legal, covered schedule is always producible regardless of weights.
+  2. **AC2** — Over a configurable window, undesirable-shift counts per eligible employee converge within a
+     tenant-set tolerance; the metric is reported.
+  3. **AC3** — Weights are per-tenant and changing them is reflected deterministically (same inputs + weights
+     → same schedule); defaults are documented.
+  4. **AC4** — The explanation layer (F13) can state the fairness trade-off for any assignment.
+- **Edge / adversarial:** fairness vs cost tension is bounded (a documented cap) so fairness cannot explode
+  labor cost; a tiny team where equity is infeasible degrades gracefully with a surfaced note.
+- **Cross-references:** F11 (solver), F72 (preferences), F63 (per-tenant config), F13 (explanation).
+- **Expected outcome:** Schedules are not just legal and cheap but demonstrably fair — a retention lever.
+
+### F77. Certification & work-permit expiry tracking
+- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Description:** Today FPC exists only as a *coverage constraint* (a holder must be on site); nothing
+  tracks when an **employee's** credential lapses. New `employee_credentials` (type: FPC, minor work permit,
+  alcohol, etc., with `DATERANGE` validity and a document reference). Warns before expiry; an **expired**
+  credential removes the employee from constraints that require it (FPC coverage, minor eligibility) —
+  **fail-closed**, mirroring the F10/CS-013b waiver-expiry semantics (half-open, tenant-local).
+- **Acceptance criteria:**
+  1. **AC1** — On the shift date, an employee whose required credential is expired (half-open: valid through
+     the day before `valid_to`) does not satisfy the constraint that needs it; the engine fails closed.
+  2. **AC2** — Credentials warn at configurable thresholds (e.g. 30/7 days) in the manager and employee
+     surfaces, reusing the waiver-expiry warning tiers.
+  3. **AC3** — A minor's work-permit expiry interacts with F10 minor rules; an expired permit blocks
+     minor-restricted scheduling, not just warns.
+- **Edge / adversarial:** a credential expiring mid-week flips eligibility on the exact boundary date (test
+  at a future date, not today); a missing credential is treated as absent (fail-closed), never assumed valid.
+- **Cross-references:** F10/CS-013b (waiver-expiry pattern), F26 (FPC coverage), F11 (solver eligibility).
+- **Expected outcome:** Expiring certs and permits are caught before they become a compliance violation.
+
+### F78. Payroll / HCM export contract
+- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Description:** A first-class, versioned export of a pay period, settling the open F7 "Payroll/HCM agent"
+  question. Combines **actual** hours (F73), scheduled hours, and computed premiums/OT/spread/call-in (F10)
+  per employee/day into an idempotent, reconcilable, auditable export to the payroll target (via F16 n8n or
+  a runtime agent). The compliance engine already prices the premiums; this feature delivers them with real
+  hours behind them.
+- **Acceptance criteria:**
+  1. **AC1** — The export reconciles: Σ exported hours == Σ approved `time_entries` (F73) for the period;
+     any mismatch fails the export, not silently ships.
+  2. **AC2** — Each premium line cites the `Labor_Rules` rule_id that produced it (traceable to F10), and
+     the export is idempotent per (tenant, period) — re-running produces the same artifact.
+  3. **AC3** — An unapproved punch or an open pay period cannot be exported (fail-closed); the export records
+     who ran it and when.
+- **Edge / adversarial:** a mid-period rule change (F28) is attributed to the correct date range, not applied
+  retroactively; a corrected punch after export forces a versioned re-export with a diff.
+- **Cross-references:** F73 (actuals), F10 (premiums), F7 (agent-card question), F16 (n8n export), F28.
+- **Expected outcome:** Legal pay — premiums, OT, spread — flows to payroll with auditable, reconciled hours.
+
+### F79. Employee PII security, encryption & retention
+- **Status:** Not started · **Size:** M · **Priority:** P2 (→ P1 before any real employee PII is loaded)
+- **Description:** Dedicated protection for `employee_pii` (SSN, address). Today the table is restricted to
+  `secrets_rw`; this feature adds encryption at rest (column/envelope encryption, decrypted only in the path
+  that needs it — mirroring `tenant_secrets`), field-level **read auditing**, masked display by default,
+  and configurable retention/purge. Complements F63 (tenant credentials) and F69 (GDPR export/delete) but
+  for employee PII specifically.
+- **Acceptance criteria:**
+  1. **AC1** — SSN/address are encrypted at rest; a `SELECT *` by `app_rw`/`app_ro` never returns plaintext
+     PII, and a dump without the key yields ciphertext.
+  2. **AC2** — Every read of a PII field is audited (who/when/which field/which employee); masked display is
+     the default and unmasking is an explicit, audited action.
+  3. **AC3** — Retention policy purges or anonymizes PII on the configured schedule and on an F69 delete
+     request; the purge is verifiable.
+- **Edge / adversarial:** a misconfigured role cannot widen PII access without appearing in the audit; a
+  backup/restore (F43) round-trips ciphertext, never plaintext.
+- **Cross-references:** F63 (tenant secrets pattern), F69 (GDPR), F43 (backup), migration `0001` employee_pii.
+- **Expected outcome:** Employee SSNs and addresses are encrypted, access-audited, masked, and time-bounded.
+
+### F80. Forecast MLOps — accuracy, drift, retraining & registry
+- **Status:** Not started · **Size:** L · **Priority:** P2
+- **Description:** Operationalize the forecast model (F9), which today has a one-off back-test (F5) but no
+  continuous lifecycle. Adds predicted-vs-actual accuracy tracking (using F73 actuals and real sales), drift
+  detection, scheduled/triggered **retraining** gated by the F5 MAPE acceptance band, a per-tenant **model
+  registry** (versioned artifacts, promotion/rollback), and OTel metrics (F37/F40). A model never
+  auto-promotes unless it beats the incumbent on the held-out band.
+- **Acceptance criteria:**
+  1. **AC1** — Forecast accuracy (MAPE per category-hour) is computed continuously against actuals and
+     tracked over time; a breach of the F5 band raises an alert (F40).
+  2. **AC2** — Retraining is reproducible and **gated**: a candidate is promoted only if it beats the
+     incumbent on the held-out window; otherwise the incumbent stays and the attempt is logged.
+  3. **AC3** — Every served forecast records its model version (registry id); rollback to a prior version is
+     one action and is audited.
+  4. **AC4** — Drift (input or prediction) is detected and surfaced before it silently degrades schedules.
+- **Edge / adversarial:** a retrain on a thin/biased recent window (e.g. a holiday) cannot silently replace
+  a good model (the gate blocks it); a tenant with little data falls back to the shared/seed model, flagged.
+- **Cross-references:** F9 (model), F5 (MAPE band), F73 (actuals), F37/F40 (OTel/dashboards), F63 (per-tenant).
+- **Expected outcome:** The forecaster improves safely over time instead of silently drifting.
+
 ## Known limitations (state openly, not features)
 - Only 6 months of sales history, all from 2023.
 - No basket ID in the sales data (register overhead overstated).

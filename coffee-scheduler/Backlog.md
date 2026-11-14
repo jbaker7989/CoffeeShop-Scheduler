@@ -961,6 +961,158 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 
 ---
 
+## Phase 2 — Employee experience & workforce actuals (CS-071 … CS-086)
+
+Closes the employee side of the loop (F71–F77) and the actuals/payroll/MLOps loops (F78–F80). All of these
+depend on the Postgres data plane (F42–F47) and multi-tenancy (F60–F70) being in place; several are hard
+prerequisites for others (F73 actuals feed F78 payroll and F80 MLOps; F72 availability feeds F11 and F76).
+
+### CS-071 — Employee app shell + `employee` role & self-scoped RLS
+- **Feature:** [F71](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Stand up the employee-facing surface and its authorization boundary.
+- **Detailed specifications:**
+  - Add an `employee` RBAC role (F61) distinct from `manager`; the app authenticates and resolves the signed-in `employee_id`.
+  - RLS/service scope: an employee reads only their own rows (shifts, punches, availability, requests, credentials) plus open shifts at eligible locations; cross-employee/cross-tenant access returns 404.
+  - Mobile-first shell with the manager-UI integration pattern (F30) reused; no write path to `labor_rules`, schedules, or other employees.
+  - Depends on F61 (auth), F60 (RLS). Prove isolation with a test that one employee cannot read another's data.
+
+### CS-072 — My-schedule view (published-only, offline-cached)
+- **Feature:** [F71](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~2d (est.)
+- **Description:** The employee sees their published schedule.
+- **Detailed specifications:**
+  - Render only **published** schedule versions (F74); drafts are never visible to staff.
+  - Last-fetched schedule is cached and shown with a "last updated" stamp when offline.
+  - Times rendered in the tenant/store timezone; a shift crossing midnight is shown on the correct business day.
+
+### CS-073 — Availability model & intake
+- **Feature:** [F72](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Replace the static `availability_persona` with real, effective-dated availability.
+- **Detailed specifications:**
+  - New `employee_availability` table: recurring weekly pattern + dated exceptions as time windows, `DATERANGE` effective-dating, RLS by employee; GiST exclusion rejects overlapping/contradictory rows at write.
+  - The solver (F11) reads the window **in force for the shift date** (tenant-local, as-of discipline per F10), as a hard unavailable constraint; scheduling outside it requires a logged manager override.
+  - Minor availability interacts with F10 school-day limits — the stricter of availability and legality wins.
+
+### CS-074 — Time-off / PTO request & approval workflow
+- **Feature:** [F72](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Employees request leave; managers approve; the solver honors it.
+- **Detailed specifications:**
+  - New `time_off_requests` with a requested → approved/denied state machine and an auditable approval trail (who/when).
+  - Approval before generation removes the employee from that day (hard constraint); a request touching an already-published shift surfaces the conflict and routes through F74 re-publish rather than silently dropping the shift.
+  - Overlap with an existing approved request is rejected, not double-counted.
+
+### CS-075 — Time & attendance capture (punches, actual-vs-scheduled)
+- **Feature:** [F73](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~4d (est.)
+- **Description:** Capture what actually happened — the missing actuals source of truth.
+- **Detailed specifications:**
+  - New `time_entries` (clock in/out + break punches) tied to `shift_id`, RLS by tenant/employee; duplicate punches idempotent.
+  - Actual hours computed **half-open and DST-correct** reusing the F10 time helpers (never naive wall-clock); a midnight-crossing shift attributes hours to the correct business day; unscheduled punches are captured and flagged, not dropped.
+  - Actual-vs-scheduled variance queryable per employee/day/store; a missed/edited punch needs an audited manager correction that never overwrites the raw punch.
+
+### CS-076 — No-show detection → F14 cover trigger
+- **Feature:** [F73](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~2d (est.)
+- **Description:** Turn a missing clock-in into an automatic cover search.
+- **Detailed specifications:**
+  - A scheduled shift with no clock-in by a configurable grace window past start is flagged **no-show**.
+  - Emits the F14 cover-workflow trigger **exactly once** (idempotent) per shift; a late clock-in after the flag resolves it with an audit note.
+  - The no-show + resolution is logged for audit and feeds reliability metrics.
+
+### CS-077 — Schedule draft edit + live F10/F26 re-validation
+- **Feature:** [F74](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~4d (est.)
+- **Description:** Let managers hand-edit the solver output without breaking legality.
+- **Detailed specifications:**
+  - A manual assignment edit is re-validated live against F10 legality and F26 coverage (reuse the F34/F10 evaluation path); an invalid edit is refused with the specific rule/constraint cited inline and the schedule is not saved invalid.
+  - Edits operate on a **draft** version; the LLM may explain (F13) but never edits.
+  - Optimistic concurrency: two managers editing the same week → the stale save is blocked (version/etag).
+
+### CS-078 — Schedule publish, versioning & notify
+- **Feature:** [F74](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Ship the approved schedule to staff and lock it.
+- **Detailed specifications:**
+  - Publish transitions `draft → published`, writes an immutable version, and notifies affected employees **once** (idempotent) via F15/F71.
+  - Publishing a week with an unresolved **hard** violation is refused (not warned); post-publish edits create a new version with a diff.
+  - Only the published version is visible to employees (CS-072); every publish/edit is audited.
+
+### CS-079 — Open-shift post + atomic claim with legality gate
+- **Feature:** [F75](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Post unfilled shifts; eligible staff claim them, legally.
+- **Detailed specifications:**
+  - Managers/solver post **open shifts**; a claim is allowed only if the employee passes F10 legality + coverage for that specific shift, else refused with the citing rule.
+  - Claims are **atomic**: two employees claiming the same open shift → exactly one wins; the loser sees "already taken" (no double-book).
+  - First-come confirms immediately; manager-approval mode holds pending; both audit + notify, and route through F74 as a published change. A claim that triggers overtime/clopening surfaces the premium (F10) before confirm.
+
+### CS-080 — Employee-initiated shift swap
+- **Feature:** [F75](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~2d (est.)
+- **Description:** Staff swap shifts within the guardrails.
+- **Detailed specifications:**
+  - An employee offers a shift; an eligible peer claims it; the swap is confirmed only if F10 legality holds for **both** parties — legal for one but not the other is refused for both.
+  - Confirmed swaps route through F74 (versioned) and notify; the whole exchange is audited (extends F14).
+
+### CS-081 — Fairness objective terms + per-tenant weights
+- **Feature:** [F76](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~4d (est.)
+- **Description:** Make the solver fair, not just cheap and legal.
+- **Detailed specifications:**
+  - Add **soft** objective terms to F11: undesirable-shift equity (opens/closes/weekends), clopening-load balance, preference satisfaction (F72), hours-equity vs contracted min/max, optional seniority — never overriding a hard F10/coverage constraint.
+  - Weights are per-tenant config (F63), deterministic (same inputs+weights → same schedule), with documented defaults and a documented cap so fairness cannot explode labor cost.
+  - The explanation layer (F13) can state the fairness trade-off for an assignment; equity convergence over a window is reported and tested at a future date.
+
+### CS-082 — Certification & work-permit expiry tracking (fail-closed)
+- **Feature:** [F77](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~2d (est.)
+- **Description:** Catch expiring FPC/minor permits before they become violations.
+- **Detailed specifications:**
+  - New `employee_credentials` (type, `DATERANGE` validity, doc reference), RLS by tenant/employee.
+  - On the shift date, an **expired** required credential (half-open, tenant-local, mirroring CS-013b) removes the employee from the constraint that needs it (FPC coverage, minor eligibility) — fail-closed; a missing credential is treated as absent, never assumed valid.
+  - Warn at configurable thresholds (30/7 days) reusing the waiver-expiry warning tiers; boundary tested at a future date.
+
+### CS-083 — Payroll / HCM export contract + reconciliation
+- **Feature:** [F78](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~4d (est.)
+- **Description:** Export reconciled, auditable pay with real hours behind the premiums.
+- **Detailed specifications:**
+  - Combine actual hours (F73), scheduled hours, and F10 premiums/OT/spread/call-in per employee/day into a per-(tenant, period) idempotent export via F16/runtime agent; settles the F7 Payroll/HCM-agent question.
+  - Reconcile: Σ exported hours == Σ approved `time_entries`; mismatch fails the export (fail-closed). Each premium line cites its `Labor_Rules` rule_id.
+  - An unapproved punch or open period cannot be exported; a corrected punch after export forces a versioned re-export with a diff; mid-period rule changes (F28) attributed to the correct date range.
+
+### CS-084 — Employee PII encryption, read-audit & retention
+- **Feature:** [F79](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Protect employee SSN/address at rest with auditing and retention.
+- **Detailed specifications:**
+  - Encrypt SSN/address at rest (column/envelope, decrypted only where needed — mirror `tenant_secrets`); `SELECT *` by `app_rw`/`app_ro` never returns plaintext and a keyless dump yields ciphertext (verify with the F43 backup round-trip).
+  - Every PII-field read is audited (who/when/field/employee); masked display is default; unmasking is an explicit audited action.
+  - Configurable retention purges/anonymizes on schedule and on an F69 delete; the purge is verifiable. **Raise to P1 before any real employee PII is loaded.**
+
+### CS-085 — Forecast accuracy & drift monitoring
+- **Feature:** [F80](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Track predicted-vs-actual continuously; catch drift early.
+- **Detailed specifications:**
+  - Compute MAPE per category-hour against **actuals** (F73) + real sales over time; a breach of the F5 acceptance band raises an alert (F40) with the OTel metrics from F37.
+  - Detect input/prediction drift and surface it before it degrades schedules.
+  - Every served forecast records its model-registry version (ties to CS-086).
+
+### CS-086 — Gated retraining, model registry & rollback
+- **Feature:** [F80](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~4d (est.)
+- **Description:** Improve the model safely, never silently.
+- **Detailed specifications:**
+  - Reproducible scheduled/triggered retraining; a candidate is **promoted only if it beats the incumbent** on the held-out F5 band, else the incumbent stays and the attempt is logged.
+  - Per-tenant model registry (versioned artifacts, promotion/rollback in one audited action); a tenant with thin data falls back to the shared/seed model, flagged.
+  - A retrain on a thin/biased recent window cannot silently replace a good model (the gate blocks it).
+
+---
+
 ## Defects — found by code test pass (2026-11-12)
 
 Bugs and unhandled corner cases found by reading + exercising the committed `data/*.py` scripts against
@@ -1553,6 +1705,22 @@ closing regression evidence.
 | CS-068 | F68 | P0 | M | Blocked (gate) |
 | CS-069 | F69 | P2 | M | Blocked |
 | CS-070 | F70 | P0 | S | Blocked |
+| CS-071 | F71 | P1 | M | Not started — employee app shell + `employee` role & self-scoped RLS |
+| CS-072 | F71 | P1 | S | Not started — my-schedule view (published-only, offline-cached) |
+| CS-073 | F72 | P1 | M | Not started — availability model & intake (effective-dated, solver constraint) |
+| CS-074 | F72 | P1 | M | Not started — time-off / PTO request & approval workflow |
+| CS-075 | F73 | P1 | M | Not started — time & attendance capture (punches, actual-vs-scheduled) |
+| CS-076 | F73 | P1 | S | Not started — no-show detection → F14 cover trigger (idempotent) |
+| CS-077 | F74 | P1 | M | Not started — schedule draft edit + live F10/F26 re-validation |
+| CS-078 | F74 | P1 | M | Not started — schedule publish, versioning & notify |
+| CS-079 | F75 | P2 | M | Not started — open-shift post + atomic claim with legality gate |
+| CS-080 | F75 | P2 | S | Not started — employee-initiated shift swap |
+| CS-081 | F76 | P2 | M | Not started — fairness objective terms + per-tenant weights |
+| CS-082 | F77 | P2 | S | Not started — certification & work-permit expiry (fail-closed) |
+| CS-083 | F78 | P2 | M | Not started — payroll/HCM export contract + reconciliation |
+| CS-084 | F79 | P2 | M | Not started — employee PII encryption, read-audit & retention |
+| CS-085 | F80 | P2 | M | Not started — forecast accuracy & drift monitoring |
+| CS-086 | F80 | P2 | M | Not started — gated retraining, model registry & rollback |
 
 ### Defects (found 2026-11-12)
 
