@@ -4,6 +4,7 @@ import io
 import os
 import unittest
 from datetime import date
+from unittest import mock
 
 try:
     import psycopg
@@ -66,6 +67,73 @@ class _DateRange:
     def __init__(self, lower, upper):
         self.lower = lower
         self.upper = upper
+
+
+class _SessionResult:
+    def __init__(self, value=("app_rw",)):
+        self.value = value
+
+    def fetchone(self):
+        return self.value
+
+
+class _SessionConnection:
+    def __init__(self, *, autocommit=False):
+        self.autocommit = autocommit
+
+    def execute(self, query, params=None):
+        return _SessionResult()
+
+
+class RulesAdminSecurityRegressionTests(unittest.TestCase):
+    # spec: F34.ac1 — transaction-local tenant state requires a caller transaction.
+    def test_prepare_session_rejects_autocommit_connection(self):
+        with self.assertRaises(rules_admin.TenantContextMissing):
+            rules_admin.prepare_session(_SessionConnection(autocommit=True), TENANT)
+
+    # spec: F34.ac4 — missing tenant timezone is a typed validation failure.
+    def test_list_waivers_rejects_missing_tenant_timezone(self):
+        conn = _SessionConnection()
+        with mock.patch.object(rules_admin, "_rows", side_effect=[[{"timezone": None}], []]):
+            with self.assertRaises(rules_admin.ValidationError):
+                rules_admin.list_waivers(conn, "RULE-1", tenant_id=TENANT)
+
+    # spec: F34.ac4 — malformed tenant timezone is a typed validation failure.
+    def test_list_waivers_rejects_invalid_tenant_timezone(self):
+        conn = _SessionConnection()
+        with mock.patch.object(rules_admin, "_rows", side_effect=[[{"timezone": "not/a-timezone"}], []]):
+            with self.assertRaises(rules_admin.ValidationError):
+                rules_admin.list_waivers(conn, "RULE-1", tenant_id=TENANT)
+
+    # spec: F34.ac6 — a citation is evidence only after the rule is VERIFIED.
+    def test_unverified_citation_does_not_satisfy_blocking_law_gate(self):
+        with self.assertRaisesRegex(rules_admin.ValidationError, "design decision required"):
+            rules_admin._verification_gate({}, {
+                "enforcement": "HARD", "verification_status": "VERIFY",
+                "source_citation": "unverified assertion", "source_url": "https://example.test/law",
+                "notes": None,
+            })
+
+    # spec: F34.ac1 — rule detail reads do not invoke the URL verifier.
+    def test_get_rule_does_not_make_source_url_validation_call(self):
+        row = {"rule_id": "RULE-1", "source_url": "https://example.test/law"}
+        conn = _SessionConnection()
+        with mock.patch.object(rules_admin, "_tenant_from_session", return_value=TENANT), \
+             mock.patch.object(rules_admin, "_rule_row", return_value=dict(row)), \
+             mock.patch.object(rules_admin, "_rows", return_value=[]), \
+             mock.patch.object(rules_admin, "_status", return_value=("clean", [])), \
+             mock.patch.object(rules_admin, "list_waivers", return_value=[]), \
+             mock.patch.object(rules_admin, "validate_source_url", side_effect=AssertionError("network validation on read")):
+            result = rules_admin.get_rule(conn, "RULE-1")
+        self.assertIsNone(result["source_url_valid"])
+
+    # spec: F34.ac6 — source URL validation cannot route a request after DNS resolution.
+    def test_source_url_validation_never_resolves_or_opens_a_connection(self):
+        with mock.patch.object(rules_admin.socket, "getaddrinfo") as resolve, \
+             mock.patch.object(rules_admin.urllib.request, "build_opener") as open_request:
+            self.assertFalse(rules_admin.validate_source_url("https://rebind.example.test/law"))
+        resolve.assert_not_called()
+        open_request.assert_not_called()
 
 
 @unittest.skipUnless(DSN and psycopg, "DATABASE_URL and psycopg are required")
