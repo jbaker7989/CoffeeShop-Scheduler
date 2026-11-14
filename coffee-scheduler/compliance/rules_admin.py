@@ -118,8 +118,47 @@ def _coverage_rows(conn):
     return _rows(conn, "SELECT rule_id, description, value, unit, basis, validity FROM coverage_rules")
 
 
-def _overlaps(a_from, a_to, b_from, b_to):
-    return (a_to is None or b_from is None or a_to > b_from) and (b_to is None or b_to > a_from)
+def _coverage_is_supported(validity, legal_versions):
+    """Return whether verified legal versions cover a half-open coverage range.
+
+    ``None`` bounds carry PostgreSQL daterange's unbounded semantics.  Normal
+    legal/coverage overlap is not a conflict; only a hole in the coverage
+    window is.
+    """
+    lower, upper = validity.lower, validity.upper
+    # An unbounded coverage record means "always configured", not a claim
+    # about a historical/future interval the rule table cannot bound.  It is
+    # supported once it cites at least one verified legal version.
+    if lower is None and upper is None:
+        return any(rule.verification_status == "VERIFIED" for rule in legal_versions)
+    intervals = sorted(
+        ((rule.effective_from, rule.effective_to) for rule in legal_versions
+         if rule.verification_status == "VERIFIED"),
+        key=lambda interval: (interval[0] is not None, interval[0]),
+    )
+    cursor = lower
+    for start, end in intervals:
+        # Restrict the legal interval to the coverage interval.
+        if lower is not None and (end is not None and end <= lower):
+            continue
+        if upper is not None and start is not None and start >= upper:
+            break
+        start = lower if start is None or (lower is not None and start < lower) else start
+        end = upper if end is None or (upper is not None and end > upper) else end
+        if end is not None and start >= end:
+            continue
+        if cursor is None:
+            if start is not None:
+                return False
+        elif start > cursor:
+            return False
+        if end is None:
+            return True
+        if cursor is None or end > cursor:
+            cursor = end
+        if upper is not None and cursor >= upper:
+            return True
+    return cursor is None
 
 
 def reconcile_for_admin(proposed, all_rows, coverage_rows):
@@ -144,14 +183,12 @@ def reconcile_for_admin(proposed, all_rows, coverage_rows):
             continue
         cited = [item for item in engine.LAW_ID.findall(text) if item != coverage["rule_id"]]
         for item in cited:
-            matching = next((r for r in trial if r.rule_id == item), None)
-            if matching and matching.verification_status != "VERIFIED":
+            legal_versions = [r for r in trial if r.rule_id == item]
+            if any(r.verification_status != "VERIFIED" for r in legal_versions):
                 conflicts.append({"conflict_type": "LAW_citation_unverified", "coverage_rule_id": coverage["rule_id"], "rule_id": item})
             validity = coverage.get("validity")
-            # NULL coverage validity is deliberately unbounded, not a conflict by itself.
-            if item == proposed["rule_id"] and validity and (validity.lower is not None or validity.upper is not None):
-                if _overlaps(proposed["effective_from"], proposed["effective_to"], validity.lower, validity.upper):
-                    conflicts.append({"conflict_type": "effective_date_overlap", "coverage_rule_id": coverage["rule_id"], "rule_id": item})
+            if item == proposed["rule_id"] and validity and not _coverage_is_supported(validity, legal_versions):
+                conflicts.append({"conflict_type": "effective_date_gap", "coverage_rule_id": coverage["rule_id"], "rule_id": item})
     return conflicts
 
 
