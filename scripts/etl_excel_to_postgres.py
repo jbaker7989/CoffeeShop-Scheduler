@@ -73,6 +73,16 @@ class LoadReport:
     anomalies: list
 
 
+# BUG-005 / D7: read numeric-looking identifiers according to the destination column's
+# declared text type (migration 0001), never according to their apparent value shape.
+# A value preserved as an Excel text cell can retain leading zeros this way. If Excel
+# stored it as a numeric cell, those zeros are already absent from the source and no
+# reader can reconstruct them; this policy deliberately does not fabricate digits.
+TEXT_SOURCE_COLUMNS = {
+    "Staff_PII": {"ssn", "zipcode-address"},
+}
+
+
 def null(value):
     if value is None or pd.isna(value):
         return None
@@ -83,7 +93,9 @@ def null(value):
 
 
 def rows(path, sheet):
-    frame = pd.read_excel(path, sheet_name=sheet)
+    text_columns = TEXT_SOURCE_COLUMNS.get(sheet)
+    dtype = {column: str for column in text_columns} if text_columns else None
+    frame = pd.read_excel(path, sheet_name=sheet, dtype=dtype)
     return [{str(k): null(v) for k, v in row.items()} for row in frame.to_dict("records")]
 
 
