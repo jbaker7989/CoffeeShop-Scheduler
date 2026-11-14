@@ -541,7 +541,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-047 — Canonical data schema, ERD & migrations
 - **Feature:** [F47](./FEATURES.md) · **Priority:** P0 · **Size:** M
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-13) — `docs/schema.md` (ERD + PK/FK/index/partition/effective-dating decisions) and Alembic migrations `0001` (full schema, RLS, roles, partitions, exclusions) + `0002` (coverage effective-dating); round-trip-reversible, verified on the host.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Define the database contract before consumers depend on it.
 - **Detailed specifications:**
@@ -573,7 +573,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-034 — Rules admin
 - **Feature:** [F34](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-14) — `compliance/rules_admin.py` + `test/test_rules_admin.py` (18 tests pass via discovery); F34 AC1–AC8 implemented; migration `0002` (coverage effective-dating) in place; BUG-014–018 fixed. **Known caveat:** `test_rules_admin.py` lacks a `unittest.main()` block so it silently runs 0 tests when invoked as a script — tracked separately (file as BUG-019).
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Provide guarded maintenance of labor rules and consent waivers.
 - **Detailed specifications:**
@@ -1619,10 +1619,10 @@ closing regression evidence.
 | CS-010 | F6 | P1 | M | Partial |
 | CS-011 | F7 | P1 | M | Scaffolded |
 | CS-012 | F8 | P1 | S | In design |
-| CS-013 | F10 | P1 | L | Not started |
-| CS-013a | F10 | P1 | S | Not started |
-| CS-013b | F10 | P1 | S | Not started |
-| CS-013c | F10/F26 | P1 | XS | Not started |
+| CS-013 | F10 | P1 | L | ✅ Done — `compliance/engine.py`; 27 tests pass (claims_legal_accuracy gated on CS-021) |
+| CS-013a | F10 | P1 | S | ✅ Done — append-only `rule_eval_log` write path |
+| CS-013b | F10 | P1 | S | ✅ Done — half-open waiver expiry on shift date |
+| CS-013c | F10/F26 | P1 | XS | ✅ Done — coverage↔law fail-closed reconciliation (VERIFIED-gate stays with CS-021/022) |
 | CS-014 | F9 | P1 | L | Blocked (umbrella) |
 | CS-014a | F9 | P1 | M | Blocked |
 | CS-014b | F9 | P1 | M | Blocked |
@@ -1653,7 +1653,7 @@ closing regression evidence.
 | CS-031 | F31 | P1 | M | Not started |
 | CS-032 | F32 | P2 | M | Not started |
 | CS-033 | F33 | P2 | M | Not started |
-| CS-034 | F34 | P1 | M | 📋 Planned — **not built** (prior "✅ Done 2026-11-12" was inaccurate: no `rules_admin.py`/`test_rules_admin.py` exist, nothing verified; corrected 2026-11-13). Plan reviewed & reconciled to the live schema in docs/plans/CS-034-rules-admin.md. Blockers surfaced: AC3 needs new migration `0002` (coverage effective-dating); AC2/AC6 gate merged; SSRF + optimistic-concurrency + half-open waiver edge cases added; depends on CS-021/CS-022 (both Not started). |
+| CS-034 | F34 | P1 | M | ✅ Done — `rules_admin.py` + 18 tests (F34 AC1–AC8, BUG-014–018 fixed); caveat: missing `unittest.main()` → BUG-019 |
 | CS-035 | F35 | P2 | S | Not started |
 | CS-036 | F36 | P2 | M | Not started |
 | CS-037 | F37 | P2 | M | Not started |
@@ -1663,10 +1663,10 @@ closing regression evidence.
 | CS-041 | F41 | P2 | S | Not started |
 | CS-042 | F42 | P0 | M | Not started |
 | CS-043 | F43 | P0 | S | ✅ Done — compose+PgBouncer, reversible migration, backup/restore drill (F43 AC1–AC5 verified) |
-| CS-044 | F44 | P0 | M | Not started |
+| CS-044 | F44 | P0 | M | ✅ Done — `scripts/etl_excel_to_postgres.py`; idempotent, 11 tests pass |
 | CS-045 | F45 | P1 | M | Not started |
 | CS-046 | F46 | P2 | S | Not started |
-| CS-047 | F47 | P0 | M | Not started |
+| CS-047 | F47 | P0 | M | ✅ Done — `docs/schema.md` + migrations `0001`/`0002`, round-trip verified |
 | CS-048 | F48 | P1 | S | Not started |
 | CS-049 | F49 | P2 | M | Not started |
 | CS-050 | F50 | P2 | M | Not started |
