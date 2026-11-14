@@ -170,8 +170,24 @@ The Next.js scaffold at `coffee_shop/app/` exists but is stock `create-next-app`
 - **Expected outcome:** A manager can see "did the forecast match the day" and feed back into calibration without leaving the app.
 
 ### F34. Rules admin
-- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Status:** Planned — not built · **Size:** M · **Priority:** P1 · Plan (reviewed & reconciled to the live schema 2026-11-13): [docs/plans/CS-034-rules-admin.md](./docs/plans/CS-034-rules-admin.md)
 - **Description:** View / edit `Labor_Rules` rows with the F26 reconciliation check running live: any change that creates an assumption-vs-law conflict, marks an unverified rule as `LAW`, or sets coverage-rule effective dates that conflict with the underlying legal rule is blocked at submit. Surface the `Consent_Waivers` list with expiry warnings (per F10 waiver-expiry sub-task) so managers see WV-0001 expiring 2027-06-26 before it does. All edits route through F28 (rule-change rollout + `Rule_Eval_Log` audit row).
+- **Acceptance criteria:**
+  1. **AC1** — A manager views all `labor_rules` rows with `verification_status` badges (all three: `VERIFIED` / `VERIFY` / `ASSUMPTION`), `enforcement` (incl. `PAY_ONLY`), and F26 reconciliation flags.
+  2. **AC2** — An unverified rule (`verification_status != 'VERIFIED'`) set to a blocking `enforcement` is blocked at submit with a single precedence-ordered message (plan §6; AC2/AC6 are one gate). Until CS-021 ships, the gate still fails closed.
+  3. **AC3** — A coverage-rule effective-date conflict with the underlying legal rule is surfaced inline before save. **Requires** new migration `0002` adding `coverage_rules.validity` (no effective dates exist today); until it lands, AC3 is not implementable.
+  4. **AC4** — The `consent_waivers` list shows expiry warnings with **half-open, tenant-local** semantics: WV-0001 (EMP-1033) is valid through 2027-06-25 and already expired on 2027-06-26.
+  5. **AC5** — Every edit writes an F28 audit row to `rule_eval_log` with `agent='rules-admin-agent'` and before/after JSON.
+  6. **AC6** — Setting a rule to blocking enforcement without a verified `source_url`/citation or a documented design-decision note is blocked (plan §6). The manager-supplied `source_url` fetch is **SSRF-guarded**.
+  7. **AC7** — The reconciliation check runs on every submit and presents the conflicting rows; no silent accept.
+  8. **AC8** — Exported CSV matches the Postgres source **value-for-value** (not just row count); embedded commas/newlines quoted correctly.
+- **Edge / adversarial cases:**
+  - `LAW` rule with no citation → blocked, not saved.
+  - Coverage date range overlaps the legal rule (post-migration `0002`) → submit fails, conflict highlighted.
+  - Cross-tenant `rule_id` → 404 (not 403; no existence disclosure, per F68).
+  - Waiver WV-0001 expiry is today → **already expired** (half-open, tenant-local); banner "Expired on `<date>`"; rule re-evaluates without the waiver.
+  - Manager-supplied `source_url` fetched server-side → **SSRF-guarded** (https-only, private/metadata ranges blocked after DNS, ≤3 s timeout, no cross-host redirects); a failed/internal URL never blocks the save.
+  - Two managers edit the same rule → **optimistic concurrency** (`If-Match` etag) returns 409 on the stale edit; RLS/append-only alone do not prevent lost updates.
 - **Expected outcome:** A manager can maintain the rules table without ever silently breaking the assumption-vs-law boundary.
 
 ### F35. Calibration & rule-eval log viewer

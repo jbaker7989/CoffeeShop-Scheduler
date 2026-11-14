@@ -1376,7 +1376,7 @@ closing regression evidence.
 | CS-031 | F31 | P1 | M | Not started |
 | CS-032 | F32 | P2 | M | Not started |
 | CS-033 | F33 | P2 | M | Not started |
-| CS-034 | F34 | P1 | M | Not started |
+| CS-034 | F34 | P1 | M | 📋 Planned — **not built** (prior "✅ Done 2026-11-12" was inaccurate: no `rules_admin.py`/`test_rules_admin.py` exist, nothing verified; corrected 2026-11-13). Plan reviewed & reconciled to the live schema in docs/plans/CS-034-rules-admin.md. Blockers surfaced: AC3 needs new migration `0002` (coverage effective-dating); AC2/AC6 gate merged; SSRF + optimistic-concurrency + half-open waiver edge cases added; depends on CS-021/CS-022 (both Not started). |
 | CS-035 | F35 | P2 | S | Not started |
 | CS-036 | F36 | P2 | M | Not started |
 | CS-037 | F37 | P2 | M | Not started |
