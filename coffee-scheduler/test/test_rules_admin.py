@@ -16,6 +16,56 @@ DSN = os.environ.get("DATABASE_URL")
 TENANT = "00000000-0000-0000-0000-000000000001"
 
 
+class RulesAdminRegressionTests(unittest.TestCase):
+    """Database-free regressions for rules-admin edit semantics."""
+
+    @staticmethod
+    def _rule(*, effective_from=date(2026, 1, 1), effective_to=None, verification_status="VERIFIED"):
+        return {
+            "rule_id": "NY-TEST-RULE", "jurisdiction": "NY", "enforcement": "HARD",
+            "applies_age_min": None, "applies_age_max": None, "applies_school_status": None,
+            "applies_day_type": None, "applies_season": None, "requires_employer_flag": None,
+            "metric": "test", "operator": None, "value_num": None, "value_text": None,
+            "unit": None, "consequence": None, "waivable_by_consent": False,
+            "waiver_doc_required": False, "priority": 0, "effective_from": effective_from,
+            "effective_to": effective_to, "verification_status": verification_status,
+        }
+
+    # spec: BUG-014 / F34.ac2,ac6
+    def test_verification_gate_assesses_the_edit_transition(self):
+        before = {
+            "enforcement": "SOFT_COST", "verification_status": "VERIFY",
+            "notes": "old decision", "source_citation": None, "source_url": None,
+        }
+        after = {**before, "enforcement": "HARD"}
+        with self.assertRaisesRegex(rules_admin.ValidationError, "design decision required"):
+            rules_admin._verification_gate(before, after, {"enforcement": "HARD"})
+
+        # Existing unverified states must not make unrelated typo fixes impossible.
+        rules_admin._verification_gate(after, {**after, "priority": 9}, {"priority": 9})
+        rules_admin._verification_gate(before, {**before, "value_text": "changed"}, {"value_text": "changed"})
+
+    # spec: BUG-015 / F34.ac3
+    def test_date_reconciliation_flags_coverage_gaps_not_normal_overlap(self):
+        legal = self._rule(effective_from=date(2026, 1, 1), effective_to=date(2026, 3, 1))
+        overlap = {"rule_id": "COV-TEST", "description": "LAW NY-TEST-RULE", "value": None,
+                   "basis": None, "validity": _DateRange(date(2026, 1, 15), date(2026, 2, 15))}
+        gap = {**overlap, "validity": _DateRange(date(2025, 12, 1), date(2026, 2, 1))}
+        unbounded = {**overlap, "validity": _DateRange(None, None)}
+
+        self.assertEqual([], rules_admin.reconcile_for_admin(legal, [legal], [unbounded]))
+        self.assertEqual([], rules_admin.reconcile_for_admin(legal, [legal], [overlap]))
+        conflicts = rules_admin.reconcile_for_admin(legal, [legal], [gap])
+        self.assertIn("effective_date_gap", {item["conflict_type"] for item in conflicts})
+
+
+class _DateRange:
+    """Small stand-in for psycopg's Range used by pure reconciliation tests."""
+    def __init__(self, lower, upper):
+        self.lower = lower
+        self.upper = upper
+
+
 @unittest.skipUnless(DSN and psycopg, "DATABASE_URL and psycopg are required")
 class RulesAdminTests(unittest.TestCase):
     def setUp(self):
@@ -38,13 +88,36 @@ class RulesAdminTests(unittest.TestCase):
         with self.assertRaisesRegex(rules_admin.ValidationError, "design decision required"):
             rules_admin.patch_rule(self.conn, "NY-CALLIN-HOSP", {"enforcement": "HARD", "notes": None, "source_citation": None}, if_match=old["etag"], principal=self.principal)
 
-    # spec: F34.ac3
-    def test_effective_date_conflict_is_reported(self):
+    # spec: BUG-015 / F34.ac3
+    def test_effective_date_gap_is_reported(self):
         old = rules_admin.get_rule(self.conn, "NYC-FPC-COVERAGE", tenant_id=TENANT)
         self.conn.execute("UPDATE coverage_rules SET validity = daterange(%s, %s, '[)') WHERE rule_id = 'COV-FPC'", (date(2026, 1, 1), date(2026, 2, 1)))
         with self.assertRaises(rules_admin.ReconciliationError) as caught:
-            rules_admin.patch_rule(self.conn, "NYC-FPC-COVERAGE", {"effective_to": date(2026, 2, 1)}, if_match=old["etag"], principal=self.principal)
-        self.assertIn("effective_date_overlap", str(caught.exception))
+            rules_admin.patch_rule(self.conn, "NYC-FPC-COVERAGE", {"effective_to": date(2026, 3, 1)}, if_match=old["etag"], principal=self.principal)
+        self.assertIn("effective_date_gap", str(caught.exception))
+
+    # spec: BUG-016 / F34 effective-dated rule administration
+    def test_each_effective_dated_version_is_viewable_and_editable(self):
+        first, second = date(2030, 1, 1), date(2031, 1, 1)
+        self.conn.execute(
+            "INSERT INTO labor_rules (tenant_id, rule_id, effective_from, effective_to) VALUES (%s, 'F34-VERSION-TEST', %s, %s), (%s, 'F34-VERSION-TEST', %s, NULL)",
+            (TENANT, first, second, TENANT, second),
+        )
+        older = rules_admin.get_rule(self.conn, "F34-VERSION-TEST", tenant_id=TENANT, effective_from=first)
+        newer = rules_admin.get_rule(self.conn, "F34-VERSION-TEST", tenant_id=TENANT, effective_from=second)
+        self.assertEqual(first, older["effective_from"])
+        self.assertEqual(second, newer["effective_from"])
+        result = rules_admin.patch_rule(
+            self.conn, "F34-VERSION-TEST", {"notes": "older version"}, if_match=older["etag"],
+            principal=self.principal, effective_from=first,
+        )
+        self.assertTrue(result["modified"])
+        self.assertEqual("older version", rules_admin.get_rule(
+            self.conn, "F34-VERSION-TEST", tenant_id=TENANT, effective_from=first,
+        )["notes"])
+        self.assertIsNone(rules_admin.get_rule(
+            self.conn, "F34-VERSION-TEST", tenant_id=TENANT, effective_from=second,
+        )["notes"])
 
     # spec: F34.ac4
     def test_waiver_is_half_open_in_tenant_timezone(self):
