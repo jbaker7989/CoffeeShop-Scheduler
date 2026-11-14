@@ -511,7 +511,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-042 — PostgreSQL platform decision & canonical-store migration
 - **Feature:** [F42](./FEATURES.md) · **Priority:** P0 · **Size:** M
-- **Status:** Not started
+- **Status:** ✅ Done — requirements pinned, `.env.example` added, `docs/data-platform.md` documents the roles decision, and `load_snapshot` proves canonical DB reads.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Make PostgreSQL the canonical store and demote Excel to fixtures and exports.
 - **Detailed specifications:**
@@ -1661,7 +1661,7 @@ closing regression evidence.
 | CS-039 | F39 | P2 | M | Not started |
 | CS-040 | F40 | P2 | S | Not started |
 | CS-041 | F41 | P2 | S | Not started |
-| CS-042 | F42 | P0 | M | Not started |
+| CS-042 | F42 | P0 | M | ✅ Done — requirements pinned, `.env.example`, `docs/data-platform.md`, roles decision, `load_snapshot` proof |
 | CS-043 | F43 | P0 | S | ✅ Done — compose+PgBouncer, reversible migration, backup/restore drill (F43 AC1–AC5 verified) |
 | CS-044 | F44 | P0 | M | ✅ Done — `scripts/etl_excel_to_postgres.py`; idempotent, 11 tests pass |
 | CS-045 | F45 | P1 | M | Not started |
