@@ -259,16 +259,20 @@ def reconcile_coverage(rules, coverage_rows) -> None:
 def judge(snapshot: Snapshot, proposal: Proposal) -> Evaluation:
     if not snapshot.timezone or not snapshot.rules:
         raise ComplianceUnavailable("no timezone or no rules; refusing to treat the shift as legal")
+    # Vocabulary must be understood before person-specific filters can hide a
+    # binding rule, but historical and foreign-jurisdiction rows cannot bind.
+    shift_day = proposal.start_at.astimezone(ZoneInfo(snapshot.timezone)).date()
     unknown = [
         rule.rule_id for rule in snapshot.rules
-        if vocab_key(rule.metric, rule.operator, rule.unit) not in SUPPORTED
+        if _in_force(rule, shift_day)
+        and _jurisdiction_ok(rule, snapshot.jurisdictions)
+        and vocab_key(rule.metric, rule.operator, rule.unit) not in SUPPORTED
     ]
     if unknown:
         raise ComplianceConfigError(f"unsupported rule vocabulary: {unknown}")
     if snapshot.employee.dob is None:
         raise ComplianceUnavailable(f"employee {proposal.employee_id} has no dob")
     zone = ZoneInfo(snapshot.timezone)
-    shift_day = proposal.start_at.astimezone(zone).date()
     if snapshot.employee.is_enrolled and shift_day not in snapshot.days:
         raise ComplianceUnavailable(
             f"enrolled employee {proposal.employee_id} has no school_calendar_days row for {shift_day}"
