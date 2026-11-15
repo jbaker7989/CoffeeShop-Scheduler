@@ -812,12 +812,12 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 
 ### CS-060 — Tenancy model & Row-Level Security (umbrella)
 - **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** M
-- **Status:** Blocked (on F42–F47 Postgres data plane)
+- **Status:** ◑ Core landed via migration `0001` (shipped under CS-047); **unblocked** (the F42–F47 data plane is Done — CS-042/043/044/047). `0001` already provides the `tenants` table, `tenant_id` + `ENABLE`/`FORCE` RLS + `NULLIF` `tenant_isolation` policy (USING + WITH CHECK) on domain tables, the non-owner `app_rw`/`app_ro`/`secrets_rw` roles, the `maven-demo` seed, and the pooling-safe `SET LOCAL` session pattern. **Remaining = hardening**, tracked by BUG-020 (tenants-root RLS), BUG-021 (default-partition RLS), BUG-022 (fail-closed cast), BUG-023 (global-table carve-out), BUG-024 (online-migration gotchas), BUG-025 (session guards) + a reusable session-context middleware (ties F45/CS-045). F60 ACs tightened 2026-11-14.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~5d (est., sum of sub-stories)
 - **Description:** The foundation: `tenant_id` on every domain table, Postgres RLS as the isolation guarantee, and the session plumbing that sets tenant context per request. Broken into three sub-stories.
 
 #### CS-060a — Schema, `tenant_id` & scale-safe migration
-- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** Blocked
+- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** ✅ Done via migration `0001` — schema built tenant-aware from inception (`tenant_id NOT NULL` + composite `(tenant_id, …)` indexes on every domain table; `maven-demo` seed; ETL takes `--tenant-slug`). Greenfield, so the scale-safe backfill / `CONCURRENTLY` / `NOT VALID`→`VALIDATE` procedure was not needed — it applies to any **future** online column add (BUG-024). Global reference-table carve-out refinement: BUG-023.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Detailed specifications:**
   - Add `tenants` root table; add `tenant_id UUID NOT NULL REFERENCES tenants(id)` to every F47 domain table; recreate every index / global `UNIQUE` with a leading `tenant_id` (F60.AC1).
@@ -826,7 +826,7 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 - **Cross-refs:** F47, F44.
 
 #### CS-060b — RLS policies + non-owner `app_rw` role
-- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked
+- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** ✅ Done via migration `0001` — `ENABLE` + `FORCE` RLS + `tenant_isolation` (NULLIF form, USING + WITH CHECK) on domain tables; app connects as non-owner `app_rw` (no `BYPASSRLS`). RLS functionally verified (own tenant sees rows, other tenant 0, cross-tenant write rejected by WITH CHECK, no-context denies). **Hardening remaining:** BUG-020 (tenants root table unprotected), BUG-021 (default partitions lack FORCE).
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
 - **Detailed specifications:**
   - `ENABLE` **and** `FORCE ROW LEVEL SECURITY` on every domain table; `tenant_isolation` policy with both `USING` and `WITH CHECK` on `current_setting('app.tenant_id', true)::UUID` (F60.AC2).
@@ -834,7 +834,7 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 - **Cross-refs:** architecture §2.4 + §14.1; verified by CS-068.
 
 #### CS-060c — Per-request tenant session context
-- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked
+- **Feature:** [F60](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** ◑ Partial — the per-request contract is implemented and RLS-verified: pooling-safe `SET LOCAL ROLE app_rw` + transaction-local `set_config('app.tenant_id', …, true)` in `compliance/rules_admin.py` (and used by the compliance engine), fail-closed to zero rows with no context. PgBouncer transaction mode is configured (F43). **Remaining:** a reusable session-context middleware (ties F45/CS-045) + the BUG-025 guards (assert `not autocommit`; use `SET LOCAL ROLE` everywhere, not the engine's non-local `SET ROLE` — BUG-013).
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
 - **Detailed specifications:**
   - PgBouncer transaction mode; the ORM middleware opens a transaction, `SET LOCAL app.tenant_id` from the JWT, and asserts it is set before the first statement (F60.AC4; `SET LOCAL` needs an explicit txn).
@@ -1819,10 +1819,10 @@ closing regression evidence.
 
 | Story | Feature | Priority | Size | Status |
 | --- | --- | --- | --- | --- |
-| CS-060 | F60 | P0 | M | Blocked (umbrella) |
-| CS-060a | F60 | P0 | M | Blocked |
-| CS-060b | F60 | P0 | S | Blocked |
-| CS-060c | F60 | P0 | S | Blocked |
+| CS-060 | F60 | P0 | M | ◑ Core done via `0001`; unblocked; hardening BUG-020..025 + session middleware remain |
+| CS-060a | F60 | P0 | M | ✅ Done via `0001` — tenant-aware schema + composite indexes + maven-demo seed (greenfield) |
+| CS-060b | F60 | P0 | S | ✅ Done via `0001` — FORCE RLS + NULLIF policy + non-owner app_rw; hardening BUG-020/021 |
+| CS-060c | F60 | P0 | S | ◑ Partial — SET LOCAL pattern impl + RLS-verified; reusable middleware + BUG-025 remain |
 | CS-061 | F61 | P0 | M | Blocked (umbrella) |
 | CS-061a | F61 | P0 | M | Blocked |
 | CS-061b | F61 | P0 | S | Blocked |
