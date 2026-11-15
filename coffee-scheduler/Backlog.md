@@ -1621,7 +1621,7 @@ closing regression evidence.
 
 ### BUG-020 — F60: the `tenants` root table has no RLS → cross-tenant enumeration
 - **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P1 · **Size:** S · **Pattern:** D2
-- **Status:** 🐞 Open · **Type:** Defect (multi-tenant isolation hole — confirmed exploitable)
+- **Status:** ✅ Fixed (2026-11-14, migration `0004`) — `tenants` gets `ENABLE` RLS (not `FORCE`) + `tenant_self_isolation` policy (`id = NULLIF(current_setting('app.tenant_id', true),'')::uuid`). app roles see only their own tenant; owner/ETL still see all (ENABLE-not-FORCE is deliberate — `FORCE` would break the slug-resolving loader). `test_tenants_rls.py` 4 tests pass. Claude dev / Codex tests.
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** F60/CS-060 scopes RLS to *domain* tables but leaves the **root `tenants` table**
   unprotected: `tenants` has `relrowsecurity=false, relforcerowsecurity=false` and `app_rw` holds `SELECT`
@@ -1880,7 +1880,7 @@ closing regression evidence.
 | BUG-017 | F34 | P3 | XS | ✅ Fixed — explicit transaction contract and timezone validation |
 | BUG-018 | F34 | P2 | S | ✅ Fixed — verified evidence gate and no read-path URL networking |
 | BUG-019 | F34 | P2 | XS | 🐞 Open — `test_rules_admin.py` missing `unittest.main()`; runs 0 tests as a script |
-| BUG-020 | F60 | P1 | S | 🐞 Open — `tenants` root table has no RLS → cross-tenant enumeration (confirmed) |
+| BUG-020 | F60 | P1 | S | ✅ Fixed (`0004`) — tenants ENABLE RLS + self-policy; app roles see only own tenant; 4 tests |
 | BUG-021 | F60 | P2 | S | 🐞 Open — default partitions lack RLS/FORCE (latent; mitigated only by grant absence) |
 | BUG-022 | F60 | P2 | XS | 🐞 Open — RLS policy cast not fail-closed for empty/invalid tenant context (AC2 spec bug) |
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
