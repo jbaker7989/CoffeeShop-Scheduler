@@ -583,7 +583,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-045 — Typed agent data-access layer
 - **Feature:** [F45](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-14) — Claude dev / Codex tests. `coffee-scheduler/data_access/` (psycopg3 typed repository: session.py, tables.py, repository.py) + migration `0003` (RLS-protected `langgraph_checkpoints`). Parameterised, composite-PK-aware, RLS-trusting, append-only-enforcing, pooling-safe session (`SET LOCAL ROLE` + transaction-local tenant GUC). 7 integration tests (F45.ac1–ac7) pass; fixtures intact. SDD: docs/sdd-cs045.md.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Give agents a pooled, role-aware repository API instead of raw SQL.
 - **Detailed specifications:**
@@ -1799,7 +1799,7 @@ closing regression evidence.
 | CS-042 | F42 | P0 | M | ✅ Done — requirements pinned, `.env.example`, `docs/data-platform.md`, roles decision, `load_snapshot` proof |
 | CS-043 | F43 | P0 | S | ✅ Done — compose+PgBouncer, reversible migration, backup/restore drill (F43 AC1–AC5 verified) |
 | CS-044 | F44 | P0 | M | ✅ Done — `scripts/etl_excel_to_postgres.py`; idempotent, 11 tests pass |
-| CS-045 | F45 | P1 | M | Not started |
+| CS-045 | F45 | P1 | M | ✅ Done — psycopg typed repo + migration 0003 (checkpoints RLS); 7 tests (Claude dev/Codex tests) |
 | CS-046 | F46 | P2 | S | Not started |
 | CS-047 | F47 | P0 | M | ✅ Done — `docs/schema.md` + migrations `0001`/`0002`, round-trip verified |
 | CS-048 | F48 | P1 | S | Not started |

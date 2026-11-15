@@ -407,7 +407,7 @@ Move the project off `.xlsx` as the source of truth onto PostgreSQL. The Excel f
   - **Cross-references:** F43/CS-043 (migrated PostgreSQL service), F47/CS-047 (`docs/schema.md` and migration `0001`), F29/CS-009 (taxonomy), F2/CS-002–003 (roster), F5/CS-008 (calibration), F26 (coverage-rule reconciliation), and `migration/SKILL.md`.
 
 ### F45. Agent data-access layer
-- **Status:** Not started · **Size:** M · **Priority:** P1
+- **Status:** Done (CS-045, 2026-11-14) · **Size:** M · **Priority:** P1
 - **Description:** SQLAlchemy models (or equivalent) for every table defined in F47. Repository pattern for read and write — agents call `repo.get_employee(...)`, `repo.append_rule_eval(...)`, never raw SQL. Connection pooling shared across agents. Read-only role for the Compliance agent, read-write role for the Solver and the Manager-facing UI (F34). LangGraph state checkpoints stored in Postgres per F12. All queries parameterised; no string concatenation. Integration tests cover the layer against a test database.
 - **Expected outcome:** Agents access data through a typed, pooled, role-aware layer — no direct SQL in agent code.
 
