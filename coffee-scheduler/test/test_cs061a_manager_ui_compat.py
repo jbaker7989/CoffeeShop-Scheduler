@@ -125,6 +125,51 @@ class ManagerUiBrowserCompatTests(unittest.TestCase):
         self.assertEqual(200, r.status_code, r.text)
         self.assertEqual([FIXTURE_TENANT], self.spy.calls, "query tenant_id must be ignored")
 
+    # spec: BUG-037 — the server side of the UI recovery: an expired access credential is refreshed
+    # once with the Path=/auth/browser cookie and the retried request then succeeds.
+    def test_expired_access_recovers_via_refresh_then_retry_succeeds(self) -> None:
+        login = self._browser_login()
+        refresh = login.cookies["refresh_token"]
+        expired = self.service.issue_contract_token(claim_overrides={"exp": 1})
+        # 1) The protected request fails closed with the expired access cookie.
+        self.assertEqual(401, self.client.get("/me", headers={"cookie": f"access_token={expired}"}).status_code)
+        self.assertEqual([], self.spy.calls)
+        # 2) One refresh with the refresh cookie rotates and issues a fresh access cookie.
+        rotated = self.client.post("/auth/browser/refresh", headers={"cookie": f"refresh_token={refresh}"})
+        self.assertEqual(200, rotated.status_code, rotated.text)
+        new_access = rotated.cookies["access_token"]
+        self.assertNotEqual(expired, new_access)
+        # 3) The retried request now succeeds and is tenant-scoped from the reconciled claim.
+        me = self.client.get("/me", headers={"cookie": f"access_token={new_access}"})
+        self.assertEqual(200, me.status_code, me.text)
+        self.assertEqual(FIXTURE_TENANT, me.json()["tenant_id"])
+        stores = self.client.get("/stores", headers={"cookie": f"access_token={new_access}"})
+        self.assertEqual(200, stores.status_code, stores.text)
+        self.assertEqual([FIXTURE_TENANT], self.spy.calls)
+
+    # spec: BUG-037 — a replayed refresh after recovery is rejected, so the UI fails closed to login.
+    def test_refresh_replay_after_recovery_is_rejected(self) -> None:
+        refresh = self._browser_login().cookies["refresh_token"]
+        first = self.client.post("/auth/browser/refresh", headers={"cookie": f"refresh_token={refresh}"})
+        self.assertEqual(200, first.status_code, first.text)
+        replay = self.client.post("/auth/browser/refresh", headers={"cookie": f"refresh_token={refresh}"})
+        self.assertEqual(401, replay.status_code, replay.text)
+        # The rotated child is burned too (family revoked), so it cannot silently continue.
+        rotated_child = first.cookies["refresh_token"]
+        child_replay = self.client.post("/auth/browser/refresh", headers={"cookie": f"refresh_token={rotated_child}"})
+        self.assertEqual(401, child_replay.status_code, child_replay.text)
+
+    # spec: BUG-037 — the refresh endpoint rejects a request that carries a body (mixed transport),
+    # so a client cannot smuggle a second refresh secret alongside the cookie.
+    def test_browser_refresh_rejects_body_transport(self) -> None:
+        refresh = self._browser_login().cookies["refresh_token"]
+        r = self.client.post(
+            "/auth/browser/refresh",
+            headers={"cookie": f"refresh_token={refresh}"},
+            json={"refresh_token": "smuggled"},
+        )
+        self.assertEqual(400, r.status_code, r.text)
+
 
 if __name__ == "__main__":
     unittest.main()
