@@ -170,6 +170,16 @@ class ManagerUiBrowserCompatTests(unittest.TestCase):
         )
         self.assertEqual(400, r.status_code, r.text)
 
+    # spec: F61.ac2 / BUG-037 — refresh is POST-only and refuses duplicate cookie sources.
+    def test_browser_refresh_is_post_only_and_duplicate_cookie_is_rejected(self) -> None:
+        refresh = self._browser_login().cookies["refresh_token"]
+        self.assertEqual(405, self.client.get("/auth/browser/refresh").status_code)
+        duplicate = self.client.post(
+            "/auth/browser/refresh",
+            headers={"cookie": f"refresh_token=attacker; refresh_token={refresh}"},
+        )
+        self.assertEqual(401, duplicate.status_code, duplicate.text)
+
 
 if __name__ == "__main__":
     unittest.main()
