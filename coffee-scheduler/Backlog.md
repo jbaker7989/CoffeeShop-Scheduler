@@ -1885,6 +1885,39 @@ closing regression evidence.
 - **Risk if unfixed:** direct gateway exposure bypasses the same-origin assumptions behind the cookie/CSRF
   model.
 
+### BUG-035 — F61/CS-030: production gateway still serves legacy demo auth at `/auth/login`
+- **Feature:** [F61](./FEATURES.md) (CS-061a) / [F30](./FEATURES.md) (CS-030) · **Priority:** P0 · **Size:** M · **Pattern:** D1/D2
+- **Status:** 🐞 Open · **Type:** Integration/security-boundary defect · **Found:** 2026-11-16
+- **Developer:** Unassigned · **Duration:** ~3d (est.)
+- **Root cause:** CS-061a supplies an unmounted `auth.api.create_auth_router(...)`, while the deployed
+  `api.app` continues to declare `POST /auth/login` itself. That legacy handler authenticates only the
+  `DEMO_MANAGER_*` configuration and emits the CS-030 HS256 `session` cookie; no startup wiring creates an
+  `AUTH_DATABASE_URL` auth connection, constructs `TenantAuthService`, includes the RS256 router, or changes
+  `current_claims`/`/stores` to consume reconciled CS-061a principals. Mounting both routers would also create
+  an ambiguous duplicate `POST /auth/login` route, where Starlette selects the earlier legacy handler.
+- **Reproduction (verified 2026-11-16):** inspect `api/app.py` and run
+  `python3 -m unittest discover -s test -p 'test_f61*.py' -v`; all eight isolated CS-061a contracts pass,
+  yet `api/app.py` imports only `.auth` and defines its own `/auth/login` with `issue_token`/
+  `set_session_cookie`, with no `create_auth_router` or `include_router` reference. The existing
+  `test_api_foundation.py` codifies that legacy JSON shape and `session` cookie, proving the two contracts
+  cannot coexist on the same endpoint.
+- **Impact:** integrating the candidate without an explicit gateway cutover leaves the reachable manager API
+  on the legacy demo credential/session scheme rather than the CS-061a Argon2id, RS256, refresh-family, and
+  browser-cookie boundary. A naive router mount can silently preserve the legacy route because of route order.
+- **Acceptance criteria:**
+  - Replace or version the legacy `/auth/login` endpoint; exactly one production handler owns each CS-061a
+    auth route and it uses a `TenantAuthService` built from the dedicated auth principal.
+  - Make gateway startup fail closed for missing/invalid auth DSN, JWT keyring, issuer/audience, or refresh
+    pepper; never fall back to `SESSION_SECRET`/`DEMO_MANAGER_*` in production.
+  - Authenticate protected gateway requests from validated, canonical CS-061a claims before opening the
+    `app_rw` RLS transaction, and prove token tenant claims cannot be overridden by request input.
+  - Add ASGI integration tests for duplicate-route absence, JSON/browser transport separation, malformed /
+    multiple / missing bearer and cookie credentials, cross-tenant rejection, and a CS-030 migration or
+    compatibility plan. Coordinate CS-070 for CSRF/CORS/routing policy rather than weakening the cookie
+    attributes.
+- **Risk if unfixed:** the application can report CS-061a’s unit contracts green while serving an older,
+  incompatible authentication boundary to real gateway traffic.
+
 ---
 
 ## Backlog summary
