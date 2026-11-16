@@ -7,3 +7,9 @@ openpyxl==3.1.5
 requests==2.34.2
 psycopg[binary]==3.3.9
 alembic==1.20.1
+# CS-061a (F61): Argon2id password hashing for tenant auth credentials.
+argon2-cffi==25.1.0
+# CS-061a (F61): FastAPI auth routing + RS256 access-token signing/verification.
+fastapi==0.120.4
+PyJWT==2.13.0
+cryptography==49.0.0
