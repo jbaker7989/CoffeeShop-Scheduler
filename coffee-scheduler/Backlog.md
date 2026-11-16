@@ -1949,6 +1949,33 @@ closing regression evidence.
 - **Risk if unfixed:** every manager login against the cut-over gateway fails to establish the UI's protected
   session, blocking the product despite green backend authentication tests.
 
+### BUG-037 — F30/CS-070: manager UI never uses the CS-061a browser refresh credential
+- **Feature:** [F30](./FEATURES.md) (CS-030) / [F70](./FEATURES.md) (CS-070) · **Priority:** P1 · **Size:** S · **Pattern:** D1
+- **Status:** 🐞 Open · **Type:** Session continuity gap · **Found:** 2026-11-16
+- **Developer:** Unassigned · **Duration:** ~1d (est.)
+- **Root cause:** the BUG-036 migration changes login, middleware, and server components to use the
+  short-lived `access_token`, and correctly proxies `/auth/browser/refresh`, but no UI/middleware/route
+  handler ever calls that refresh endpoint. After the fixed 900-second access-token lifetime, middleware still
+  sees the stale cookie, then `/me` or `/stores` returns 401 and the layout/dashboard redirects to `/login`.
+  The 7-day HttpOnly `refresh_token` is therefore unused by the manager application.
+- **Reproduction (verified 2026-11-16):** `rg -n "auth/browser/refresh|refresh_token" coffee_shop` finds
+  only the Next rewrite/comment, while `layout.tsx` and `dashboard/page.tsx` redirect on a 401 with no refresh
+  attempt. `test_cs061a_manager_ui_compat.py` proves the endpoint itself rotates and detects replay, but does
+  not exercise an expired-access UI recovery path because none exists.
+- **Impact:** managers are forced to re-enter credentials every 15 minutes despite holding a valid browser
+  refresh credential, and the BUG-036 acceptance criterion for browser-refresh behavior is not met.
+- **Acceptance criteria:**
+  - Add a same-origin refresh flow that preserves `HttpOnly` secrecy, sends the refresh cookie only to
+    `/auth/browser/refresh`, relays replacement `Set-Cookie` headers to the browser, and retries the failed
+    authenticated UI request exactly once.
+  - Expired/malformed/replayed refresh credentials must clear both cookies and redirect only to the fixed
+    local `/login` route; no user-controlled return URL may be reflected into a redirect.
+  - Add UI/browser integration tests for expired access recovery, refresh replay/failure, duplicate/stale
+    cookie rejection, cookie path forwarding, and token non-exposure in rendered HTML, client state, logs, or
+    cache keys. Coordinate CSRF/CORS behavior with CS-070.
+- **Risk if unfixed:** a valid 7-day refresh session offers no user benefit, producing recurring authentication
+  outages and encouraging an insecure client-side token workaround.
+
 ---
 
 ## Backlog summary
