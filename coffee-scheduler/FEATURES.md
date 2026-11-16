@@ -341,8 +341,28 @@ OpenTelemetry is the chosen observability framework. F18 ("Observability across 
 
 ### F36. OpenTelemetry implementation (umbrella)
 - **Status:** Not started · **Size:** M · **Priority:** P2
-- **Description:** Adopt OpenTelemetry across the agent platform. This umbrella owns: OTel SDK version pin, OTel Collector deployment shape, W3C `traceparent` propagation contract across every A2A boundary, custom metric vocabulary (solver solve-time, rule-eval counts, LangGraph state transitions), sampling policy, and the Docker Compose file that ships the Collector + Tempo + Mimir + Loki + Grafana together. F18's "one trace ID across all A2A calls, with authentication and timeouts on each boundary" is the goal; this feature picks OTel to deliver it.
-- **Expected outcome:** An A2A call across any two agents shows up in Tempo with one `trace_id`; per-call RED metrics land in Mimir; structured logs land in Loki — all visible from one Grafana pane.
+- **Description:** Establish the shared OpenTelemetry SDK contract and reusable bootstrap for every agent, then prove W3C context propagation through a minimal two-service A2A HTTP demo. Collector configuration is F38; LGTM backends and Grafana are F39/F40.
+- **Acceptance criteria:**
+  1. **AC1 — pinned SDK requirements:** `otel/requirements.txt` pins exact versions of `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc`, and `opentelemetry-semantic-conventions`.
+  2. **AC2 — required resource schema:** `init_telemetry` creates a resource containing `service.name`, `service.version`, and `service.namespace=coffeeshop`.
+  3. **AC3 — service identity required:** `init_telemetry` rejects a missing or blank `service_name`.
+  4. **AC4 — deployment environment ownership:** `init_telemetry` does not set `deployment.environment` on the SDK resource.
+  5. **AC5 — tenant location:** telemetry records `tenant_id` only as a span attribute, never as a resource attribute.
+  6. **AC6 — PII prohibition:** telemetry attributes do not contain employee names or email addresses.
+  7. **AC7 — head sampler:** the tracer provider uses `ParentBased(AlwaysOn)` sampling.
+  8. **AC8 — propagation format:** initialization sets the global propagator to `tracecontext,baggage`.
+  9. **AC9 — local OTLP transport:** the OTLP gRPC span exporter uses `OTEL_EXPORTER_OTLP_ENDPOINT` or `localhost:4317` with `insecure=True`.
+  10. **AC10 — flush on shutdown:** `shutdown()` force-flushes tracing and metrics before provider shutdown.
+  11. **AC11 — reusable bootstrap API:** `init_telemetry(service_name, service_version="0.1.0")` returns `(tracer, meter)`.
+  12. **AC12 — injection helper:** `inject_headers(headers)` adds the current W3C trace context to the supplied header carrier.
+  13. **AC13 — extraction helper:** `extract_context(headers)` preserves the incoming valid trace ID in its returned context.
+  14. **AC14 — two-service trace:** the stdlib HTTP demo emits one CLIENT span and one SERVER span with the same trace ID.
+  15. **AC15 — metric vocabulary:** the bootstrap defines `solver.solve_time_ms`, `rule_eval.count`, `forecast.quantile_p70`, `a2a.server.duration_ms`, and `a2a.calls` with their documented types, units, and attributes.
+  16. **AC16 — collector trace verification:** with CS-038's Collector running, the demo verification reads Collector `debug` output and asserts the CLIENT and SERVER spans share a trace ID.
+  17. **AC17 — collector metric verification:** with CS-038's Collector running, the demo verification observes `a2a.calls` or `a2a.server.duration_ms` in Collector `debug` metrics output.
+- **Edge / adversarial:** an absent or blank service name fails closed; extraction of a valid incoming `traceparent` must not create a new trace ID; names/emails are rejected or scrubbed before export; short-lived processes must flush before exit; Docker-dependent Collector verification is gated and unit contracts do not require Docker.
+- **Cross-references:** [CS-036 plan](./docs/plans/CS-036-otel-foundation.md), F18 (cross-agent trace), F37 (per-agent instrumentation), F38/CS-038 (Collector `debug` verification), F68 AC4 (PII scrub).
+- **Expected outcome:** A reusable, locally exportable telemetry bootstrap and demo prove one A2A trace ID plus RED metrics at the Collector; F39 later provides the LGTM visualisation.
 
 ### F37. OTel SDK instrumentation per agent
 - **Status:** Not started · **Size:** M · **Priority:** P2
