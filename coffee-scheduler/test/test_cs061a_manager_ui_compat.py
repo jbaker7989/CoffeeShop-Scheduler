@@ -90,6 +90,14 @@ class ManagerUiBrowserCompatTests(unittest.TestCase):
         self.assertEqual(401, self.client.get("/me").status_code)
         self.assertEqual(401, self.client.get("/stores").status_code)
 
+    # spec: F61.ac2 / BUG-036 — an expired browser access cookie cannot authenticate a page.
+    def test_expired_access_cookie_fails_closed(self) -> None:
+        expired = self.service.issue_contract_token(claim_overrides={"exp": 1})
+        for path in ("/me", "/stores"):
+            response = self.client.get(path, headers={"cookie": f"access_token={expired}"})
+            self.assertEqual(401, response.status_code, response.text)
+        self.assertEqual([], self.spy.calls)
+
     # spec: BUG-036 — the browser refresh cookie rotates; a replay is rejected (cookie transport).
     def test_browser_refresh_rotates_and_detects_replay(self) -> None:
         login = self._browser_login()
