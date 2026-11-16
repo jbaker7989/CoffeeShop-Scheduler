@@ -1777,7 +1777,7 @@ closing regression evidence.
 
 ### BUG-028 — F68: gate coverage test is brittle against future (non-default) partitions
 - **Feature:** [F68](./FEATURES.md) (CS-068a) · **Priority:** P3 · **Size:** XS · **Pattern:** D9
-- **Status:** 🐞 Open · **Type:** Defect (test brittleness — false failure on a legitimate schema change) · **Found:** 2026-11-15
+- **Status:** ✅ Fixed (gate coverage test now excludes partition children structurally via `pg_inherits`, not a name pattern; regression test `test_future_partition_does_not_break_coverage` proves a 2099 period partition is not flagged) · **Type:** Defect (test brittleness — false failure on a legitimate schema change) · **Found:** 2026-11-15
 - **Developer:** Unassigned · **Duration:** ~0.25d (est.)
 - **Description:** `test_every_tenant_id_table_is_covered_and_forced` excludes partition children by **name**
   (`table_name NOT LIKE '%_default'`). Partition children inherit the `tenant_id` column, so a future period
@@ -1795,7 +1795,7 @@ closing regression evidence.
 
 ### BUG-029 — F68: pooled context-bleed is proven only at the `SET LOCAL` level, not through PgBouncer
 - **Feature:** [F68](./FEATURES.md) (CS-068a, ties CS-068b) · **Priority:** P3 · **Size:** S · **Pattern:** D3
-- **Status:** 🐞 Open · **Type:** Gap (uncovered integration edge) · **Found:** 2026-11-15
+- **Status:** ✅ Fixed (`test/test_pool_isolation.py` runs through PgBouncer transaction mode on 6432 with prepared statements disabled; two behavioural tests prove context does not survive across pooled transactions and two concurrent clients never see each other's rows; a `pool_mode=transaction` guard skips gracefully if the admin db is locked down) · **Type:** Gap (uncovered integration edge) · **Found:** 2026-11-15
 - **Developer:** Unassigned · **Duration:** ~1d (est.)
 - **Description:** The gate's `ContextBleed` test reuses a single psycopg connection across two transactions
   and proves `SET LOCAL` transaction-locality (the underlying mechanism). It does **not** exercise the real
@@ -1811,7 +1811,7 @@ closing regression evidence.
 
 ### BUG-030 — F60: `app_current_tenant()` has no pinned `search_path`
 - **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P3 · **Size:** XS · **Pattern:** D5
-- **Status:** 🐞 Open · **Type:** Hardening (defense-in-depth) · **Found:** 2026-11-15
+- **Status:** ✅ Fixed (migration `0008` recreates `app_current_tenant()` with `SET search_path = pg_catalog`; verified by `test_app_current_tenant_pins_search_path` — `proconfig` = `{search_path=pg_catalog}` — with the BUG-022 fail-closed tests still green) · **Type:** Hardening (defense-in-depth) · **Found:** 2026-11-15
 - **Developer:** Unassigned · **Duration:** ~0.25d (est.)
 - **Description:** The fail-closed helper `app_current_tenant()` (migration `0006`) is `STABLE` and runs as
   invoker (not `SECURITY DEFINER`), so a hijacked `search_path` is not a privilege-escalation today. But it

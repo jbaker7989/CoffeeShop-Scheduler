@@ -56,6 +56,15 @@ TENANT_TABLES = [
 ]
 PARTITION_PARENTS = ("rule_eval_log", "transactions", "weather_hourly")
 PROBE_TABLE = "stores"  # a plain domain table that owns maven-demo rows
+TENANT_TABLE_COVERAGE_SQL = """
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r', 'p')
+      AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid)
+"""
 
 
 def _set_ctx(conn, tenant):
@@ -184,11 +193,7 @@ class CoverageGate(unittest.TestCase):
     def test_every_tenant_id_table_is_covered_and_forced(self):
         known = set(TENANT_TABLES)
         with psycopg.connect(DSN) as conn:
-            tables = [r[0] for r in conn.execute(
-                "SELECT table_name FROM information_schema.columns "
-                "WHERE column_name = 'tenant_id' AND table_schema = 'public' "
-                "AND table_name NOT LIKE '%_default' GROUP BY table_name"
-            ).fetchall()]
+            tables = [r[0] for r in conn.execute(TENANT_TABLE_COVERAGE_SQL).fetchall()]
             self.assertTrue(tables, "expected to find tenant_id tables")
             for t in tables:
                 self.assertIn(t, known, f"{t} has tenant_id but is NOT in the isolation gate allow-list")
@@ -196,6 +201,21 @@ class CoverageGate(unittest.TestCase):
                     "SELECT relforcerowsecurity FROM pg_class WHERE relname = %s", (t,)
                 ).fetchone()[0]
                 self.assertTrue(force, f"{t} has tenant_id but no FORCE RLS")
+
+    # spec: F68.ac5 / BUG-028 — a future period partition is excluded structurally, not flagged.
+    def test_future_partition_does_not_break_coverage(self):
+        with psycopg.connect(DSN) as conn:
+            with conn.transaction():
+                conn.execute(
+                    "CREATE TABLE transactions_p2099_01 PARTITION OF transactions "
+                    "FOR VALUES FROM ('2099-01-01') TO ('2099-02-01')"
+                )
+                names = [r[0] for r in conn.execute(TENANT_TABLE_COVERAGE_SQL).fetchall()]
+                self.assertNotIn(
+                    "transactions_p2099_01", names,
+                    "a period partition must be excluded structurally, not flagged",
+                )
+                raise Rollback
 
     # spec: F68.ac5 / BUG-020 — tenants enumeration tripwire: app_rw sees ONLY its own tenant row.
     #   Fails loudly if a broken `tenants ... USING (true)` policy is ever applied (the dirty-0001 hazard).

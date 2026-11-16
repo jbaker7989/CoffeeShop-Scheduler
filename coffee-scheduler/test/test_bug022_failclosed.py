@@ -80,6 +80,17 @@ class Bug022FailClosed(unittest.TestCase):
                 self.assertEqual(row[0], "s", "app_current_tenant() must be STABLE (provolatile='s')")
                 raise Rollback
 
+    # spec: F60.ac2 / BUG-030 — the fail-closed helper pins its search_path.
+    def test_app_current_tenant_pins_search_path(self):
+        with psycopg.connect(DSN) as conn:
+            with conn.transaction():
+                cfg = conn.execute(
+                    "SELECT proconfig FROM pg_proc WHERE proname = 'app_current_tenant'"
+                ).fetchone()[0]
+                self.assertIsNotNone(cfg, "app_current_tenant() must pin search_path")
+                self.assertIn("search_path=pg_catalog", cfg)
+                raise Rollback
+
 
 @unittest.skipUnless(DSN and psycopg, "DATABASE_URL and psycopg are required")
 class Bug022EdgeGuard(unittest.TestCase):
