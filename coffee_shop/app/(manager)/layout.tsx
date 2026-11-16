@@ -25,7 +25,9 @@ export default async function ManagerLayout({ children }: { children: ReactNode 
   });
 
   if (response.status === 401) {
-    redirect("/login");
+    // Access credential expired/absent: hand off to the same-origin recovery step, which attempts
+    // one refresh and then either retries this page or fails closed to /login (BUG-037).
+    redirect("/session-refresh");
   }
 
   if (!response.ok) {

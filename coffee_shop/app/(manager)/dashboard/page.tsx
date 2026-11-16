@@ -28,7 +28,8 @@ export default async function DashboardPage() {
   });
 
   if (response.status === 401) {
-    redirect("/login");
+    // Same-origin recovery handles one refresh + retry, then fails closed to /login (BUG-037).
+    redirect("/session-refresh");
   }
 
   if (!response.ok) {

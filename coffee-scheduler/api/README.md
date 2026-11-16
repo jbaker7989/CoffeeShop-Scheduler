@@ -42,7 +42,7 @@ demo credentials.
 
 Tenant-scoped reads establish RLS as `app_rw` using only the reconciled `tenant_id`.
 
-## Manager UI integration (BUG-035 + BUG-036)
+## Manager UI integration (BUG-035 + BUG-036 + BUG-037)
 
 The Next.js manager shell (`coffee_shop/`) now authenticates with the CS-061a browser transport:
 
@@ -57,9 +57,19 @@ The Next.js manager shell (`coffee_shop/`) now authenticates with the CS-061a br
   always sets `HttpOnly; Secure; SameSite=Strict`. Local development must terminate TLS too;
   plaintext HTTP is not an exception for bearer credential cookies.
 
-Access tokens live 15 minutes; when one expires the protected pages fail closed to `/login`.
-Automatic silent refresh in the UI and the broader CSRF/CORS + tenant-routing policy remain
-**CS-070** follow-ups — out of scope here, but the refresh endpoint is reachable and tested so the
-capability exists. The dormant `api.auth` demo helper and the optional `SESSION_SECRET` /
-`DEMO_MANAGER_*` settings remain only for local experimentation and are never used by the
-production app; the legacy `session` cookie is accepted nowhere.
+Access tokens live 15 minutes. When one expires (the access cookie's own lifetime), a protected
+request has no access credential, so middleware/the server components route to a same-origin
+`/session-refresh` step (BUG-037). That client step POSTs once to `/auth/browser/refresh` — the
+only path the `Path=/auth/browser` refresh cookie is sent to — the gateway rotates the family and
+relays fresh `Set-Cookie` headers, and the original safe GET page is retried once (the fixed
+`/dashboard`, never a user-controlled return URL). Any refresh failure or replay clears both
+cookies and fails closed to `/login`. No token is ever read by client JavaScript (the step inspects
+only the response status), only safe/idempotent GETs are retried (no unsafe mutation is replayed),
+and a short loop guard bounds recovery to a single refresh per failure. The recovery *policy* is
+unit-tested (`coffee_shop/test/session-recovery.test.mts`) and the server side of the sequence in
+`test_cs061a_manager_ui_compat.py`.
+
+The broader CSRF/CORS + tenant-routing policy remains a **CS-070** follow-up. The dormant
+`api.auth` demo helper and the optional `SESSION_SECRET` / `DEMO_MANAGER_*` settings remain only
+for local experimentation and are never used by the production app; the legacy `session` cookie is
+accepted nowhere.
