@@ -3,3 +3,6 @@ uvicorn[standard]==0.54.0
 psycopg[binary,pool]==3.3.6
 pyjwt==2.15.1
 argon2-cffi==25.1.0
+# CS-061a (F61/BUG-035): the gateway now mounts the CS-061a auth router, which signs/validates
+# RS256 access tokens via the `auth` package.
+cryptography==49.0.0
