@@ -632,7 +632,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-036 — OpenTelemetry observability foundation
 - **Feature:** [F36](./FEATURES.md) · **Priority:** P2 · **Size:** M
-- **Status:** Not started
+- **Status:** ✅ Done — shared SDK bootstrap, deterministic global-provider policy, and two-service Collector-verified demo; F36 AC1–AC17 verified (2026-11-16).
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Define the shared OTel contract and demo deployment shape.
 - **Detailed specifications:**

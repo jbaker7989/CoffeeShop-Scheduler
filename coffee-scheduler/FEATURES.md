@@ -340,7 +340,7 @@ These were not in the original backlog but the data and Project Status already i
 OpenTelemetry is the chosen observability framework. F18 ("Observability across A2A") describes the requirement; this section implements it with OTel. Stack: OTel SDK in every agent, OTel Collector, and the LGTM backends (Tempo / Mimir / Loki) with Grafana for visualisation.
 
 ### F36. OpenTelemetry implementation (umbrella)
-- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Status:** ✅ Done (CS-036, 2026-11-16) · **Size:** M · **Priority:** P2
 - **Description:** Establish the shared OpenTelemetry SDK contract and reusable bootstrap for every agent, then prove W3C context propagation through a minimal two-service A2A HTTP demo. Collector configuration is F38; LGTM backends and Grafana are F39/F40.
 - **Acceptance criteria:**
   1. **AC1 — pinned SDK requirements:** `otel/requirements.txt` pins exact versions of `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc`, and `opentelemetry-semantic-conventions`.
