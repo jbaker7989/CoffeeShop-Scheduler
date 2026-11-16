@@ -1,0 +1,26 @@
+# Additive observability plane — the shared OpenTelemetry Collector (F38 / CS-038).
+#
+# Separate from the data-plane docker-compose.yml; it never edits that stack. Start it with:
+#   docker compose -f docker-compose.observability.yml up
+# The LGTM backends (Tempo/Mimir/Loki, F39) are not started here: the Collector's backend
+# exporters are non-fatal (retry_on_failure), so it comes up and keeps ingesting — verified
+# via the `debug` exporter — while those services are absent.
+services:
+  otel-collector:
+    # Exact, pinned contrib tag (released 2026-10-27; >= 2 weeks old). -contrib is required
+    # for tail_sampling / prometheusremotewrite / otlphttp. Digest for the record:
+    # sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    container_name: coffeeshop-otel-collector
+    command: ["--config=/etc/otelcol-contrib/collector-config.yaml"]
+    volumes:
+      - ./coffee-scheduler/otel/collector-config.yaml:/etc/otelcol-contrib/collector-config.yaml:ro
+    ports:
+      - "4317:4317"    # OTLP/gRPC
+      - "4318:4318"    # OTLP/HTTP
+      - "13133:13133"  # health_check extension
+    # No healthcheck on purpose. The image is distroless — no sh, no curl, no wget — so a
+    # CMD-SHELL/curl probe cannot run inside the container. Health is exposed by the
+    # health_check extension on 13133 and probed by the orchestrator/host (k8s httpGet, or
+    # the CS-038 validation test). A container healthcheck, if ever added, must be a
+    # non-shell CMD against a binary present in the image.

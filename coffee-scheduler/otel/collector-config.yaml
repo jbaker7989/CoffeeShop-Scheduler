@@ -1,0 +1,118 @@
+# OpenTelemetry Collector — shared telemetry hop for every agent (F38 / CS-038).
+#
+# Runs on otel/opentelemetry-collector-contrib (distroless). The -contrib distribution
+# is required for tail_sampling, prometheusremotewrite and otlphttp. The LGTM backends
+# (Tempo/Mimir/Loki, F39) are NOT deployed yet: their exporters set retry_on_failure so
+# an unreachable backend is logged and dropped (non-fatal), while the always-on `debug`
+# exporter gives local verification that ingestion works. See docs/plans/CS-038-otel-collector.md.
+
+receivers:
+  otlp:
+    protocols:
+      # Standard OTLP ports every agent SDK defaults to; bound on all interfaces so the
+      # container's published 4317/4318 are reachable.
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # First in every pipeline: apply back-pressure before any buffering processor.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  # service.name / service.version are set by each agent SDK (insert = keep the SDK value,
+  # only fill a fallback when absent); deployment.environment is owned by the Collector.
+  resource:
+    attributes:
+      - key: service.name
+        value: coffee-scheduler
+        action: insert
+      - key: service.version
+        value: 0.0.0
+        action: insert
+      - key: deployment.environment
+        value: local
+        action: upsert
+
+  # Decision needs whole traces, so this runs BEFORE batch: keep 100% of error traces,
+  # sample the remaining traces at 10%. decision_wait is short for the local demo.
+  tail_sampling:
+    decision_wait: 5s
+    num_traces: 50000
+    expected_new_traces_per_sec: 10
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: sample-rest
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+  # Last: only sampled spans are batched out.
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  # Always on, independent of any backend — the local verification path (and the proof,
+  # in the CS-038 tests, that an error trace is retained through tail sampling).
+  debug:
+    verbosity: detailed
+
+  # Tempo (traces). retry_on_failure keeps an absent Tempo non-fatal.
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+
+  # Mimir (metrics) via Prometheus remote-write.
+  prometheusremotewrite/mimir:
+    endpoint: http://mimir:9009/api/v1/push
+    retry_on_failure:
+      enabled: true
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # Loki (logs). The standalone loki exporter was removed from contrib; Loki ingests OTLP
+  # natively on /otlp.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+
+extensions:
+  # Health endpoint for the orchestrator/host to probe (the distroless container has no
+  # shell/curl to probe itself — see docker-compose.observability.yml).
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, tail_sampling, batch]
+      exporters: [debug, otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, prometheusremotewrite/mimir]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, otlphttp/loki]
+  telemetry:
+    logs:
+      level: info
