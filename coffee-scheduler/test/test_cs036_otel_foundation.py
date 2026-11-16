@@ -170,6 +170,36 @@ class OtelFoundationContractTests(unittest.TestCase):
 
         self.assertEqual(trace_id, f"{trace.get_current_span(context).get_span_context().trace_id:032x}")
 
+    # spec: F36.ac13 — the helper itself tolerates title-cased headers (urllib sends
+    # "Traceparent"); regression for the two-trace-ids defect Codex found in 012279c.
+    def test_extract_context_normalizes_title_cased_header(self) -> None:
+        telemetry = self._load_telemetry()
+        trace_id = "0af7651916cd43dd8448eb211c80319c"
+        context = telemetry.extract_context({"Traceparent": f"00-{trace_id}-b7ad6b7169203331-01"})
+        from opentelemetry import trace
+
+        self.assertEqual(trace_id, f"{trace.get_current_span(context).get_span_context().trace_id:032x}")
+
+    # spec: F36.ac11 — repeated init for the SAME service/config reuses the first
+    # (tracer, meter) deterministically instead of re-installing global providers.
+    def test_init_telemetry_is_idempotent_for_same_service(self) -> None:
+        telemetry = self._load_telemetry()
+        first = telemetry.init_telemetry("scheduler", "1.2.3")
+        second = telemetry.init_telemetry("scheduler", "1.2.3")
+        self.assertEqual(first, second)
+        self.assertIs(first[0], second[0])
+        self.assertIs(first[1], second[1])
+
+    # spec: F36.ac11 — a conflicting service/config fails loud rather than silently
+    # emitting later telemetry under the first initialized service.
+    def test_init_telemetry_rejects_conflicting_service(self) -> None:
+        telemetry = self._load_telemetry()
+        telemetry.init_telemetry("scheduler")
+        with self.assertRaises(RuntimeError):
+            telemetry.init_telemetry("forecast")
+        with self.assertRaises(RuntimeError):
+            telemetry.init_telemetry("scheduler", "9.9.9")
+
     # spec: F36.ac14 — the reference harness creates a client/server trace over stdlib HTTP.
     def test_demo_uses_stdlib_http_client_and_server_with_client_server_spans(self) -> None:
         combined = self.demo_a_source + self.demo_b_source

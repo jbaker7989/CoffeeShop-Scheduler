@@ -52,6 +52,12 @@ _meter_provider: Optional[MeterProvider] = None
 _shutdown_done: bool = False
 _atexit_registered: bool = False
 
+# Records the single service/config this process initialized, and the (tracer,
+# meter) it returned, so a repeat ``init_telemetry`` is deterministic: identical
+# config reuses it, a conflicting one raises instead of silently overwriting the
+# process-global providers (which the SDK sets exactly once).
+_initialized: Optional[dict] = None
+
 
 def init_telemetry(
     service_name: str, service_version: str = "0.1.0"
@@ -66,11 +72,31 @@ def init_telemetry(
 
     Raises ``ValueError`` when ``service_name`` is missing or blank — an anonymous
     service would export as ``unknown_service`` and break the per-agent contract.
+
+    Telemetry providers are process-global and installed exactly once. A repeated
+    call is deterministic: an identical ``(service_name, service_version)`` reuses
+    the first ``(tracer, meter)`` without touching the global providers again, and
+    a conflicting service/config raises ``RuntimeError`` rather than silently
+    overwriting them (which would emit later telemetry under the first service).
     """
-    global _tracer_provider, _meter_provider, _shutdown_done, _atexit_registered
+    global _tracer_provider, _meter_provider, _shutdown_done
+    global _atexit_registered, _initialized
 
     if not isinstance(service_name, str) or not service_name.strip():
         raise ValueError("service_name is required and must be a non-empty string")
+
+    config = (service_name, service_version)
+    if _initialized is not None:
+        if _initialized["config"] == config:
+            return _initialized["tracer"], _initialized["meter"]
+        prior_name, prior_version = _initialized["config"]
+        raise RuntimeError(
+            "init_telemetry is already initialized for service "
+            f"{prior_name!r} (version {prior_version!r}); refusing to reinitialize "
+            f"for {service_name!r} (version {service_version!r}). Telemetry "
+            "providers are process-global and set once — run one service per "
+            "process, or call shutdown() in a fresh process."
+        )
 
     resource = Resource.create(
         {
@@ -117,6 +143,7 @@ def init_telemetry(
 
     tracer = trace.get_tracer(service_name, service_version)
     meter = metrics.get_meter(service_name, service_version)
+    _initialized = {"config": config, "tracer": tracer, "meter": meter}
     return tracer, meter
 
 
@@ -169,10 +196,15 @@ def inject_headers(headers: Dict[str, str]) -> Dict[str, str]:
 def extract_context(headers: Dict[str, str]) -> Context:
     """Return a context parented on the incoming ``traceparent`` in ``headers``.
 
-    The callee MUST start its SERVER span inside this context, otherwise it roots
-    a brand-new trace and the single-trace-id contract is broken.
+    HTTP header names are case-insensitive, but the W3C extractor looks up the
+    lower-case ``traceparent`` / ``tracestate`` / ``baggage`` keys against a plain
+    dict. Clients title-case them on the wire (urllib sends ``Traceparent``), so we
+    normalise keys to lower-case here — callees rely on this helper and need not
+    pre-process headers. Without it the callee would root a brand-new trace and the
+    single-trace-id contract would break.
     """
-    return extract(headers)
+    carrier = {str(key).lower(): value for key, value in headers.items()}
+    return extract(carrier)
 
 
 def shutdown() -> None:

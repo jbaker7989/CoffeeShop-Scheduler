@@ -38,11 +38,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         # Extract the caller's context FIRST, then open the SERVER span inside it.
-        # HTTP header names are case-insensitive and urllib title-cases them
-        # ("Traceparent"), but the W3C extractor looks up lowercase "traceparent",
-        # so normalise keys to lower-case or the server would root a NEW trace.
-        carrier = {k.lower(): v for k, v in self.headers.items()}
-        ctx = extract_context(carrier)
+        # extract_context normalises header case, so the raw request headers are
+        # safe to pass straight through (urllib's "Traceparent" is still honoured).
+        ctx = extract_context(dict(self.headers.items()))
         start = time.perf_counter()
         with _tracer.start_as_current_span(
             "service_b.handle", context=ctx, kind=SpanKind.SERVER
