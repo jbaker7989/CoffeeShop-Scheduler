@@ -553,8 +553,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-030 — Manager UI foundation
 - **Feature:** [F30](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Not started
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Status:** ✅ Done (2026-11-16) — FastAPI gateway (`api/`) reusing `data_access/session.py` for RLS-scoped reads + seeded demo login → HttpOnly JWT cookie; Next.js manager shell (`coffee_shop/`) with same-origin `/api/*` rewrite, auth-gated `(manager)` group, `/login`, `/dashboard` (lists the tenant's stores). 10/10 `test_api_foundation.py` pass (auth→RLS→data, fail-closed 401s, no tenant spoof); `next build` clean. Unblocks CS-061/CS-062/CS-068b/CS-070/CS-031–035. (Live browser walkthrough is the one remaining manual check; API path + build are automated.)
+- **Developer:** Codex (dev) / Claude (tests) · **Started:** 2026-11-16 · **Duration:** ~1d
 - **Description:** Establish the shared manager-facing Next.js application shell and backend boundary.
 - **Detailed specifications:**
   - Choose and document the Next.js-to-backend integration pattern, demo authentication boundary, and LangGraph-state binding convention.

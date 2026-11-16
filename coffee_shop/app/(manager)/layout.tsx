@@ -1,0 +1,58 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import type { ReactNode } from "react";
+import { LogoutButton } from "./logout-button";
+
+type Me = {
+  tenant_slug: string;
+  role: string;
+};
+
+const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:8000";
+
+// Auth-gated shell that reads the session cookie per request — block, render dynamically.
+export const instant = false;
+
+export default async function ManagerLayout({ children }: { children: ReactNode }) {
+  const cookieStore = await cookies();
+  const session = cookieStore.get("session")?.value;
+  const response = await fetch(`${apiBaseUrl}/me`, {
+    cache: "no-store",
+    headers: session ? { Cookie: `session=${session}` } : {},
+  });
+
+  if (response.status === 401) {
+    redirect("/login");
+  }
+
+  if (!response.ok) {
+    throw new Error("Unable to load the current session.");
+  }
+
+  const me = (await response.json()) as Me;
+
+  return (
+    <div className="min-h-screen bg-[#f7f5f0] text-[#1f271f]">
+      <header className="border-b border-[#dbe0d6] bg-white/90 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3 sm:px-6 lg:px-8">
+          <a className="shrink-0 text-base font-bold tracking-tight text-[#284b2e]" href="/dashboard">
+            Coffee Scheduler
+          </a>
+          <nav aria-label="Manager navigation" className="order-3 flex w-full gap-1 sm:order-none sm:w-auto">
+            {["Schedule", "Rules", "Forecast"].map((label) => (
+              <span className="rounded-md px-2.5 py-1.5 text-sm text-[#778176]" key={label}>{label}</span>
+            ))}
+          </nav>
+          <div className="ml-auto flex min-w-0 items-center gap-3">
+            <div className="min-w-0 text-right text-xs leading-4">
+              <p className="truncate font-semibold text-[#354034]">{me.tenant_slug}</p>
+              <p className="capitalize text-[#778176]">{me.role}</p>
+            </div>
+            <LogoutButton />
+          </div>
+        </div>
+      </header>
+      <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">{children}</main>
+    </div>
+  );
+}

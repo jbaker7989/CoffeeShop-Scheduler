@@ -150,7 +150,7 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 The Next.js scaffold at `coffee_shop/app/` exists but is stock `create-next-app` boilerplate — no scheduler routes, no API integration, no components. This section turns it into the manager-facing surface. F30 is the umbrella; F31–F35 are the individual screens.
 
 ### F30. Manager-facing web UI (umbrella)
-- **Status:** Not started (scaffold exists, not wired) · **Size:** M · **Priority:** P1
+- **Status:** ✅ Done (CS-030, 2026-11-16) — `coffee_shop/` wired to a FastAPI gateway (`api/`): same-origin `/api/*` rewrite, seeded demo login → HttpOnly JWT cookie, auth-gated manager shell, dashboard lists the tenant's stores via RLS. Integration pattern documented in `docs/architecture/manager-ui-integration.md`. · **Size:** M · **Priority:** P1
 - **Description:** Claim ownership of `coffee_shop/app/` as the manager-facing surface for the scheduler. This feature owns the decisions the screens below share: Next.js → backend integration pattern (server actions vs API routes vs n8n-mediated), manager auth (single-tenant demo OK to start), the shared layout / navigation, and the convention for how each screen binds to the LangGraph state in F12. Each screen is a separate feature (F31–F35); this is the plumbing they all use.
 - **Expected outcome:** A scaffolded Next.js app a manager can sign into, with shared navigation and a documented integration pattern the screens below can build on.
 
