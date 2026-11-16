@@ -43,6 +43,9 @@ from auth.service import (
 from auth.tokens import OpaqueRefreshTokenService
 
 
+_AUTH_CREDENTIAL_TABLES = ("tenant_users", "auth_refresh_tokens")
+
+
 class GatewayAuthConfigError(RuntimeError):
     """The CS-061a auth boundary could not be wired from the environment. Fail closed."""
 
@@ -125,6 +128,49 @@ def _auth_pool(dsn: str) -> Any:
     )
 
 
+def _validate_auth_database_principal(pool: Any) -> None:
+    """Prove the configured auth connection is the constrained auth-service port.
+
+    The URL alone cannot reliably establish who it authenticates as: role names may be
+    URL-encoded and production login principals are deployment-specific.  Verify the
+    *connected* principal before exposing a gateway: it must not be a superuser or
+    ``BYPASSRLS`` role, must inherit the migration-owned ``auth_svc`` capability, and
+    must not have direct access to the credential tables.  This catches a mistakenly
+    supplied migrator/superuser URL instead of allowing it to serve login traffic.
+    """
+    if pool.closed:
+        pool.open(wait=True)
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT r.rolsuper, r.rolbypassrls, "
+                    "pg_has_role(current_user, 'auth_svc', 'MEMBER') "
+                    "FROM pg_roles AS r WHERE r.rolname = current_user"
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise GatewayAuthConfigError("authenticated database role could not be inspected")
+                is_superuser, bypasses_rls, has_auth_service_membership = row
+                if is_superuser or bypasses_rls or not has_auth_service_membership:
+                    raise GatewayAuthConfigError(
+                        "AUTH_DATABASE_URL must authenticate as a non-superuser, non-BYPASSRLS auth_svc member"
+                    )
+                for table in _AUTH_CREDENTIAL_TABLES:
+                    cur.execute(
+                        "SELECT has_table_privilege(current_user, %s, 'SELECT, INSERT, UPDATE, DELETE')",
+                        (table,),
+                    )
+                    if cur.fetchone()[0]:
+                        raise GatewayAuthConfigError(
+                            "AUTH_DATABASE_URL principal must use auth_* functions, not direct credential-table privileges"
+                        )
+    except GatewayAuthConfigError:
+        raise
+    except Exception as exc:
+        raise GatewayAuthConfigError("AUTH_DATABASE_URL principal validation failed") from exc
+
+
 def build_auth_service_from_env(
     env: Mapping[str, str] | None = None,
     *,
@@ -154,9 +200,16 @@ def build_auth_service_from_env(
     except Exception as exc:  # JWTConfigurationError / ValueError — never echo key material
         raise GatewayAuthConfigError(f"CS-061a auth configuration is invalid: {exc}") from exc
 
+    pool = _auth_pool(dsn)
+    try:
+        _validate_auth_database_principal(pool)
+    except Exception:
+        pool.close()
+        raise
+
     kwargs = {} if now is None else {"now": now}
     return TenantAuthService(
-        repository=PooledAuthRepository(_auth_pool(dsn)),
+        repository=PooledAuthRepository(pool),
         password_service=Argon2idPasswordService(),
         token_service=token_service,
         refresh_token_service=refresh_service,
