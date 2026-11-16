@@ -60,6 +60,15 @@ class Bug022FailClosed(unittest.TestCase):
                 self.assertEqual(conn.execute("SELECT count(*) FROM stores").fetchone()[0], 0)
                 raise Rollback
 
+    # spec: F60.ac2 / BUG-026 — langgraph_checkpoints is fail-closed too (0006 missed it; 0009 swept it).
+    def test_langgraph_checkpoints_fail_closed_on_malformed(self):
+        with psycopg.connect(DSN) as conn:
+            with conn.transaction():
+                self._as_app_rw(conn, "not-a-uuid")
+                n = conn.execute("SELECT count(*) FROM langgraph_checkpoints").fetchone()[0]
+                self.assertEqual(n, 0, "malformed context on langgraph_checkpoints must fail closed, not raise")
+                raise Rollback
+
     # spec: F60.ac2 — a valid tenant context still sees its OWN rows (fix did not over-rotate).
     def test_valid_context_sees_own_rows(self):
         with psycopg.connect(DSN) as conn:

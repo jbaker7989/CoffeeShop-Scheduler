@@ -217,6 +217,27 @@ class CoverageGate(unittest.TestCase):
                 )
                 raise Rollback
 
+    # spec: F68.ac5 / BUG-027 — every tenant policy uses the fail-closed app_current_tenant() form.
+    #   Asserts the policy EXPRESSION (not just FORCE), so a table left on — or reverted to — the throwing
+    #   inline NULLIF(...)::uuid form is caught (this is exactly what BUG-026 was).
+    def test_every_tenant_policy_is_fail_closed(self):
+        with psycopg.connect(DSN) as conn:
+            rows = conn.execute(
+                "SELECT c.relname, p.polname, "
+                "       pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid) "
+                "FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public' AND p.polname IN ('tenant_isolation', 'tenant_self_isolation')"
+            ).fetchall()
+            self.assertTrue(rows, "expected tenant RLS policies to exist")
+            for relname, polname, using_expr, check_expr in rows:
+                for label, expr in (("USING", using_expr), ("WITH CHECK", check_expr)):
+                    self.assertIsNotNone(expr, f"{relname}.{polname}: {label} expression missing")
+                    self.assertIn(
+                        "app_current_tenant", expr,
+                        f"{relname}.{polname}: {label} is not the fail-closed form: {expr}",
+                    )
+
     # spec: F68.ac5 / BUG-020 — tenants enumeration tripwire: app_rw sees ONLY its own tenant row.
     #   Fails loudly if a broken `tenants ... USING (true)` policy is ever applied (the dirty-0001 hazard).
     def test_tenants_enumeration_is_scoped_to_own_row(self):

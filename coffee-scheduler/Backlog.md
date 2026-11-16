@@ -1738,7 +1738,7 @@ closing regression evidence.
 
 ### BUG-026 — F60: `langgraph_checkpoints` still throws on a malformed tenant context (BUG-022 fix incomplete)
 - **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P2 · **Size:** S · **Pattern:** D5/D2 · relates to [[BUG-022]]
-- **Status:** 🐞 Open · **Type:** Defect (incomplete fix — hand-maintained table list drifted) · **Found:** 2026-11-15
+- **Status:** ✅ Fixed (migration `0009` — a **catalog-driven sweep** recreates every `tenant_isolation` policy still on the inline form to `app_current_tenant()`; on the current schema that is `langgraph_checkpoints`, and the sweep is self-correcting for any future drift. Verified: malformed context on `langgraph_checkpoints` now yields 0 rows, 0 inline-form policies remain. Tests: `test_langgraph_checkpoints_fail_closed_on_malformed` + the BUG-027 gate assertion) · **Type:** Defect (incomplete fix — hand-maintained table list drifted) · **Found:** 2026-11-15
 - **Developer:** Unassigned · **Duration:** ~0.5d (est.)
 - **Description:** Migration `0006` (BUG-022) swaps every `tenant_isolation` policy to the fail-closed
   `tenant_id = app_current_tenant()` form, but its `TENANT_TABLES` list was copied from `0001` and does **not**
@@ -1761,7 +1761,7 @@ closing regression evidence.
 
 ### BUG-027 — F68: isolation gate asserts FORCE but not the fail-closed policy EXPRESSION
 - **Feature:** [F68](./FEATURES.md) (CS-068a) · **Priority:** P2 · **Size:** XS · **Pattern:** D3 · relates to [[BUG-026]]
-- **Status:** 🐞 Open · **Type:** Defect (test coverage gap — let BUG-026 through) · **Found:** 2026-11-15
+- **Status:** ✅ Fixed (isolation gate now asserts the policy **expression**: `test_every_tenant_policy_is_fail_closed` checks every `tenant_isolation`/`tenant_self_isolation` policy's USING **and** WITH CHECK reference `app_current_tenant` — would have gone red on BUG-026) · **Type:** Defect (test coverage gap — let BUG-026 through) · **Found:** 2026-11-15
 - **Developer:** Unassigned · **Duration:** ~0.25d (est.)
 - **Description:** `test/test_isolation_gate.py` asserts `relforcerowsecurity` on every tenant table and
   partition, but never asserts the policy *qual* is the fail-closed `app_current_tenant()` form. That is why
