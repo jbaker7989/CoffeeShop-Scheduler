@@ -651,9 +651,9 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
   - List the emitted spans in each relevant agent `AGENTS.md`.
 
 ### CS-038 — OTel Collector deployment
-- **Feature:** [F38](./FEATURES.md) · **Priority:** P2 · **Size:** S
-- **Status:** Not started
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Feature:** [F38](./FEATURES.md) · **Priority:** P2 · **Size:** S · **Plan:** [docs/plans/CS-038-otel-collector.md](./docs/plans/CS-038-otel-collector.md)
+- **Status:** ✅ Done — `otel/collector-config.yaml` + root `docker-compose.observability.yml`; pinned `otel/opentelemetry-collector-contrib:0.164.0`; 12/12 spec tests pass (static + Docker validate + isolated OTLP error-trace retention); F38 AC1–AC11 verified (2026-11-15).
+- **Developer:** Claude · **Started:** 2026-11-15 · **Duration:** ~1d
 - **Description:** Version and run the shared telemetry Collector.
 - **Detailed specifications:**
   - Add `otel/collector-config.yaml` with OTLP receivers, batching, resource attributes and tail sampling.
@@ -1880,7 +1880,7 @@ closing regression evidence.
 | CS-035 | F35 | P2 | S | Not started |
 | CS-036 | F36 | P2 | M | Not started |
 | CS-037 | F37 | P2 | M | Not started |
-| CS-038 | F38 | P2 | S | Not started |
+| CS-038 | F38 | P2 | S | ✅ Done — pinned OTel Collector config + `docker-compose.observability.yml`; AC1–AC11 verified, 12/12 tests |
 | CS-039 | F39 | P2 | M | Not started |
 | CS-040 | F40 | P2 | S | Not started |
 | CS-041 | F41 | P2 | S | Not started |

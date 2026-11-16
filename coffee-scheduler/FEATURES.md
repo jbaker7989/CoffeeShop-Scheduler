@@ -350,8 +350,22 @@ OpenTelemetry is the chosen observability framework. F18 ("Observability across 
 - **Expected outcome:** Every agent boundary, tool call and internal step is a span — all sharing one `trace_id` across the call chain.
 
 ### F38. OTel Collector deployment
-- **Status:** Not started · **Size:** S · **Priority:** P2
+- **Status:** Done (CS-038, 2026-11-15) · **Size:** S · **Priority:** P2 · Plan: [docs/plans/CS-038-otel-collector.md](./docs/plans/CS-038-otel-collector.md)
 - **Description:** Deploy the OTel Collector as a single Docker Compose service. Receivers: OTLP/gRPC + OTLP/HTTP on standard ports. Processors: tail-based sampling (keep 100% of errors, 10% of success), batch, resource attributes (`service.name`, `service.version`, `deployment.environment`). Exporters: Tempo (traces), Mimir via `prometheusremotewrite` (metrics), Loki (logs). Config versioned at `coffee-scheduler/otel/collector-config.yaml`.
+- **Acceptance criteria:**
+  1. **AC1** — `otel/collector-config.yaml` exposes OTLP receivers bound to `0.0.0.0:4317` (gRPC) and `0.0.0.0:4318` (HTTP).
+  2. **AC2** — The traces `tail_sampling` processor keeps 100% of error traces (a `status_code`/`ERROR` policy) and samples the remaining traces at 10% (a `probabilistic` policy at `sampling_percentage: 10`).
+  3. **AC3** — The traces pipeline processor order is `memory_limiter` first, `tail_sampling` before `batch`, and `batch` last.
+  4. **AC4** — A `resource` processor upserts `deployment.environment`, and `service.name`, `service.version` and `deployment.environment` are the config's documented resource attributes.
+  5. **AC5** — Every pipeline (traces, metrics, logs) includes the `debug` exporter; traces also export to Tempo via `otlp`, metrics to Mimir via `prometheusremotewrite`, and logs to Loki via `otlphttp`.
+  6. **AC6** — Each backend exporter sets `retry_on_failure` so an unreachable backend is non-fatal (the Collector keeps ingesting to `debug`).
+  7. **AC7** — The `health_check` extension binds `0.0.0.0:13133` and is listed in `service.extensions`.
+  8. **AC8** — The `otel-collector` Compose service defines no `sh`/`bash`/`curl`/`wget` healthcheck (the image is distroless).
+  9. **AC9** — The Compose service pins `otel/opentelemetry-collector-contrib` to an exact (non-`latest`) tag at least two weeks old.
+  10. **AC10** — `otelcol-contrib validate` under the pinned image accepts the committed config and rejects a deliberately invalid config.
+  11. **AC11** — In an isolated bring-up, an OTLP error trace pushed to the Collector is ingested and retained via the `debug` exporter (tail sampling keeps errors).
+- **Edge / adversarial:** an invalid/absent config fails `validate` and the suite; the Collector comes up healthy with Tempo/Mimir/Loki absent; a shell/curl healthcheck on the distroless image is rejected.
+- **Cross-references:** F39, F41, root `docker-compose.observability.yml`, and agent SDKs that set `service.name`/`service.version`.
 - **Expected outcome:** A running Collector that receives from every agent and ships to all three backends, configured in version control.
 
 ### F39. LGTM backends (Tempo, Mimir, Loki)
