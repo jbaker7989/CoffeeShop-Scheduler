@@ -18,7 +18,9 @@ export default function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("/api/auth/login", {
+      // CS-061a browser transport: the gateway returns only HttpOnly cookies (access + refresh);
+      // no token is ever exposed to client JavaScript. Same-origin so the Set-Cookie is stored.
+      const response = await fetch("/auth/browser/login", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },

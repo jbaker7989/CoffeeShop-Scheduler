@@ -22,7 +22,7 @@ from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 
-from auth.api import create_auth_router
+from auth.api import BrowserCookieConfig, create_auth_router
 from auth.service import AuthenticationError, Principal, TenantAuthService
 
 from .auth_gateway import ACCESS_COOKIE_NAME, build_auth_service_from_env, extract_access_credential
@@ -31,6 +31,14 @@ from .config import COOKIE_SECURE
 
 BROWSER_REFRESH_COOKIE = "refresh_token"
 BROWSER_REFRESH_PATH = "/auth/browser"
+
+# Deployment cookie attributes for the browser transport. The CS-061a contract defaults
+# (HttpOnly, SameSite=Strict, access at Path=/, refresh at Path=/auth/browser) are kept; only
+# ``secure`` follows COOKIE_SECURE so the local HTTP demo can store the cookies while production
+# HTTPS keeps Secure. The manager UI calls the browser-auth routes at the same ``/auth/browser``
+# path family (via a same-origin rewrite), so the refresh cookie's Path matches without coupling
+# the gateway to the frontend's ``/api`` prefix.
+_BROWSER_COOKIE_CONFIG = BrowserCookieConfig(secure=COOKIE_SECURE)
 
 
 def create_app(
@@ -50,7 +58,7 @@ def create_app(
     app = FastAPI()
 
     # The four CS-061a auth routes + /.well-known/jwks.json. This is the single owner of /auth/login.
-    app.include_router(create_auth_router(auth_service))
+    app.include_router(create_auth_router(auth_service, cookie_config=_BROWSER_COOKIE_CONFIG))
 
     def current_principal(request: Request) -> Principal:
         # Tenant/user/role are established only from the reconciled access-token claims.

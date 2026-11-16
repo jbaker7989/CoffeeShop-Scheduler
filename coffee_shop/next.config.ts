@@ -13,6 +13,14 @@ const nextConfig: NextConfig = {
         source: "/api/:path*",
         destination: `${apiBaseUrl}/:path*`,
       },
+      // CS-061a browser auth (BUG-036): proxy the browser login/refresh routes at their own path
+      // so the gateway's HttpOnly refresh cookie (Path=/auth/browser) is sent to the refresh
+      // endpoint on this same origin. These carry only HttpOnly cookies — no token is ever read by
+      // client JavaScript.
+      {
+        source: "/auth/browser/:path*",
+        destination: `${apiBaseUrl}/auth/browser/:path*`,
+      },
     ];
   },
   turbopack: {

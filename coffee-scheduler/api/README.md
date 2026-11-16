@@ -43,12 +43,23 @@ demo credentials.
 
 Tenant-scoped reads establish RLS as `app_rw` using only the reconciled `tenant_id`.
 
-## CS-030 compatibility / migration
+## Manager UI integration (BUG-035 + BUG-036)
 
-The Next.js manager shell still authenticates with the legacy `session` cookie. Migrating it
-to the CS-061a browser `access_token` cookie — together with CSRF/CORS and routing policy — is
-**CS-070** (frontend session UX) and is tracked separately. This backend cutover does not
-weaken any CS-061a contract and leaves the non-auth CS-030 behaviours (`/healthz`, RLS-scoped
-`/stores`, `/me`, fail-closed 401s, no tenant spoofing) intact on the new boundary. The dormant
-`api.auth` demo helper and the optional `SESSION_SECRET`/`DEMO_MANAGER_*` settings remain only
-for local experimentation and are never used by the production app.
+The Next.js manager shell (`coffee_shop/`) now authenticates with the CS-061a browser transport:
+
+- The login page posts to `/auth/browser/login` (same-origin), so the gateway sets the
+  `HttpOnly; SameSite=Strict` access/refresh cookies and no token is ever read by client JS.
+- `middleware.ts` gates on the `access_token` cookie; the server components (`(manager)/layout`,
+  `dashboard`) forward only that cookie to `/me` and `/stores`, and the gateway derives the tenant
+  from the reconciled claims. Logout posts `/api/auth/logout`, which clears both cookies.
+- The frontend proxies the browser-auth routes at their own `/auth/browser/:path*` rewrite so the
+  refresh cookie (`Path=/auth/browser`) is sent to the refresh endpoint on the same origin; the
+  gateway keeps the CS-061a cookie-path defaults (no coupling to the frontend's `/api` prefix) and
+  only overrides `secure` with `COOKIE_SECURE` so local HTTP dev can store the cookies.
+
+Access tokens live 15 minutes; when one expires the protected pages fail closed to `/login`.
+Automatic silent refresh in the UI and the broader CSRF/CORS + tenant-routing policy remain
+**CS-070** follow-ups — out of scope here, but the refresh endpoint is reachable and tested so the
+capability exists. The dormant `api.auth` demo helper and the optional `SESSION_SECRET` /
+`DEMO_MANAGER_*` settings remain only for local experimentation and are never used by the
+production app; the legacy `session` cookie is accepted nowhere.

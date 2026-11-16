@@ -4,21 +4,24 @@ import type { ReactNode } from "react";
 import { LogoutButton } from "./logout-button";
 
 type Me = {
-  tenant_slug: string;
+  tenant_id: string;
+  user_id: string;
   role: string;
 };
 
 const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:8000";
 
-// Auth-gated shell that reads the session cookie per request — block, render dynamically.
+// Auth-gated shell that reads the CS-061a access-token cookie per request — block, render dynamically.
 export const instant = false;
 
 export default async function ManagerLayout({ children }: { children: ReactNode }) {
   const cookieStore = await cookies();
-  const session = cookieStore.get("session")?.value;
+  const accessToken = cookieStore.get("access_token")?.value;
+  // Forward ONLY the access-token cookie as the single credential the gateway reconciles; the
+  // tenant is derived from the signed claims, never from anything the client could set.
   const response = await fetch(`${apiBaseUrl}/me`, {
     cache: "no-store",
-    headers: session ? { Cookie: `session=${session}` } : {},
+    headers: accessToken ? { Cookie: `access_token=${accessToken}` } : {},
   });
 
   if (response.status === 401) {
@@ -45,8 +48,8 @@ export default async function ManagerLayout({ children }: { children: ReactNode 
           </nav>
           <div className="ml-auto flex min-w-0 items-center gap-3">
             <div className="min-w-0 text-right text-xs leading-4">
-              <p className="truncate font-semibold text-[#354034]">{me.tenant_slug}</p>
-              <p className="capitalize text-[#778176]">{me.role}</p>
+              <p className="capitalize truncate font-semibold text-[#354034]">{me.role}</p>
+              <p className="truncate font-mono text-[#778176]" title={me.tenant_id}>{me.tenant_id.slice(0, 8)}</p>
             </div>
             <LogoutButton />
           </div>

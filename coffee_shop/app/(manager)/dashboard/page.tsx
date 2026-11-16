@@ -19,10 +19,12 @@ export const instant = false;
 
 export default async function DashboardPage() {
   const cookieStore = await cookies();
-  const session = cookieStore.get("session")?.value;
+  const accessToken = cookieStore.get("access_token")?.value;
+  // Tenant-scoped data: forward only the access-token cookie; the gateway opens the app_rw RLS
+  // read with the reconciled claim tenant_id, so a client cannot select another tenant's rows.
   const response = await fetch(`${apiBaseUrl}/stores`, {
     cache: "no-store",
-    headers: session ? { Cookie: `session=${session}` } : {},
+    headers: accessToken ? { Cookie: `access_token=${accessToken}` } : {},
   });
 
   if (response.status === 401) {
