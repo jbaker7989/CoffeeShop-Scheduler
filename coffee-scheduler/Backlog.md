@@ -1824,6 +1824,67 @@ closing regression evidence.
 - **Risk if unfixed:** low today; becomes a real injection/escalation surface if the function is ever made
   `SECURITY DEFINER` or its body is extended, with no guard in place.
 
+### BUG-031 — F30: API gateway connection pool is never closed (unclean shutdown)
+- **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P2 · **Size:** XS · **Pattern:** D7
+- **Status:** 🐞 Open · **Type:** Defect (resource lifecycle) · **Found:** 2026-11-16
+- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Description:** `api/db.py` creates a module-level `psycopg_pool.ConnectionPool` but never closes it. At
+  interpreter shutdown its `__del__` tries to join the pool's worker thread, raising
+  `PythonFinalizationError: cannot join thread at interpreter shutdown`. Under uvicorn the pool is also not
+  drained on app shutdown, leaking server-side connections on reload/restart.
+- **Reproduction (verified 2026-11-16):** running `test_api_foundation.py` prints
+  `Exception ignored while calling deallocator <ConnectionPool.__del__>: PythonFinalizationError` after the
+  suite passes.
+- **Specification (write first):** a test asserting the app closes the pool on shutdown (no finalizer error;
+  pool `.closed` after the lifespan exits).
+- **Proposed fix:** register a FastAPI `lifespan` (or shutdown handler) that calls `pool.close()`; open the
+  pool on startup rather than lazily. Keeps tests clean and avoids leaked backends.
+- **Risk if unfixed:** leaked PgBouncer/Postgres connections across restarts; noisy finalizer errors mask real
+  shutdown problems.
+
+### BUG-032 — F30: Next middleware is deprecated in Next 16 and gates only `/dashboard`
+- **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P3 · **Size:** XS · **Pattern:** D9
+- **Status:** 🐞 Open · **Type:** Defect (deprecation + narrow matcher) · **Found:** 2026-11-16
+- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Description:** `coffee_shop/middleware.ts` triggers Next 16's `middleware-to-proxy` deprecation warning
+  (middleware is renamed to `proxy.ts`), and its `config.matcher` covers only `/dashboard/:path*`. When more
+  `(manager)` routes land (CS-031–035), they won't be presence-gated by middleware — they'd rely solely on the
+  layout's `/me` 401-redirect (defense-in-depth exists, but the first-line gate wouldn't fire).
+- **Specification (write first):** a test/check that every authenticated route redirects an unauthenticated
+  request to `/login` (not just `/dashboard`).
+- **Proposed fix:** migrate to `proxy.ts` (the codemod), and broaden the matcher to all authenticated routes
+  while excluding `/login`, `/api`, and Next internals.
+- **Risk if unfixed:** a future deprecation removal breaks the gate; new manager routes ship without the
+  first-line auth redirect.
+
+### BUG-033 — F30: demo manager password falls back to a known default when env is unset
+- **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P2 · **Size:** XS · **Pattern:** D2
+- **Status:** 🐞 Open · **Type:** Defect (insecure default) · **Found:** 2026-11-16
+- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Description:** `api/config.py` hashes a hard-coded default password (`demo-pass-change-me`) when neither
+  `DEMO_MANAGER_PASSWORD_HASH` nor `DEMO_MANAGER_PASSWORD` is set, so the demo runs out of the box. A
+  deployment that forgets to set them ships a **publicly known** manager credential.
+- **Specification (write first):** a test asserting that in prod mode (`COOKIE_SECURE=true`) startup **fails
+  closed** unless a password hash is explicitly provided.
+- **Proposed fix:** require `DEMO_MANAGER_PASSWORD_HASH` (raise at startup) whenever `COOKIE_SECURE=true` /
+  non-dev; keep the convenience default for local dev only, behind a loud log warning. (Superseded once CS-061
+  provides real `tenant_users` auth.)
+- **Risk if unfixed:** a known-password manager login reachable in any non-local deployment.
+
+### BUG-034 — F30: API gateway has no CORS/exposure policy (must stay internal)
+- **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P3 · **Size:** XS · **Pattern:** D5 · relates to [[CS-070]]
+- **Status:** 🐞 Open · **Type:** Gap (deployment/security boundary) · **Found:** 2026-11-16
+- **Description:** The gateway sets the `session` cookie and is reachable directly on its port. The design is
+  **same-origin only** (browser → Next → rewrite → gateway), so the gateway must never be internet-exposed; it
+  currently has no CORS policy and no binding guidance, so a misconfigured deployment could expose it directly
+  (where a cross-origin page could drive `/auth/login` against it).
+- **Specification (write first):** document that the gateway binds to localhost/internal only and is reached
+  solely via the Next rewrite; optionally a deny-by-default CORS config asserted by a test.
+- **Proposed fix:** bind the gateway to an internal interface; document the "never public" rule in
+  `api/README.md`; fold the public edge (CORS locked to tenant origins) into CS-070's web-security work.
+- **Risk if unfixed:** direct gateway exposure bypasses the same-origin assumptions behind the cookie/CSRF
+  model.
+
 ---
 
 ## Backlog summary
