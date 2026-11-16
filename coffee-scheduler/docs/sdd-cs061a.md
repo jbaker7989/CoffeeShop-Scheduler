@@ -1,7 +1,7 @@
 # CS-061a — Core tenant authentication SDD
 
-**Feature:** F61 AC1–AC2  
-**Status:** implementation-ready; specification and red tests precede implementation  
+**Feature:** F61 AC1–AC2
+**Status:** implementation-ready; specification and red tests precede implementation
 **Scope:** tenant-user identity storage, credential verification, asymmetric access JWTs,
 opaque refresh rotation, and the four backend auth transports.
 
