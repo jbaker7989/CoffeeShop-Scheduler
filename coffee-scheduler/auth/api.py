@@ -113,6 +113,24 @@ def _set_browser_cookies(response: Response, tokens: IssuedTokens, cfg: BrowserC
     _set_cookie(response, name=cfg.access_name, value=tokens.access_token, path=cfg.access_path, max_age=tokens.expires_in, cfg=cfg)
 
 
+def _cookie_pair_count(request: Request, name: str) -> int:
+    """Count an exact cookie name in the raw ``Cookie`` headers.
+
+    ``Request.cookies`` (and therefore FastAPI's ``Cookie`` dependency) collapses
+    duplicate names.  That is convenient for ordinary cookies but unsafe for the
+    browser refresh credential: a proxy and the application can disagree about
+    which duplicate value is authoritative.  Treat duplicate refresh-cookie pairs
+    as malformed instead of silently selecting one of them.
+    """
+    count = 0
+    for header in request.headers.getlist("cookie"):
+        for pair in header.split(";"):
+            cookie_name, separator, _ = pair.strip().partition("=")
+            if separator and cookie_name == name:
+                count += 1
+    return count
+
+
 def create_auth_router(
     service: TenantAuthService, *, cookie_config: BrowserCookieConfig | None = None
 ) -> APIRouter:
@@ -159,7 +177,7 @@ def create_auth_router(
         # cookie plus a body refresh_token) and is rejected, not silently honoured.
         if (await request.body()).strip():
             raise _mixed_transport()
-        if not refresh_token:
+        if _cookie_pair_count(request, cfg.refresh_name) != 1 or not refresh_token:
             raise _unauthorized()
         try:
             tokens = service.refresh_browser(refresh_token=refresh_token)
