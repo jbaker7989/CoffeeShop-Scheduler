@@ -1736,6 +1736,94 @@ closing regression evidence.
 - **Risk if unfixed:** silent empty results under a misconfigured pool, and role state bleeding across
   tenants' pooled connections.
 
+### BUG-026 — F60: `langgraph_checkpoints` still throws on a malformed tenant context (BUG-022 fix incomplete)
+- **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P2 · **Size:** S · **Pattern:** D5/D2 · relates to [[BUG-022]]
+- **Status:** 🐞 Open · **Type:** Defect (incomplete fix — hand-maintained table list drifted) · **Found:** 2026-11-15
+- **Developer:** Unassigned · **Duration:** ~0.5d (est.)
+- **Description:** Migration `0006` (BUG-022) swaps every `tenant_isolation` policy to the fail-closed
+  `tenant_id = app_current_tenant()` form, but its `TENANT_TABLES` list was copied from `0001` and does **not**
+  include `langgraph_checkpoints` (created later, in `0003`). That table's policy is therefore still the old
+  throwing inline form `tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid`. Fail-closed is
+  now **inconsistent across tables**: a malformed/non-UUID `app.tenant_id` yields 0 rows everywhere BUT the
+  LangGraph checkpoint store, where it 500s — the exact BUG-022 failure, on the agent's own checkpoint reads.
+- **Reproduction (verified 2026-11-15):** `SET LOCAL ROLE app_rw; SELECT set_config('app.tenant_id','not-a-uuid',true);
+  SELECT count(*) FROM langgraph_checkpoints;` → `ERROR: invalid input syntax for type uuid: "not-a-uuid"`
+  (whereas the same against `stores` returns 0 rows). `pg_policy` shows `langgraph_checkpoints` using the
+  inline `NULLIF(...)::uuid` form while every other table uses `app_current_tenant()`.
+- **Specification (write first):** a test asserting EVERY `tenant_isolation` policy (every tenant-scoped base
+  table + partition child) uses the fail-closed `app_current_tenant()` form, and that a malformed context on
+  `langgraph_checkpoints` yields 0 rows, never a cast error.
+- **Proposed fix:** migration `0008` swaps `langgraph_checkpoints` to `tenant_id = app_current_tenant()`; to
+  prevent recurrence, **derive the swap set from the catalog** (every relation carrying a `tenant_isolation`
+  policy) rather than a hand-maintained Python list, so no future table is silently missed. Closes with BUG-027.
+- **Risk if unfixed:** a hostile or buggy token can DoS the agent's checkpoint store with 500s instead of
+  failing closed, and the "every table is fail-closed" guarantee (F60.AC2) is false.
+
+### BUG-027 — F68: isolation gate asserts FORCE but not the fail-closed policy EXPRESSION
+- **Feature:** [F68](./FEATURES.md) (CS-068a) · **Priority:** P2 · **Size:** XS · **Pattern:** D3 · relates to [[BUG-026]]
+- **Status:** 🐞 Open · **Type:** Defect (test coverage gap — let BUG-026 through) · **Found:** 2026-11-15
+- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Description:** `test/test_isolation_gate.py` asserts `relforcerowsecurity` on every tenant table and
+  partition, but never asserts the policy *qual* is the fail-closed `app_current_tenant()` form. That is why
+  BUG-026 (a table left on the throwing inline form) passed the gate green. FORCE can be correct while the
+  policy still 500s on malformed input.
+- **Reproduction:** `langgraph_checkpoints` has FORCE RLS and is in the gate's allow-list, yet 500s on a
+  non-UUID context (BUG-026) — the gate stays green.
+- **Specification (write first):** extend the coverage meta-test to assert `pg_get_expr(polqual, polrelid)`
+  references `app_current_tenant` for every `tenant_isolation` policy (base tables + partition children).
+- **Proposed fix:** add the policy-expression assertion to `CoverageGate`; it then fails until BUG-026 lands.
+- **Risk if unfixed:** a future migration can revert any table to the throwing/`USING(true)` form while the
+  gate stays green — the gate does not actually verify the isolation *rule*, only that RLS is forced.
+
+### BUG-028 — F68: gate coverage test is brittle against future (non-default) partitions
+- **Feature:** [F68](./FEATURES.md) (CS-068a) · **Priority:** P3 · **Size:** XS · **Pattern:** D9
+- **Status:** 🐞 Open · **Type:** Defect (test brittleness — false failure on a legitimate schema change) · **Found:** 2026-11-15
+- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Description:** `test_every_tenant_id_table_is_covered_and_forced` excludes partition children by **name**
+  (`table_name NOT LIKE '%_default'`). Partition children inherit the `tenant_id` column, so a future period
+  partition (e.g. `transactions_2026_01`) would appear in the scan, not match `%_default`, not be in the
+  allow-list, and **fail the gate on a legitimate ops partition add**.
+- **Reproduction (verified 2026-11-15):** the `*_default` children already appear in
+  `information_schema.columns` with a `tenant_id` column; only the `%_default` name filter hides them. A
+  non-default child name would slip past the filter and trip the allow-list assertion.
+- **Specification (write first):** the coverage test excludes partition children **structurally** (via
+  `pg_inherits` / `pg_partitioned_table`), not by name, and partition children are instead verified by the
+  partition-RLS assertion (BUG-021 coverage).
+- **Proposed fix:** replace the `NOT LIKE '%_default'` filter with "not a partition child" via `pg_inherits`.
+- **Risk if unfixed:** the P0 isolation gate blocks merges whenever ops adds a time-range partition — a
+  self-inflicted CI outage that pressures teams to weaken the gate.
+
+### BUG-029 — F68: pooled context-bleed is proven only at the `SET LOCAL` level, not through PgBouncer
+- **Feature:** [F68](./FEATURES.md) (CS-068a, ties CS-068b) · **Priority:** P3 · **Size:** S · **Pattern:** D3
+- **Status:** 🐞 Open · **Type:** Gap (uncovered integration edge) · **Found:** 2026-11-15
+- **Developer:** Unassigned · **Duration:** ~1d (est.)
+- **Description:** The gate's `ContextBleed` test reuses a single psycopg connection across two transactions
+  and proves `SET LOCAL` transaction-locality (the underlying mechanism). It does **not** exercise the real
+  hazard F68.AC3 names: PgBouncer in transaction mode handing one physical backend to two different logical
+  clients. The mechanism is proven; the end-to-end pooled path is not.
+- **Specification (write first):** an integration test that routes two tenants' sessions through PgBouncer
+  (port 6432, transaction mode) over the same pool and asserts tenant A's role/GUC never reaches tenant B's
+  reuse of the physical connection.
+- **Proposed fix:** add a PgBouncer-in-the-loop integration test (fits CS-068b's suite); keep the existing
+  unit-level `SET LOCAL` assertion as the fast first line.
+- **Risk if unfixed:** a pooling misconfiguration (e.g. session vs transaction mode, or a non-local `SET
+  ROLE`) that leaks context across tenants would pass the current gate.
+
+### BUG-030 — F60: `app_current_tenant()` has no pinned `search_path`
+- **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P3 · **Size:** XS · **Pattern:** D5
+- **Status:** 🐞 Open · **Type:** Hardening (defense-in-depth) · **Found:** 2026-11-15
+- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Description:** The fail-closed helper `app_current_tenant()` (migration `0006`) is `STABLE` and runs as
+  invoker (not `SECURITY DEFINER`), so a hijacked `search_path` is not a privilege-escalation today. But it
+  references only built-ins; pinning `SET search_path = pg_catalog` is standard hardening and future-proofs it
+  if the body ever grows or the function is later marked `SECURITY DEFINER`.
+- **Specification (write first):** a test asserting `app_current_tenant()` has a pinned `search_path`
+  (`proconfig` contains `search_path=pg_catalog`).
+- **Proposed fix:** `ALTER FUNCTION app_current_tenant() SET search_path = pg_catalog` (or include it in the
+  `CREATE FUNCTION` in a follow-up migration).
+- **Risk if unfixed:** low today; becomes a real injection/escalation surface if the function is ever made
+  `SECURITY DEFINER` or its body is extended, with no guard in place.
+
 ---
 
 ## Backlog summary
