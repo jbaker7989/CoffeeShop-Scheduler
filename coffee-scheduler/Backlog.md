@@ -843,12 +843,12 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 
 ### CS-061 — Auth + per-tenant RBAC (umbrella)
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** M
-- **Status:** Blocked (on CS-060)
+- **Status:** ◑ Partial — CS-061a core auth is ✅ Done; CS-061b hardening and CS-061c invitations/audit remain.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~6d (est., sum of sub-stories)
 - **Description:** Identity, roles, tokens, and the full auth-hardening surface. Blocks every UI route.
 
 #### CS-061a — Core auth (users, roles, login, JWT)
-- **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** Blocked
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** ✅ Done (2026-11-16) — Argon2id tenant identities, least-privileged/RLS-safe auth persistence, RS256/JWKS login, strict browser cookies, refresh rotation/reuse detection, a fail-closed gateway cutover, and manager UI one-shot refresh recovery. Independent release validation: 8 auth contracts + 3 cookie regressions + 13 gateway + 12 manager UI + 9 CS-030 + 14 live RLS checks; Next tests/lint/build pass. BUG-035–037 resolved.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Detailed specifications:**
   - `tenant_users` (roles `owner`/`manager`/`staff`/`read_only`, per-tenant email uniqueness) + `saas_admins` (MFA); argon2id hashing (F61.AC1).
@@ -1887,7 +1887,7 @@ closing regression evidence.
 
 ### BUG-035 — F61/CS-030: production gateway still serves legacy demo auth at `/auth/login`
 - **Feature:** [F61](./FEATURES.md) (CS-061a) / [F30](./FEATURES.md) (CS-030) · **Priority:** P0 · **Size:** M · **Pattern:** D1/D2
-- **Status:** 🐞 Open · **Type:** Integration/security-boundary defect · **Found:** 2026-11-16
+- **Status:** ✅ Resolved (CS-061a, 2026-11-16) · **Type:** Integration/security-boundary defect · **Found:** 2026-11-16
 - **Developer:** Unassigned · **Duration:** ~3d (est.)
 - **Root cause:** CS-061a supplies an unmounted `auth.api.create_auth_router(...)`, while the deployed
   `api.app` continues to declare `POST /auth/login` itself. That legacy handler authenticates only the
@@ -1920,7 +1920,7 @@ closing regression evidence.
 
 ### BUG-036 — F30/CS-070: manager UI remains wired to the retired `session` cookie after gateway cutover
 - **Feature:** [F30](./FEATURES.md) (CS-030) / [F70](./FEATURES.md) (CS-070) · **Priority:** P0 · **Size:** M · **Pattern:** D1
-- **Status:** 🐞 Open · **Type:** Compatibility regression / incomplete cutover · **Found:** 2026-11-16
+- **Status:** ✅ Resolved (CS-061a, 2026-11-16) · **Type:** Compatibility regression / incomplete cutover · **Found:** 2026-11-16
 - **Developer:** Unassigned · **Duration:** ~3d (est.)
 - **Root cause:** the CS-061a gateway cutover removes the legacy HS256 `session` authentication route and
   accepts only an RS256 bearer access token or `access_token` cookie, but the checked-in Next manager app
@@ -1951,7 +1951,7 @@ closing regression evidence.
 
 ### BUG-037 — F30/CS-070: manager UI never uses the CS-061a browser refresh credential
 - **Feature:** [F30](./FEATURES.md) (CS-030) / [F70](./FEATURES.md) (CS-070) · **Priority:** P1 · **Size:** S · **Pattern:** D1
-- **Status:** 🐞 Open · **Type:** Session continuity gap · **Found:** 2026-11-16
+- **Status:** ✅ Resolved (CS-061a, 2026-11-16) · **Type:** Session continuity gap · **Found:** 2026-11-16
 - **Developer:** Unassigned · **Duration:** ~1d (est.)
 - **Root cause:** the BUG-036 migration changes login, middleware, and server components to use the
   short-lived `access_token`, and correctly proxies `/auth/browser/refresh`, but no UI/middleware/route
@@ -2063,8 +2063,8 @@ closing regression evidence.
 | CS-060a | F60 | P0 | M | ✅ Done via `0001` — tenant-aware schema + composite indexes + maven-demo seed (greenfield) |
 | CS-060b | F60 | P0 | S | ✅ Done via `0001` — FORCE RLS + NULLIF policy + non-owner app_rw; hardening BUG-020/021 |
 | CS-060c | F60 | P0 | S | ◑ Partial — SET LOCAL pattern impl + RLS-verified; reusable middleware + BUG-025 remain |
-| CS-061 | F61 | P0 | M | Blocked (umbrella) |
-| CS-061a | F61 | P0 | M | Blocked |
+| CS-061 | F61 | P0 | M | Partial — CS-061a done |
+| CS-061a | F61 | P0 | M | ✅ Done |
 | CS-061b | F61 | P0 | S | Blocked |
 | CS-061c | F61 | P1 | M | Blocked |
 | CS-062 | F62 | P0 | M | Blocked |

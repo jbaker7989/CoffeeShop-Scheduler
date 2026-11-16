@@ -509,7 +509,7 @@ Convert the single-tenant deployment into a multi-tenant SaaS serving SMB coffee
   - **Cross-refs:** PLAN §2 + §7 + §15.1; architecture §2 + §14.1; defect stories BUG-020…BUG-025.
 
 ### F61. Auth + per-tenant RBAC
-- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Status:** ◑ Partial — CS-061a core auth is complete (Argon2id tenant identities, RS256/JWKS, rotating refresh, gateway/UI cutover); CS-061b hardening and CS-061c invitations/audit remain. · **Size:** M · **Priority:** P0
 - **Description:** `tenant_users` table (per-tenant users with `owner` / `manager` / `staff` / `read_only` roles); `saas_admins` table for cross-tenant admins with MFA; argon2id password hashing; email + password login (no SSO in MVP); JWT issuance with `tenant_id`, `user_id`, `role`, `is_saas_admin` claims; impersonation flow with audit logging. Per-tenant email uniqueness — the same email can register in two tenants (common for SMB owners).
 - **Expected outcome:** Every authenticated request carries a tenant context; SaaS admins can act on any tenant with full audit trail.
 - **Acceptance criteria:**
