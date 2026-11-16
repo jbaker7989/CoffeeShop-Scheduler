@@ -124,11 +124,25 @@ class OtelFoundationContractTests(unittest.TestCase):
 
     # spec: F36.ac10 — shutdown synchronously drains short-lived-process telemetry.
     def test_shutdown_force_flushes_before_provider_shutdown(self) -> None:
-        shutdown = ast.get_source_segment(ast.parse(self.telemetry_source), next(
-            node for node in ast.walk(ast.parse(self.telemetry_source))
+        tree = ast.parse(self.telemetry_source)
+        shutdown = ast.get_source_segment(self.telemetry_source, next(
+            node for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == "shutdown"
         ))
-        self.assertLess(shutdown.index("force_flush"), shutdown.index("shutdown"))
+        flush_positions = [match.start() for match in re.finditer(r"\.force_flush\(\)", shutdown)]
+        provider_shutdown_positions = [
+            match.start() for match in re.finditer(r"_\w+_provider\.shutdown\(\)", shutdown)
+        ]
+        self.assertLess(max(flush_positions), min(provider_shutdown_positions))
+
+    # spec: F36.ac10 — repeated explicit/atexit shutdown never flushes after a provider closes.
+    def test_shutdown_idempotence_guard_precedes_flush(self) -> None:
+        tree = ast.parse(self.telemetry_source)
+        shutdown = ast.get_source_segment(self.telemetry_source, next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "shutdown"
+        ))
+        self.assertLess(shutdown.index("if _shutdown_done:"), shutdown.index(".force_flush()"))
 
     # spec: F36.ac11 — callers receive the reusable tracer/meter pair.
     def test_init_telemetry_has_the_stable_public_signature(self) -> None:
