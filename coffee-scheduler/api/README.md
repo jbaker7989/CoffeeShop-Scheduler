@@ -39,7 +39,6 @@ demo credentials.
 - `AUTH_JWT_PRIVATE_KEY_PEM`, `AUTH_JWT_PUBLIC_KEYS_PEM` (JSON `kid -> PEM`),
   `AUTH_JWT_ACTIVE_KID`, `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE`, `AUTH_REFRESH_PEPPER`.
 - `GATEWAY_DATABASE_URL` (RLS-scoped `app_rw` store reads) defaults to the local PgBouncer.
-- `COOKIE_SECURE` defaults to `false`; set `true` in production HTTPS.
 
 Tenant-scoped reads establish RLS as `app_rw` using only the reconciled `tenant_id`.
 
@@ -55,7 +54,8 @@ The Next.js manager shell (`coffee_shop/`) now authenticates with the CS-061a br
 - The frontend proxies the browser-auth routes at their own `/auth/browser/:path*` rewrite so the
   refresh cookie (`Path=/auth/browser`) is sent to the refresh endpoint on the same origin; the
   gateway keeps the CS-061a cookie-path defaults (no coupling to the frontend's `/api` prefix) and
-  only overrides `secure` with `COOKIE_SECURE` so local HTTP dev can store the cookies.
+  always sets `HttpOnly; Secure; SameSite=Strict`. Local development must terminate TLS too;
+  plaintext HTTP is not an exception for bearer credential cookies.
 
 Access tokens live 15 minutes; when one expires the protected pages fail closed to `/login`.
 Automatic silent refresh in the UI and the broader CSRF/CORS + tenant-routing policy remain

@@ -61,6 +61,7 @@ class ManagerUiBrowserCompatTests(unittest.TestCase):
         for cookie in (access, refresh):
             self.assertIn("httponly", cookie.lower())
             self.assertIn("samesite=strict", cookie.lower())
+            self.assertIn("secure", cookie.lower())
         self.assertIn("path=/;", access.lower() + ";")
         # Refresh cookie is scoped to /auth/browser so the same-origin rewrite reaches it (BUG-036).
         self.assertIn("path=/auth/browser", refresh.lower())
