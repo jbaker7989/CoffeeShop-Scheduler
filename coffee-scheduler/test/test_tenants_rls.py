@@ -74,6 +74,9 @@ class TenantsRlsTests(unittest.TestCase):
             self.assertEqual({row[0] for row in cursor.fetchall()}, {MAVEN_SLUG, PROBE_SLUG})
 
     # spec: F60.ac4 — BUG-020 the catalog records enabled self-scoping RLS.
+    # Since BUG-022 (migration 0006) the self-scope reads the GUC via the fail-closed
+    # app_current_tenant() helper, so the policy expression references that function
+    # (not the raw 'app.tenant_id' setting) — but it is still self-scoped, never USING(true).
     def test_tenants_rls_catalog_has_self_scoping_policy(self):
         with self.connection.cursor() as cursor:
             cursor.execute(
@@ -84,11 +87,11 @@ class TenantsRlsTests(unittest.TestCase):
                 JOIN pg_policy AS p ON p.polrelid = c.oid
                 WHERE n.nspname = 'public'
                   AND c.relname = 'tenants'
-                  AND pg_get_expr(p.polqual, p.polrelid) LIKE '%app.tenant_id%'
+                  AND pg_get_expr(p.polqual, p.polrelid) LIKE '%app_current_tenant%'
                 """
             )
             rows = cursor.fetchall()
-        self.assertTrue(rows, "tenants needs a policy scoped by app.tenant_id")
+        self.assertTrue(rows, "tenants needs a self-scoping policy via app_current_tenant()")
         self.assertTrue(all(row[0] for row in rows), "tenants must have RLS enabled")
         self.assertTrue(
             all(not row[1] for row in rows),

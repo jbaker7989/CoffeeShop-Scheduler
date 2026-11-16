@@ -82,9 +82,10 @@ class F60TenantStamp(unittest.TestCase):
             self.assertEqual(r.returncode, 0, f"alembic {' '.join(args)}:\n{r.stdout}{r.stderr}")
             return r.stdout
 
-        alembic("downgrade", "-1")                      # 0005 -> 0004 (no-op downgrade)
-        alembic("upgrade", "head")                      # back to 0005
-        self.assertIn("0005", alembic("current"))
+        head_rev = alembic("heads").split()[0]          # current head revision (e.g. 0007), not hardcoded
+        alembic("downgrade", "-1")                       # step back one revision
+        alembic("upgrade", "head")                       # back to head
+        self.assertIn(head_rev, alembic("current"))
 
 
 if __name__ == "__main__":

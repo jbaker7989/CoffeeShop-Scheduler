@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import uuid
 
 import psycopg
 
@@ -32,14 +33,18 @@ def open_session_context(conn, *, role: str, tenant_id) -> None:
         )
     if role not in _ROLES:
         raise SessionContextError(f"unknown role {role!r}; expected one of {sorted(_ROLES)}")
-    if not tenant_id:
+    if tenant_id is None:
         raise SessionContextError("tenant_id is required")
+    try:
+        parsed_tenant_id = uuid.UUID(str(tenant_id))
+    except (TypeError, ValueError, AttributeError):
+        raise SessionContextError(f"invalid tenant_id {tenant_id!r}") from None
     # Role is a validated literal (never user input). Tenant id is PARAMETERISED.
     conn.execute(f"SET LOCAL ROLE {role}")
     who = conn.execute("SELECT current_user").fetchone()[0]
     if who != role:
         raise SessionContextError(f"refusing to run as {who!r}; expected {role!r} (RLS would be bypassed)")
-    conn.execute("SELECT set_config('app.tenant_id', %s, true)", (str(tenant_id),))
+    conn.execute("SELECT set_config('app.tenant_id', %s, true)", (str(parsed_tenant_id),))
 
 
 @contextlib.contextmanager

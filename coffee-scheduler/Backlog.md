@@ -935,7 +935,7 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 - **Cross-refs:** PLAN §15.5; architecture §14.5.
 
 ### CS-068 — Multi-tenant isolation test suite (GATE)
-- **Feature:** [F68](./FEATURES.md) · **Priority:** P0 (gate) · **Size:** M · **Status:** Blocked (on CS-060, CS-061, CS-070)
+- **Feature:** [F68](./FEATURES.md) · **Priority:** P0 (gate) · **Size:** M · **Status:** ◑ **CS-068a (DB gate) ✅ Done** (`test/test_isolation_gate.py`, 11 tests) — the DB-level isolation regression gate is live and green; **CS-068b (HTTP/auth) Blocked** on CS-061 + CS-070.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Detailed specifications:**
   - Cross-tenant read/insert/update/delete per table denied under RLS; owner-connection denied (proves `FORCE`); `WITH CHECK` write rejection; 401/403/404 behaviour (F68.AC1–AC2).
@@ -1640,7 +1640,7 @@ closing regression evidence.
 
 ### BUG-021 — F60: default partitions of partitioned tables lack RLS/FORCE
 - **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P2 · **Size:** S · **Pattern:** D2/D9
-- **Status:** 🐞 Open · **Type:** Defect (isolation gap — latent, mitigated only by grant absence)
+- **Status:** ✅ Fixed (migration `0007` + `db/partitions.py::ensure_partition_rls`; verified by `test_bug021_partition_rls.py` + the isolation gate — every partition child is `t|t`) · **Type:** Defect (isolation gap — latent, mitigated only by grant absence)
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** `transactions_default`, `weather_hourly_default`, and `rule_eval_log_default` (the catch-all
   partitions created by migration `0001`) have `relrowsecurity=false, relforcerowsecurity=false`, while
@@ -1662,7 +1662,7 @@ closing regression evidence.
 
 ### BUG-022 — F60: RLS policy cast is not fail-closed for empty/invalid tenant context
 - **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P2 · **Size:** XS · **Pattern:** D2
-- **Status:** 🐞 Open · **Type:** Defect (spec bug + unhandled edge; impl partially fixed)
+- **Status:** ✅ Fixed (migration `0006` `app_current_tenant()` STABLE helper + policy swap on every table; `data_access/session.py` UUID edge guard; F60.AC2 corrected to the function form; verified by `test_bug022_failclosed.py` + the isolation gate — empty/malformed context yields 0 rows, never a cast 500) · **Type:** Defect (spec bug + unhandled edge; impl partially fixed)
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** Two related gaps around the policy expression:
   1. **Spec bug:** F60.AC2 specifies the filter as `current_setting('app.tenant_id', true)::UUID`. With the
