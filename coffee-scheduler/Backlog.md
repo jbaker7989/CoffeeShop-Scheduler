@@ -1918,6 +1918,37 @@ closing regression evidence.
 - **Risk if unfixed:** the application can report CS-061a’s unit contracts green while serving an older,
   incompatible authentication boundary to real gateway traffic.
 
+### BUG-036 — F30/CS-070: manager UI remains wired to the retired `session` cookie after gateway cutover
+- **Feature:** [F30](./FEATURES.md) (CS-030) / [F70](./FEATURES.md) (CS-070) · **Priority:** P0 · **Size:** M · **Pattern:** D1
+- **Status:** 🐞 Open · **Type:** Compatibility regression / incomplete cutover · **Found:** 2026-11-16
+- **Developer:** Unassigned · **Duration:** ~3d (est.)
+- **Root cause:** the CS-061a gateway cutover removes the legacy HS256 `session` authentication route and
+  accepts only an RS256 bearer access token or `access_token` cookie, but the checked-in Next manager app
+  still posts to `/api/auth/login` expecting the old result and checks/sends only `session`. Specifically,
+  `coffee_shop/middleware.ts`, `(manager)/layout.tsx`, and `(manager)/dashboard/page.tsx` call
+  `request.cookies.has("session")` or forward `Cookie: session=…`; the gateway now returns no such cookie
+  and rejects it on `/me` and `/stores`.
+- **Reproduction (verified 2026-11-16):** `rg -n "session|/auth/login|/me" coffee_shop` shows the UI's
+  session-only flow, while `python3 -m unittest discover -s test -p 'test_cs061a_gateway_integration.py' -v`
+  passes and proves the gateway's sole `/auth/login` response is a CS-061a JSON token pair with no cookie.
+  A browser completing the existing UI login therefore remains unauthenticated at the protected layout and
+  is redirected/rejected rather than reaching the manager dashboard.
+- **Impact:** the backend's secure CS-061a boundary is correct, but the shipped manager UI cannot use it;
+  this turns the backend cutover into a user-visible login outage and leaves the documented CS-030
+  compatibility claim unfulfilled.
+- **Acceptance criteria:**
+  - Change the UI login to the browser transport (`/api/auth/browser/login`) and verify it never reads either
+    token from JavaScript; the browser must receive the `HttpOnly; Secure; SameSite=Strict` cookies through
+    the same-origin rewrite.
+  - Replace all `session` checks/forwarding in middleware, manager layout, dashboard, and logout with the
+    CS-061a `access_token` / browser refresh behavior; validate `/me` and `/stores` work after login and
+    fail closed after logout or refresh replay.
+  - Add browser/Next integration coverage for the cookie path and proxy/rewrite behavior, including expired
+    access + browser refresh, absence of legacy `/auth/login` response assumptions, and no client-side token
+    exposure. Coordinate CSRF/CORS and tenant routing policy with CS-070.
+- **Risk if unfixed:** every manager login against the cut-over gateway fails to establish the UI's protected
+  session, blocking the product despite green backend authentication tests.
+
 ---
 
 ## Backlog summary
