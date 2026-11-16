@@ -14,8 +14,10 @@ Harness invariants that keep this gate from passing FALSELY (the whole point of 
     `GateHarness` proves app_rw is NOT a superuser and NOT BYPASSRLS before any isolation claim is trusted.
   * No second tenant is ever committed — cross-tenant reads are proven by switching the session to a
     DIFFERENT tenant id (which owns no rows) and showing tenant A's rows vanish. Every txn rolls back.
-  * FORCE RLS is asserted at the CATALOG level on every protected relation (a superuser connection could
-    never prove FORCE behaviourally).
+  * FORCE RLS is asserted at the CATALOG level on every ordinary protected relation (a superuser connection
+    could never prove FORCE behaviourally). The only exact owner-bypass exceptions are the tenant registry
+    and CS-061a credential tables, whose SECURITY DEFINER functions need anonymous resolution; their grants
+    are checked separately and app_rw/app_ro receive no direct credential access.
 
 Run: DATABASE_URL=postgresql://coffeeshop:coffeeshop@localhost:5432/coffeeshop \
      python3 coffee-scheduler/test/test_isolation_gate.py
@@ -43,9 +45,13 @@ try:
 except Exception:  # pragma: no cover
     psycopg = None
 
-# Tenant-scoped tables that MUST carry ENABLE + FORCE RLS (domain tables + restricted PII).
-# `tenants` is intentionally ENABLE-not-FORCE (0004: owner/ETL resolve tenants by slug), so it is
-# asserted separately. `weather_codes` is a global, tenant-less reference table (BUG-023) — no tenant_id.
+# Tenant-scoped tables. All MUST have RLS; every ordinary domain table MUST also have FORCE RLS.
+# `tenants` is the tenant-root owner-bypass exception (0004: slug resolution). The only tenant_id
+# owner-bypass exceptions are these CS-061a credential tables: anonymous login/refresh must reach their
+# owner-run SECURITY DEFINER functions before a trusted tenant context exists. `weather_codes` is global.
+AUTH_OWNER_BYPASS_TABLES = {"tenant_users", "auth_refresh_tokens"}
+AUTH_SERVICE_ROLE = "auth_svc"
+AUTH_FUNCTION_PREFIX = "auth_"
 TENANT_TABLES = [
     "taxonomy_meta", "stores", "store_hours", "school_calendars", "school_calendar_days",
     "holidays", "employer_config", "stations", "fixed_tasks", "coverage_rules", "shift_rules",
@@ -53,6 +59,7 @@ TENANT_TABLES = [
     "calibration_log", "employees", "labor_rules", "consent_waivers", "events", "schedules",
     "shifts", "shift_assignments", "forecasts", "rule_eval_log", "transactions",
     "weather_hourly", "weather_daily", "employee_pii", "langgraph_checkpoints",
+    "tenant_users", "auth_refresh_tokens",
 ]
 PARTITION_PARENTS = ("rule_eval_log", "transactions", "weather_hourly")
 PROBE_TABLE = "stores"  # a plain domain table that owns maven-demo rows
@@ -119,7 +126,7 @@ class CrossTenantIsolation(unittest.TestCase):
                 self.assertEqual(dele.rowcount, 0, "cross-tenant DELETE must affect 0 rows")
                 raise Rollback
 
-    # spec: F68.ac1 — FORCE RLS present on every tenant-scoped table (catalog proof; owner can't bypass).
+    # spec: F68.ac1 — RLS on every tenant table; FORCE everywhere except exact auth owner-bypass tables.
     def test_force_rls_on_every_tenant_table(self):
         with psycopg.connect(DSN) as conn:
             for t in TENANT_TABLES:
@@ -127,7 +134,15 @@ class CrossTenantIsolation(unittest.TestCase):
                     "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = %s", (t,)
                 ).fetchone()
                 self.assertTrue(rls, f"{t}: RLS not enabled")
-                self.assertTrue(force, f"{t}: FORCE RLS not set")
+                # FORCE on every ordinary table; the exact CS-061a credential tables (and only those)
+                # are ENABLE-not-FORCE so their owner-run SECURITY DEFINER auth_* functions can resolve
+                # an anonymous login/refresh. An ordinary table losing FORCE, or an auth table gaining
+                # it, both fail here — the exception is bidirectionally exact, never a blanket opt-out.
+                self.assertEqual(
+                    t in AUTH_OWNER_BYPASS_TABLES,
+                    not force,
+                    f"{t}: only exact auth owner-bypass tables may omit FORCE RLS",
+                )
 
     # spec: F68.ac1 / BUG-021 — FORCE RLS present on every partition child too.
     def test_force_rls_on_every_partition(self):
@@ -189,7 +204,7 @@ class FailClosedContext(unittest.TestCase):
 class CoverageGate(unittest.TestCase):
     """Self-maintaining: a FUTURE tenant table that ships without RLS, or is not in this suite, fails here."""
 
-    # spec: F68.ac5 — every base table with a tenant_id column is accounted for AND forced.
+    # spec: F68.ac5 — every base table with tenant_id is accounted for, RLS-protected, and forced unless exact.
     def test_every_tenant_id_table_is_covered_and_forced(self):
         known = set(TENANT_TABLES)
         with psycopg.connect(DSN) as conn:
@@ -197,10 +212,57 @@ class CoverageGate(unittest.TestCase):
             self.assertTrue(tables, "expected to find tenant_id tables")
             for t in tables:
                 self.assertIn(t, known, f"{t} has tenant_id but is NOT in the isolation gate allow-list")
-                force = conn.execute(
-                    "SELECT relforcerowsecurity FROM pg_class WHERE relname = %s", (t,)
-                ).fetchone()[0]
-                self.assertTrue(force, f"{t} has tenant_id but no FORCE RLS")
+                rls, force = conn.execute(
+                    "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = %s", (t,)
+                ).fetchone()
+                self.assertTrue(rls, f"{t} has tenant_id but RLS is not enabled")
+                self.assertEqual(
+                    t in AUTH_OWNER_BYPASS_TABLES,
+                    not force,
+                    f"{t}: only exact auth owner-bypass tables may omit FORCE RLS",
+                )
+
+    # spec: F68.ac5 / F61.ac1 — owner-bypass credential tables have no app-role table/function access.
+    #   This is the price of the FORCE exception above: the tables are ENABLE-not-FORCE, so isolation
+    #   rests on NO app_rw/app_ro grant reaching them, directly or through the auth_* functions.
+    def test_auth_owner_bypass_is_limited_to_auth_svc_functions(self):
+        with psycopg.connect(DSN) as conn:
+            for table in AUTH_OWNER_BYPASS_TABLES:
+                for role in ("app_rw", "app_ro"):
+                    for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        allowed = conn.execute(
+                            "SELECT has_table_privilege(%s, %s, %s)", (role, table, privilege)
+                        ).fetchone()[0]
+                        self.assertFalse(
+                            allowed, f"{role} must not have direct {privilege} on credential table {table}"
+                        )
+
+            functions = conn.execute(
+                "SELECT p.oid::regprocedure::text, pg_get_userbyid(p.proowner), "
+                "array_remove(array_agg(CASE WHEN acl.privilege_type = 'EXECUTE' "
+                "THEN COALESCE(pg_get_userbyid(acl.grantee), 'PUBLIC') END), NULL) "
+                "FROM pg_proc p "
+                "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                "LEFT JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) acl ON true "
+                "WHERE n.nspname = 'public' AND p.proname LIKE %s "
+                "GROUP BY p.oid ORDER BY 1",
+                (f"{AUTH_FUNCTION_PREFIX}%",),
+            ).fetchall()
+            self.assertTrue(functions, "expected CS-061a auth_* SECURITY DEFINER functions")
+            for function, owner, execute_grantees in functions:
+                self.assertTrue(
+                    conn.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')", (AUTH_SERVICE_ROLE, function)).fetchone()[0],
+                    f"{AUTH_SERVICE_ROLE} must execute {function}",
+                )
+                self.assertLessEqual(
+                    set(execute_grantees), {owner, AUTH_SERVICE_ROLE},
+                    f"{function} has an unexpected EXECUTE grantee: {execute_grantees}",
+                )
+                for role in ("app_rw", "app_ro"):
+                    self.assertFalse(
+                        conn.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')", (role, function)).fetchone()[0],
+                        f"{role} must not execute {function}",
+                    )
 
     # spec: F68.ac5 / BUG-028 — a future period partition is excluded structurally, not flagged.
     def test_future_partition_does_not_break_coverage(self):
