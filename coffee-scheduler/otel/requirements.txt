@@ -1,0 +1,13 @@
+# OpenTelemetry SDK contract for every coffee-shop agent (F36 / CS-036).
+#
+# Exact pins, mutually compatible and > 2 weeks old (the 1.29.0 / 0.50b0 line was
+# released 2024-12, verified to resolve together on Python 3.9). Version skew
+# between api / sdk / exporter / semconv is the most common OTel break, so all
+# four move together and are pinned here, mirrored by otel/README.md.
+#
+# Install into a venv; do NOT pollute system Python:
+#   python3 -m venv .venv && .venv/bin/pip install -r coffee-scheduler/otel/requirements.txt
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-grpc==1.29.0
+opentelemetry-semantic-conventions==0.50b0
