@@ -843,7 +843,7 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 
 ### CS-061 — Auth + per-tenant RBAC (umbrella)
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** M
-- **Status:** ◑ Partial — CS-061a core auth is ✅ Done; CS-061b hardening and CS-061c invitations/audit remain.
+- **Status:** ◑ Partial — CS-061a core auth and CS-061b hardening are ✅ Done; CS-061c invitations/audit remain.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~6d (est., sum of sub-stories)
 - **Description:** Identity, roles, tokens, and the full auth-hardening surface. Blocks every UI route.
 
@@ -856,7 +856,7 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 - **Cross-refs:** PLAN §3; architecture §3.
 
 #### CS-061b — Auth hardening
-- **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** ✅ Done (2026-11-16) — per-request canonical principal/tenant revocation, durable reset and session invalidation, tenant-account plus client-IP throttles, AES-256-GCM TOTP/recovery state, narrow `auth_svc` functions, and a reversible 0011 migration. Independent validation: 108 in-scope checks, live PostgreSQL pooled-path proof, and adversarial probes all green. BUG-038–040 resolved.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1.5d (est.)
 - **Detailed specifications:**
   - Per-request revocation: middleware re-checks tenant `status` + user `is_active`, backed by a revocation list, so suspension takes effect within one access-token TTL (F61.AC3).
@@ -1978,7 +1978,7 @@ closing regression evidence.
 
 ### BUG-038 — F61/CS-061b: auth hardening is bypassed over the production (pooled) repository
 - **Feature:** [F61](./FEATURES.md) (CS-061b) · **Priority:** P0 · **Size:** M · **Pattern:** D2/D3
-- **Status:** Open · **Type:** Integration / security-boundary defect (fail-open) · **Found:** 2026-11-16 (candidate validation)
+- **Status:** ✅ Resolved (CS-061b, 2026-11-16) · **Type:** Integration / security-boundary defect (fail-open) · **Found:** 2026-11-16 (candidate validation)
 - **Developer:** Unassigned (Codex to fix) · **Duration:** ~1d (est.)
 - **Root cause:** `TenantAuthService` routes **every** CS-061b behaviour through concrete-class checks
   `isinstance(self._repo, DatabaseAuthRepository)` / `isinstance(self._repo, InMemoryAuthRepository)`
@@ -2058,7 +2058,7 @@ closing regression evidence.
 
 ### BUG-039 — F61/CS-061b: an undecryptable MFA secret crashes login (500) instead of the opaque auth failure
 - **Feature:** [F61](./FEATURES.md) (CS-061b) · **Priority:** P2 · **Size:** S · **Pattern:** D2
-- **Status:** Open · **Type:** Fail-closed-robustness / security-invariant deviation · **Found:** 2026-11-16 (Claude final independent validation of candidate `2dabcfa`)
+- **Status:** ✅ Resolved (CS-061b, 2026-11-16) · **Type:** Fail-closed-robustness / security-invariant deviation · **Found:** 2026-11-16 (Claude final independent validation of candidate `2dabcfa`)
 - **Developer:** Unassigned · **Duration:** ~0.5d (est.)
 - **Root cause:** In `TenantAuthService.login_json` (`coffee-scheduler/auth/service.py`, the MFA block ~L144–155)
   the `try` wrapping the decrypt-and-consume step catches **only** `MfaReplayError`:
@@ -2114,7 +2114,7 @@ closing regression evidence.
 
 ### BUG-040 — F61/CS-061b: migration 0011 is not reversible — downgrade leaks its auth_* functions, breaking the F43.ac3 round-trip
 - **Feature:** [F61](./FEATURES.md) (CS-061b) · also regresses [F43](./FEATURES.md).ac3 · **Priority:** P1 · **Size:** S · **Pattern:** D4
-- **Status:** Open · **Type:** Migration reversibility regression · **Found:** 2026-11-16 (Claude final independent validation of candidate `2dabcfa`)
+- **Status:** ✅ Resolved (CS-061b, 2026-11-16) · **Type:** Migration reversibility regression · **Found:** 2026-11-16 (Claude final independent validation of candidate `2dabcfa`)
 - **Developer:** Unassigned · **Duration:** ~0.5d (est.)
 - **Root cause:** `db/migrations/versions/0011_cs061b_auth_hardening.py` `upgrade()` creates **11** `auth_*`
   `SECURITY DEFINER` functions with plain `CREATE FUNCTION` (not `CREATE OR REPLACE`), but `downgrade()` only
@@ -2237,9 +2237,9 @@ closing regression evidence.
 | CS-060a | F60 | P0 | M | ✅ Done via `0001` — tenant-aware schema + composite indexes + maven-demo seed (greenfield) |
 | CS-060b | F60 | P0 | S | ✅ Done via `0001` — FORCE RLS + NULLIF policy + non-owner app_rw; hardening BUG-020/021 |
 | CS-060c | F60 | P0 | S | ◑ Partial — SET LOCAL pattern impl + RLS-verified; reusable middleware + BUG-025 remain |
-| CS-061 | F61 | P0 | M | Partial — CS-061a done |
+| CS-061 | F61 | P0 | M | Partial — CS-061a/CS-061b done |
 | CS-061a | F61 | P0 | M | ✅ Done |
-| CS-061b | F61 | P0 | S | Blocked |
+| CS-061b | F61 | P0 | S | ✅ Done |
 | CS-061c | F61 | P1 | M | Blocked |
 | CS-062 | F62 | P0 | M | Blocked |
 | CS-063 | F63 | P1 | M | Blocked |
