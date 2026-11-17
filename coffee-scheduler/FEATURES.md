@@ -509,7 +509,7 @@ Convert the single-tenant deployment into a multi-tenant SaaS serving SMB coffee
   - **Cross-refs:** PLAN §2 + §7 + §15.1; architecture §2 + §14.1; defect stories BUG-020…BUG-025.
 
 ### F61. Auth + per-tenant RBAC
-- **Status:** ◑ Partial — CS-061a core auth and CS-061b hardening are complete (Argon2id identities, RS256/JWKS, rotating refresh, durable revocation/reset/throttle/MFA, gateway/UI cutover); CS-061c invitations/audit remain. · **Size:** M · **Priority:** P0
+- **Status:** ✅ Done (2026-11-17) — CS-061a core auth, CS-061b hardening, and CS-061c invitations/audit are all complete (Argon2id identities, RS256/JWKS, rotating refresh, durable revocation/reset/throttle/MFA, gateway/UI cutover; `tenant_invitations` invite→accept + append-only `audit_log` via migration `0012`). Multi-tenant membership split (`users`/`tenant_memberships`) and real invite-email delivery are deferred follow-ups; review filed BUG-041..044. · **Size:** M · **Priority:** P0
 - **Description:** `tenant_users` table (per-tenant users with `owner` / `manager` / `staff` / `read_only` roles); `saas_admins` table for cross-tenant admins with MFA; argon2id password hashing; email + password login (no SSO in MVP); JWT issuance with `tenant_id`, `user_id`, `role`, `is_saas_admin` claims; impersonation flow with audit logging. Per-tenant email uniqueness — the same email can register in two tenants (common for SMB owners).
 - **Expected outcome:** Every authenticated request carries a tenant context; SaaS admins can act on any tenant with full audit trail.
 - **Acceptance criteria:**

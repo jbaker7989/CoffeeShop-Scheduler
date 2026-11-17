@@ -843,7 +843,7 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 
 ### CS-061 — Auth + per-tenant RBAC (umbrella)
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P0 · **Size:** M
-- **Status:** ◑ Partial — CS-061a core auth and CS-061b hardening are ✅ Done; CS-061c invitations/audit remain.
+- **Status:** ✅ Done (2026-11-17) — CS-061a core auth, CS-061b hardening, and CS-061c invitations/audit are all ✅ Done. (Multi-tenant membership split and real invite email are deferred follow-ups.)
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~6d (est., sum of sub-stories)
 - **Description:** Identity, roles, tokens, and the full auth-hardening surface. Blocks every UI route.
 
@@ -864,7 +864,7 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 - **Cross-refs:** PLAN §15.2; architecture §14.2.
 
 #### CS-061c — Invitations, membership & audit log
-- **Feature:** [F61](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** Blocked
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** ✅ Done (2026-11-17) — migration `0012` adds `tenant_invitations` + append-only `audit_log` (RLS ENABLE, `app_rw` INSERT+SELECT only — no UPDATE/DELETE — plus six `auth_*` SECURITY DEFINER functions granted to `auth_svc`, reversible downgrade); repository seam (ABC + in-memory/database/pooled) + service invite/accept/list/revoke with role-escalation RBAC, digest-only tokens, TTL, audit weaving, and a `LogInvitationNotifier` stub; `POST/GET/DELETE /invitations` + public rate-limited `POST /invitations/accept`; isolation gate extended (audit_log append-only assertion + both new tenant tables). Verified: `test_f61*` 59/59, `test_api_foundation` 9/9, `test_isolation_gate` 14/14, `alembic downgrade 0011`→`upgrade head` clean. Review filed BUG-041..044 (duplicate-invite 500, audit-outage login 500, per-process accept throttle, list ordering). Multi-tenant membership split (`users`/`tenant_memberships`) and real invite email deferred.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Detailed specifications:**
   - `tenant_invitations` + invite→email→accept flow to add members (F61.AC5); consider separating identity (`users`) from `tenant_memberships` so one person joins many tenants.
@@ -2150,6 +2150,82 @@ closing regression evidence.
 - **Risk if unfixed:** a CS-061b rollback leaves the database in a state where the next deploy's
   `alembic upgrade` crashes, turning a routine revert into a stuck migration during an incident.
 
+### BUG-041 — F61/CS-061c: duplicate-invite / already-member returns HTTP 500 over the live DB (in-memory path returns 409)
+- **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (DB↔in-memory divergence)
+- **Status:** 🐞 Open · **Type:** Error-mapping / repository-parity defect · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Root cause:** `auth_create_invitation` (migration `0012`) guards the common conflict cases with
+  `RAISE EXCEPTION 'already a member'` and `RAISE EXCEPTION 'pending invitation exists'`, which Postgres
+  raises as **SQLSTATE `P0001` (`RaiseException`)**, *not* `UniqueViolation`. But
+  `DatabaseAuthRepository.create_invitation` (`auth/repository.py`) only normalizes the conflict when
+  `exc.__class__.__name__ == "UniqueViolation"` → `ValueError`; a `RaiseException` falls through and
+  re-raises raw. `TenantAuthService.create_invitation` catches only `ValueError` (→ `InvitationConflictError`
+  → HTTP 409), so the raw `psycopg.errors.RaiseException` escapes the service and the `POST /invitations`
+  handler (which catches only `InvitationPermissionError`/`InvitationError`) returns an unhandled **500**.
+  The partial unique index only fires on the narrow concurrent race (two inserts past the `EXISTS` guard),
+  so solely that path yields `UniqueViolation`→409; the ordinary sequential duplicate 500s.
+- **Reproduction (verified live 2026-11-17, rolled back — no rows persisted):** call
+  `auth_create_invitation(maven_tenant,'dupe@x.example','staff',…)` twice → second call raises
+  `RaiseException | sqlstate: P0001 | msg: pending invitation exists`. The in-memory repo raises `ValueError`
+  for the same case (→ 409), so `test_f61_invitation_contract.py` is green while the production path is not —
+  the live-DB test only exercised the invite→accept happy path, not the conflict path.
+- **Impact:** re-inviting an email with a live pending invite, or inviting an existing member, returns 500
+  instead of the specified 409 — a wrong client contract and a noisy error for a routine, expected case.
+- **Acceptance criteria (for the fix):** map `P0001`/`RaiseException` from `auth_create_invitation` to the
+  conflict `ValueError` in `DatabaseAuthRepository` (or raise a typed conflict the service catches), so the
+  live DB returns 409; add a **live-DB** conflict test (DB-skip pattern) covering already-member and
+  duplicate-pending so the DB↔in-memory parity is enforced, not just the happy path.
+- **Risk if unfixed:** every duplicate/already-member invite 500s in production; CS-062 onboarding and the
+  CS-064 admin surface build on this endpoint and will inherit the wrong status.
+
+### BUG-042 — F61/CS-061c: audit-store outage converts a valid login into a 500 (a genuine auth result is lost)
+- **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** S · **Pattern:** D3 (availability coupling)
+- **Status:** 🐞 Open · **Type:** Spec deviation / resilience defect · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Root cause:** `TenantAuthService._audit` (`auth/service.py`) wraps `record_audit` and, on any failure,
+  logs and **re-raises**. It is invoked on the login success path (`auth.login.succeeded`) *after* the
+  credential + MFA checks pass and the session is issuable. So if the audit store (the `auth_record_audit`
+  function / `audit_log`) is unavailable, a user who authenticated correctly receives a 500 and no tokens.
+  This contradicts the CS-061c plan's explicit requirement — "wrap so **a genuine auth result is never
+  lost**, but a failed audit is surfaced (log + metric)". The locked test `test_f61_audit_contract.py::
+  test_audit_failure_is_surfaced` currently encodes the re-raise behavior, so it must be revised with the fix.
+- **Impact:** an audit-log DB hiccup becomes a full login/accept outage (availability coupling), and the blast
+  radius grows as CS-064b adds admin-action/impersonation audit calls onto the same port. It fails *closed*
+  (no security hole), but drops valid sessions the spec says to preserve.
+- **Acceptance criteria (for the fix):** for success-path/non-security-critical audit events, emit a
+  structured error log **and a metric** and continue returning the issued tokens (never silently swallow,
+  never fail-open); reserve fail-closed-on-audit only for events where compliance requires a guaranteed trail
+  (document which). Update `test_audit_failure_is_surfaced` to assert the event is surfaced via log/metric
+  while the valid login still succeeds.
+- **Risk if unfixed:** routine audit-store maintenance or transient load takes down all authentication.
+
+### BUG-043 — F61/CS-061c: invitation-accept rate limit is per-process (in-memory), not shared across gateway instances
+- **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P3 · **Size:** S · **Pattern:** D3
+- **Status:** 🐞 Open · **Type:** Defense-in-depth gap · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Root cause:** `create_app` (`api/app.py`) throttles the public `POST /invitations/accept` endpoint with
+  `invitation_limiter = LoginRateLimiter()` — an **in-memory** limiter instantiated per app/worker. Unlike
+  the CS-061b login throttle, which is DB-backed (`auth_record_login_attempt`/`auth_login_locked`) and
+  therefore shared across gateway processes, each horizontally-scaled gateway holds its own accept bucket, so
+  the effective brute-force limit multiplies by the worker count and resets on restart/redeploy.
+- **Impact:** weaker brute-force protection on an anonymous, token-bearing endpoint under multi-worker/
+  multi-instance deployment (the production shape). Single-process dev is unaffected, which is why tests pass.
+- **Acceptance criteria (for the fix):** back the accept throttle with the DB (reuse the CS-061b
+  `auth_login_attempts` port with an `'invite'`/client-IP key) so the limit is shared and durable, matching
+  the login throttle; add a test asserting the throttle state is not process-local.
+- **Risk if unfixed:** token-guessing / enumeration on `/invitations/accept` scales with gateway replicas.
+
+### BUG-044 — F61/CS-061c: `list_invitations` ordering differs between the DB and in-memory repositories
+- **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P3 · **Size:** XS · **Pattern:** D2
+- **Status:** 🐞 Open · **Type:** Repository-parity nit · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Root cause:** `auth_list_invitations` (migration `0012`) orders by
+  `(pending & not-expired) DESC, created_at DESC` (newest-first), while
+  `InMemoryAuthRepository.list_invitations` sorts by `(status != 'pending', created_at ASC)` (oldest-first).
+  Both surface pending-first, but the secondary order is reversed, so the admin list order is not a stable
+  contract across the fixture and production paths.
+- **Impact:** cosmetic/UX only (no security or data-exposure effect), but a contract divergence of exactly the
+  BUG-038 class that a UI (CS-064a) could come to depend on.
+- **Acceptance criteria (for the fix):** align the in-memory sort to the DB's `created_at DESC` secondary
+  order (or vice-versa) and assert the order in a shared contract test.
+- **Risk if unfixed:** the admin invitation list orders differently in tests vs production.
+
 ---
 
 ## Backlog summary
@@ -2237,10 +2313,10 @@ closing regression evidence.
 | CS-060a | F60 | P0 | M | ✅ Done via `0001` — tenant-aware schema + composite indexes + maven-demo seed (greenfield) |
 | CS-060b | F60 | P0 | S | ✅ Done via `0001` — FORCE RLS + NULLIF policy + non-owner app_rw; hardening BUG-020/021 |
 | CS-060c | F60 | P0 | S | ◑ Partial — SET LOCAL pattern impl + RLS-verified; reusable middleware + BUG-025 remain |
-| CS-061 | F61 | P0 | M | Partial — CS-061a/CS-061b done |
+| CS-061 | F61 | P0 | M | ✅ Done — CS-061a/b/c (membership split + invite email deferred) |
 | CS-061a | F61 | P0 | M | ✅ Done |
 | CS-061b | F61 | P0 | S | ✅ Done |
-| CS-061c | F61 | P1 | M | Blocked |
+| CS-061c | F61 | P1 | M | ✅ Done — `0012` invitations + append-only audit_log; BUG-041..044 filed |
 | CS-062 | F62 | P0 | M | Blocked |
 | CS-063 | F63 | P1 | M | Blocked |
 | CS-064 | F64 | P1 | L | Blocked (umbrella) |

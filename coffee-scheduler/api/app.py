@@ -21,15 +21,27 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field
 
-from auth.api import create_auth_router
-from auth.service import AuthenticationError, Principal, TenantAuthService, TenantSuspendedError
+from auth.api import create_auth_router, BrowserCookieConfig, _set_browser_cookies
+from auth.service import AuthenticationError, InvitationError, InvitationPermissionError, Principal, TenantAuthService, TenantSuspendedError
+from auth.ratelimit import LoginAttemptKey, LoginRateLimiter, AccountLockedError
 
 from .auth_gateway import ACCESS_COOKIE_NAME, build_auth_service_from_env, extract_access_credential
 
 
 BROWSER_REFRESH_COOKIE = "refresh_token"
 BROWSER_REFRESH_PATH = "/auth/browser"
+
+class InvitationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=320)
+    role: str = Field(min_length=1, max_length=32)
+class InvitationAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=4096)
+    password: str = Field(min_length=1, max_length=1024)
+    display_name: str | None = Field(default=None, max_length=255)
 
 def create_app(
     auth_service: TenantAuthService,
@@ -46,6 +58,7 @@ def create_app(
         from .db import fetch_stores as fetch_stores  # noqa: PLW0127 — lazy production default
 
     app = FastAPI()
+    invitation_limiter = LoginRateLimiter()
 
     # The four CS-061a auth routes + /.well-known/jwks.json. This is the single owner of
     # /auth/login. BrowserCookieConfig remains Secure even in local development: TLS is a
@@ -63,6 +76,45 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
         except AuthenticationError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    def require_role(*roles: str):
+        def dependency(principal: Principal = Depends(current_principal)) -> Principal:
+            if principal.role not in roles:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+            return principal
+        return dependency
+
+    @app.post("/invitations")
+    def create_invitation(body: InvitationCreateRequest, principal: Principal = Depends(require_role("owner", "manager"))) -> dict[str, Any]:
+        try: issued = auth_service.create_invitation(principal, body.email, body.role, accept_url_base="/invitations/accept")
+        except InvitationPermissionError: raise HTTPException(status_code=403, detail="Forbidden")
+        except InvitationError: raise HTTPException(status_code=409, detail="invitation unavailable")
+        return {"invitation_id": issued.invitation_id, "expires_at": issued.expires_at, "accept_url": f"/invitations/accept?token={issued.token}", "token": issued.token}
+
+    @app.get("/invitations")
+    def list_invitations(principal: Principal = Depends(require_role("owner", "manager"))) -> list[dict[str, Any]]:
+        return [{"id": r.id, "email": r.email, "role": r.role, "status": r.status, "expires_at": r.expires_at} for r in auth_service.list_invitations(principal)]
+
+    @app.delete("/invitations/{invitation_id}")
+    def revoke_invitation(invitation_id: str, principal: Principal = Depends(require_role("owner", "manager"))) -> dict[str, bool]:
+        try: auth_service.revoke_invitation(principal, invitation_id)
+        except InvitationError: raise HTTPException(status_code=404, detail="Not found")
+        return {"ok": True}
+
+    @app.post("/invitations/accept")
+    def accept_invitation(body: InvitationAcceptRequest, response: Response, request: Request) -> dict[str, Any]:
+        ip = request.client.host if request.client else "0.0.0.0"
+        key = LoginAttemptKey("invite", "accept", ip)
+        try:
+            invitation_limiter.check(key)
+            tokens = auth_service.accept_invitation(body.token, body.password, body.display_name)
+        except AccountLockedError: raise HTTPException(status_code=429, detail="authentication failed")
+        except InvitationError:
+            invitation_limiter.record_failure(key)
+            raise HTTPException(status_code=401, detail="authentication failed")
+        invitation_limiter.record_success(key)
+        _set_browser_cookies(response, tokens, BrowserCookieConfig())
+        return {"access_token": tokens.access_token, "refresh_token": tokens.refresh_token, "token_type": tokens.token_type, "expires_in": tokens.expires_in}
 
     @app.get("/me")
     def me(principal: Principal = Depends(current_principal)) -> dict[str, Any]:

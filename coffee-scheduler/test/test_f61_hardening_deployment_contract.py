@@ -45,7 +45,7 @@ class F61bMigrationGraphContractTests(unittest.TestCase):
         revisions = [revision for revision, _ in metadata.values()]
         self.assertEqual(len(revisions), len(set(revisions)), "revision ids must stay unique")
         parents = {parent for _, parent in metadata.values() if parent is not None}
-        self.assertEqual({"0011"}, set(revisions) - parents, "0011 must be the one migration head")
+        self.assertEqual({"0012"}, set(revisions) - parents, "0012 must be the one migration head")
 
 
 class F61bSchemaContractTests(unittest.TestCase):

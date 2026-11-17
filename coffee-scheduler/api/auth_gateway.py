@@ -33,6 +33,8 @@ from auth.repository import (
     RefreshTokenRecord,
     TenantMembershipRecord,
     TenantUserRecord,
+    InvitationRecord,
+    AuditEntry,
 )
 from auth.service import (
     AUTH_DATABASE_URL_ENV,
@@ -149,6 +151,24 @@ class PooledAuthRepository(AuthRepository):
     def consume_recovery_code(self,*a):
         if self._pool.closed: self._pool.open()
         with self._pool.connection() as c: return self._repo(c).consume_recovery_code(*a)
+    def create_invitation(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).create_invitation(*a)
+    def get_invitation(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).get_invitation(*a)
+    def accept_invitation(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).accept_invitation(*a)
+    def list_invitations(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).list_invitations(*a)
+    def revoke_invitation(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).revoke_invitation(*a)
+    def record_audit(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).record_audit(*a)
 
 
 def _auth_pool(dsn: str) -> Any:
@@ -257,6 +277,7 @@ def build_auth_service_from_env(
         mfa_cipher=mfa_cipher,
         throttle_max_failures=_positive_env_int(source, "AUTH_LOGIN_MAX_FAILURES", 5),
         throttle_window_seconds=_positive_env_int(source, "AUTH_LOGIN_LOCKOUT_SECONDS", 900),
+        invite_ttl_seconds=_positive_env_int(source, "INVITE_TTL", 72 * 60 * 60),
         **kwargs,
     )
 

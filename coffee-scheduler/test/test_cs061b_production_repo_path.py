@@ -82,6 +82,13 @@ def _make_repo(*, tenant_active: bool):
         def consume_password_reset(self, *a): self.calls.append("consume_password_reset"); return (TENANT, USER)
         def record_login_attempt(self, *a): self.calls.append("record_login_attempt"); return False
         def login_locked(self, *a): self.calls.append("login_locked"); return False
+        # CS-061c mandatory repository seam (not exercised by this CS-061b probe).
+        def create_invitation(self, *a): raise NotImplementedError
+        def get_invitation(self, *a): return None
+        def accept_invitation(self, *a): return None
+        def list_invitations(self, *a): return []
+        def revoke_invitation(self, *a): return False
+        def record_audit(self, *a): self.calls.append("record_audit"); return 1
 
     return _NonFixtureRepo()
 

@@ -25,7 +25,8 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Protocol
+import logging
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -43,6 +44,7 @@ from .repository import (
     InMemoryAuthRepository,
     ConsumeStatus,
     RefreshTokenRecord,
+    InvitationRecord, AuditEntry,
 )
 from .tokens import MAX_REFRESH_TOKEN_BYTES, OpaqueRefreshTokenService
 from .ratelimit import LoginAttemptKey
@@ -79,6 +81,16 @@ class RefreshReplayError(AuthenticationError):
     """
 class TenantSuspendedError(AuthenticationError): pass
 class SessionRevokedError(AuthenticationError): pass
+class InvitationError(AuthenticationError): pass
+class InvitationPermissionError(InvitationError): pass
+class InvitationConflictError(InvitationError): pass
+
+class InvitationNotifier(Protocol):
+    def notify(self, *, email: str, accept_url: str) -> None: ...
+
+class LogInvitationNotifier:
+    def notify(self, *, email: str, accept_url: str) -> None:
+        logging.getLogger(__name__).info("Invitation link for %s: %s", email, accept_url)
 
 
 @dataclass(frozen=True)
@@ -90,6 +102,12 @@ class IssuedTokens:
     expires_in: int
     refresh_token: str
     token_type: str = "bearer"
+
+@dataclass(frozen=True)
+class InvitationIssued:
+    invitation_id: str
+    expires_at: datetime
+    token: str
 
 
 @dataclass(frozen=True)
@@ -120,6 +138,8 @@ class TenantAuthService:
         mfa_cipher: MfaSecretCipher | None = None,
         throttle_max_failures: int = 5,
         throttle_window_seconds: int = 900,
+        invite_ttl_seconds: int = 72 * 60 * 60,
+        invitation_notifier: InvitationNotifier | None = None,
     ) -> None:
         self._repo = repository
         self._passwords = password_service
@@ -133,6 +153,9 @@ class TenantAuthService:
             raise ValueError("login throttle configuration must be positive")
         self._throttle_max_failures = throttle_max_failures
         self._throttle_window_seconds = throttle_window_seconds
+        if invite_ttl_seconds <= 0: raise ValueError("INVITE_TTL must be a positive integer")
+        self._invite_ttl_seconds = invite_ttl_seconds
+        self._invitation_notifier = invitation_notifier or LogInvitationNotifier()
         self._pending_mfa: dict[tuple[str,str], str] = {}
         self.mfa_recovery_codes: list[str] = []
         # A valid Argon2id hash of a random secret, verified against when the email lookup
@@ -151,6 +174,7 @@ class TenantAuthService:
             user = self._authenticate_credentials(tenant_slug=tenant_slug, email=email, password=password)
         except AuthenticationError:
             self._repo.record_login_attempt(key.tenant_id,key.email,key.ip,False,now or self._now(),self._throttle_max_failures,self._throttle_window_seconds)
+            self._audit(AuditEntry(user_hint.tenant_id if user_hint else None, user_hint.id if user_hint else None, "tenant_user" if user_hint else "system", "auth.login.failed", ip=client_ip))
             raise
         self._repo.record_login_attempt(key.tenant_id,key.email,key.ip,True,now or self._now(),self._throttle_max_failures,self._throttle_window_seconds)
         now = now or self._now()
@@ -170,11 +194,49 @@ class TenantAuthService:
             except (MfaReplayError, ValueError, UnicodeDecodeError):
                 raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
         self._repo.record_login(user.id, now)
+        self._audit(AuditEntry(user.tenant_id, user.id, "tenant_user", "auth.login.succeeded", ip=client_ip))
         return self._issue(tenant_id=user.tenant_id, user_id=user.id, role=user.role, now=now)
 
     # The browser login shares identical credential semantics; the cookie/body transport
     # split is enforced in auth.api, keeping CSRF/token-exposure rules out of this layer.
     login_browser = login_json
+
+    def _audit(self, entry: AuditEntry) -> None:
+        try: self._repo.record_audit(entry)
+        except Exception:
+            logging.getLogger(__name__).exception("audit write failed for %s", entry.action)
+            raise
+
+    def create_invitation(self, principal: Principal, email: str, role: str, *, accept_url_base: str = "/invitations/accept") -> InvitationIssued:
+        ranks = {"read_only": 0, "staff": 1, "manager": 2, "owner": 3}
+        if principal.role not in ("owner", "manager") or role not in ranks or ranks[role] > ranks.get(principal.role, -1):
+            raise InvitationPermissionError("forbidden")
+        now = self._now(); token = secrets.token_urlsafe(32)
+        record = InvitationRecord(str(uuid.uuid4()), principal.tenant_id, email, role, self._refresh.digest(token), principal.user_id, "pending", now + timedelta(seconds=self._invite_ttl_seconds), created_at=now)
+        try: invitation_id = self._repo.create_invitation(record)
+        except ValueError as exc: raise InvitationConflictError("invitation unavailable") from exc
+        self._audit(AuditEntry(principal.tenant_id, principal.user_id, "tenant_user", "invitation.created", "invitation", invitation_id, after={"email": email, "role": role}))
+        issued = InvitationIssued(invitation_id, record.expires_at, token)
+        self._invitation_notifier.notify(email=email, accept_url=f"{accept_url_base}?token={token}")
+        return issued
+
+    def accept_invitation(self, token: str, password: str, display_name: str | None = None) -> IssuedTokens:
+        if not isinstance(token, str) or not token or len(token) > 4096: raise InvitationError(_GENERIC_AUTH_FAILURE)
+        try: password_hash = self._passwords.hash(password)
+        except Exception as exc: raise InvitationError(_GENERIC_AUTH_FAILURE) from exc
+        accepted = self._repo.accept_invitation(self._refresh.digest(token), password_hash, self._now())
+        if accepted is None: raise InvitationError(_GENERIC_AUTH_FAILURE)
+        self._audit(AuditEntry(accepted.tenant_id, accepted.user_id, "tenant_user", "invitation.accepted", "invitation", None, after={"display_name": display_name} if display_name else None))
+        return self._issue(tenant_id=accepted.tenant_id, user_id=accepted.user_id, role=accepted.role, now=self._now())
+
+    def list_invitations(self, principal: Principal):
+        if principal.role not in ("owner", "manager"): raise InvitationPermissionError("forbidden")
+        return self._repo.list_invitations(principal.tenant_id)
+
+    def revoke_invitation(self, principal: Principal, invitation_id: str) -> None:
+        if principal.role not in ("owner", "manager"): raise InvitationPermissionError("forbidden")
+        if not self._repo.revoke_invitation(principal.tenant_id, invitation_id): raise InvitationError("not found")
+        self._audit(AuditEntry(principal.tenant_id, principal.user_id, "tenant_user", "invitation.revoked", "invitation", invitation_id))
 
     def _authenticate_credentials(self, *, tenant_slug: str, email: str, password: str):
         user = self._repo.get_tenant_user_by_email(tenant_slug, email)
@@ -220,6 +282,7 @@ class TenantAuthService:
         )
         result = self._repo.consume_and_replace(presented_digest=presented_digest, child=child, now=now)
         if result.replayed:
+            self._audit(AuditEntry(None, None, "system", "auth.refresh.reuse_detected"))
             raise RefreshReplayError("refresh token reuse detected")
         if result.status is not ConsumeStatus.ROTATED:
             # EXPIRED / NOT_FOUND / any non-rotation outcome.
@@ -276,6 +339,7 @@ class TenantAuthService:
         self._repo.revoke_access_token(parsed, "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", self._now())
     def revoke_user_sessions(self, tenant_id: str, user_id: str) -> None:
         self._repo.revoke_user_sessions(tenant_id,user_id,self._now())
+        self._audit(AuditEntry(tenant_id,user_id,"tenant_user","auth.sessions.revoked"))
     def set_tenant_status(self, status: str): self._repo.set_tenant_status("00000000-0000-0000-0000-000000000001", status)
     def set_user_active(self, active: bool):
         self._repo.set_user_active("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", active)
@@ -284,11 +348,13 @@ class TenantAuthService:
         if user is not None:
             secret=secrets.token_urlsafe(32); digest=self._reset.digest(secret); self._repo.issue_password_reset(user.tenant_id,user.id,digest,self._now()+__import__('datetime').timedelta(seconds=self._reset.ttl_seconds))
             self.sent_reset_secrets.append(secret)
+            self._audit(AuditEntry(user.tenant_id,user.id,"tenant_user","auth.password_reset.issued"))
         return {"ok": True}
     def redeem_password_reset(self, *, secret: str, new_password: str, now: datetime | None = None):
         if not isinstance(secret,str) or not secret or len(secret)>8192: raise PasswordResetError(_GENERIC_AUTH_FAILURE)
         result=self._repo.consume_password_reset(self._reset.digest(secret),self._passwords.hash(new_password),now or self._now())
         if result is None: raise PasswordResetError(_GENERIC_AUTH_FAILURE)
+        self._audit(AuditEntry(result[0],result[1],"tenant_user","auth.password_reset.consumed"))
     def begin_mfa_enrollment(self, *, tenant_id: str, user_id: str):
         user=self._repo.get_tenant_user_by_id(tenant_id,user_id)
         if not user or user.role not in ('owner','manager') or not self._mfa_cipher: raise MfaEnrollmentError('not permitted')
@@ -454,6 +520,7 @@ class TenantAuthService:
             # A high-entropy pepper (>= the 32-byte floor) for the in-memory fixture.
             refresh_token_service=OpaqueRefreshTokenService(pepper=secrets.token_urlsafe(32)),
             mfa_cipher=MfaSecretCipher.from_environment(mfa_env) if mfa_env else None,
+            invite_ttl_seconds=_positive_env_int(os.environ, "INVITE_TTL", 72 * 60 * 60),
         )
         repository.set_tenant_status(InMemoryAuthRepository._FIXTURE_TENANT_ID, tenant_status)
         return service

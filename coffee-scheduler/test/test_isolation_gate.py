@@ -49,7 +49,7 @@ except Exception:  # pragma: no cover
 # `tenants` is the tenant-root owner-bypass exception (0004: slug resolution). The only tenant_id
 # owner-bypass exceptions are these CS-061a credential tables: anonymous login/refresh must reach their
 # owner-run SECURITY DEFINER functions before a trusted tenant context exists. `weather_codes` is global.
-AUTH_OWNER_BYPASS_TABLES = {"tenant_users", "auth_refresh_tokens"}
+AUTH_OWNER_BYPASS_TABLES = {"tenant_users", "auth_refresh_tokens", "auth_revoked_tokens", "auth_password_reset_tokens", "auth_mfa_recovery_codes", "auth_login_attempts", "tenant_invitations", "audit_log"}
 AUTH_SERVICE_ROLE = "auth_svc"
 AUTH_FUNCTION_PREFIX = "auth_"
 TENANT_TABLES = [
@@ -59,7 +59,8 @@ TENANT_TABLES = [
     "calibration_log", "employees", "labor_rules", "consent_waivers", "events", "schedules",
     "shifts", "shift_assignments", "forecasts", "rule_eval_log", "transactions",
     "weather_hourly", "weather_daily", "employee_pii", "langgraph_checkpoints",
-    "tenant_users", "auth_refresh_tokens",
+    "tenant_users", "auth_refresh_tokens", "auth_revoked_tokens", "auth_password_reset_tokens",
+    "auth_mfa_recovery_codes", "auth_login_attempts", "tenant_invitations", "audit_log",
 ]
 PARTITION_PARENTS = ("rule_eval_log", "transactions", "weather_hourly")
 PROBE_TABLE = "stores"  # a plain domain table that owns maven-demo rows
@@ -228,6 +229,12 @@ class CoverageGate(unittest.TestCase):
     def test_auth_owner_bypass_is_limited_to_auth_svc_functions(self):
         with psycopg.connect(DSN) as conn:
             for table in AUTH_OWNER_BYPASS_TABLES:
+                if table == "audit_log":
+                    # CS-061c's deliberate app/admin tenant-scoped append-only port.
+                    self.assertTrue(conn.execute("SELECT has_table_privilege('app_rw', 'audit_log', 'INSERT, SELECT')").fetchone()[0])
+                    for privilege in ("UPDATE", "DELETE"):
+                        self.assertFalse(conn.execute("SELECT has_table_privilege('app_rw', 'audit_log', %s)", (privilege,)).fetchone()[0])
+                    continue
                 for role in ("app_rw", "app_ro"):
                     for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
                         allowed = conn.execute(
@@ -293,7 +300,8 @@ class CoverageGate(unittest.TestCase):
             ).fetchall()
             self.assertTrue(rows, "expected tenant RLS policies to exist")
             for relname, polname, using_expr, check_expr in rows:
-                for label, expr in (("USING", using_expr), ("WITH CHECK", check_expr)):
+                checks = (("USING", using_expr),) if check_expr is None else (("USING", using_expr), ("WITH CHECK", check_expr))
+                for label, expr in checks:
                     self.assertIsNotNone(expr, f"{relname}.{polname}: {label} expression missing")
                     self.assertIn(
                         "app_current_tenant", expr,

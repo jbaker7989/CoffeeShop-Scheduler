@@ -32,7 +32,7 @@ class F61MigrationAndDeploymentContractTests(unittest.TestCase):
         parents = {parent for _, parent in metadata.values() if parent is not None}
         heads = set(revisions) - parents
         self.assertEqual(1, len(heads), "Alembic must have exactly one linear migration head")
-        self.assertIn("0011", heads, "CS-061b must extend, not fork, the CS-061a chain")
+        self.assertIn("0012", heads, "CS-061c must extend, not fork, the CS-061a chain")
         self.assertIn("0010", parents, "CS-061a migration must remain an ancestor of later auth migrations")
 
     # spec: F61.ac1 — deployment uses a separate login principal; routine RLS roles and a

@@ -96,6 +96,39 @@ class RefreshTokenRecord:
     rotated_at: datetime | None = None
     revoked_at: datetime | None = None
 
+@dataclass(frozen=True)
+class InvitationRecord:
+    id: str
+    tenant_id: str
+    email: str
+    role: str
+    token_digest: str
+    invited_by: str | None
+    status: str
+    expires_at: datetime
+    accepted_at: datetime | None = None
+    created_at: datetime | None = None
+
+@dataclass(frozen=True)
+class AcceptedInvite:
+    tenant_id: str
+    user_id: str
+    role: str
+
+@dataclass(frozen=True)
+class AuditEntry:
+    tenant_id: str | None
+    actor_id: str | None
+    actor_type: str
+    action: str
+    target_type: str | None = None
+    target_id: str | None = None
+    impersonated_by: str | None = None
+    before: dict | None = None
+    after: dict | None = None
+    ip: str | None = None
+    user_agent: str | None = None
+
 
 class ConsumeStatus(enum.Enum):
     ROTATED = "rotated"
@@ -189,6 +222,20 @@ class AuthRepository(abc.ABC):
     def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool: raise NotImplementedError
     def set_tenant_status(self, tenant_id: str, status: str) -> None: raise NotImplementedError
     def set_user_active(self, tenant_id: str, user_id: str, active: bool) -> None: raise NotImplementedError
+    # CS-061c invitation/audit port.  These remain repository operations so policy never
+    # bypasses the SECURITY DEFINER boundary in production.
+    @abc.abstractmethod
+    def create_invitation(self, invitation: InvitationRecord) -> str: raise NotImplementedError
+    @abc.abstractmethod
+    def get_invitation(self, token_digest: str) -> InvitationRecord | None: raise NotImplementedError
+    @abc.abstractmethod
+    def accept_invitation(self, token_digest: str, password_hash: str, when: datetime) -> AcceptedInvite | None: raise NotImplementedError
+    @abc.abstractmethod
+    def list_invitations(self, tenant_id: str) -> list[InvitationRecord]: raise NotImplementedError
+    @abc.abstractmethod
+    def revoke_invitation(self, tenant_id: str, invitation_id: str) -> bool: raise NotImplementedError
+    @abc.abstractmethod
+    def record_audit(self, entry: AuditEntry) -> int: raise NotImplementedError
 
 
 class InMemoryAuthRepository(AuthRepository):
@@ -215,6 +262,8 @@ class InMemoryAuthRepository(AuthRepository):
         self._reset_records: dict[str, tuple[str,str,datetime,bool]] = {}
         self._attempts: dict[tuple[str,str,str], list[datetime]] = {}
         self._mfa: dict[tuple[str, str], dict] = {}
+        self._invitations: dict[str, InvitationRecord] = {}
+        self._audit: list[AuditEntry] = []
 
     # ----- fixture helpers -----
     def add_user(self, user: TenantUserRecord) -> None:
@@ -347,6 +396,49 @@ class InMemoryAuthRepository(AuthRepository):
         for key, user in self._users.items():
             if user.id == user_id:
                 return  # nothing to mutate on the frozen record for in-memory use
+
+    def create_invitation(self, invitation: InvitationRecord) -> str:
+        with self._hardening_lock:
+            now = _utcnow()
+            for ident, record in list(self._invitations.items()):
+                if record.tenant_id == invitation.tenant_id and record.email.lower() == invitation.email.lower() and record.status == "pending" and record.expires_at <= now:
+                    self._invitations[ident] = replace(record, status="expired")
+            if any(u.tenant_id == invitation.tenant_id and u.email.lower() == invitation.email.lower() for u in self._users.values()):
+                raise ValueError("already a member")
+            if any(r.tenant_id == invitation.tenant_id and r.email.lower() == invitation.email.lower() and r.status == "pending" for r in self._invitations.values()):
+                raise ValueError("duplicate pending invitation")
+            self._invitations[invitation.id] = invitation
+            return invitation.id
+    def get_invitation(self, token_digest: str) -> InvitationRecord | None:
+        with self._hardening_lock:
+            return next((r for r in self._invitations.values() if r.token_digest == token_digest), None)
+    def accept_invitation(self, token_digest: str, password_hash: str, when: datetime) -> AcceptedInvite | None:
+        with self._hardening_lock:
+            record = self.get_invitation(token_digest)
+            if record is None or record.status != "pending" or record.expires_at <= when:
+                return None
+            if any(u.tenant_id == record.tenant_id and u.email.lower() == record.email.lower() for u in self._users.values()):
+                return None
+            user_id = str(__import__('uuid').uuid4())
+            user = TenantUserRecord(user_id, record.tenant_id, self._FIXTURE_TENANT_SLUG, record.email, password_hash, record.role, True)
+            self.add_user(user)
+            self._invitations[record.id] = replace(record, status="accepted", accepted_at=when)
+            return AcceptedInvite(record.tenant_id, user_id, record.role)
+    def list_invitations(self, tenant_id: str) -> list[InvitationRecord]:
+        now = _utcnow()
+        with self._hardening_lock:
+            return sorted((replace(r, status="expired") if r.status == "pending" and r.expires_at <= now else r for r in self._invitations.values() if r.tenant_id == tenant_id), key=lambda r: (r.status != "pending", r.created_at or now))
+    def revoke_invitation(self, tenant_id: str, invitation_id: str) -> bool:
+        with self._hardening_lock:
+            record = self._invitations.get(invitation_id)
+            if record is None or record.tenant_id != tenant_id or record.status != "pending": return False
+            self._invitations[invitation_id] = replace(record, status="revoked")
+            return True
+    def record_audit(self, entry: AuditEntry) -> int:
+        with self._hardening_lock:
+            self._audit.append(entry); return len(self._audit)
+    @property
+    def audit_entries(self): return tuple(self._audit)
 
     # ----- refresh-token families -----
     def insert_refresh_token(self, record: RefreshTokenRecord) -> None:
@@ -558,6 +650,36 @@ class DatabaseAuthRepository(AuthRepository):
     def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool:
         with self.conn.cursor() as cur: cur.execute("SELECT auth_consume_recovery_code(%s,%s,%s)",(tenant_id,user_id,digest)); result=bool(cur.fetchone()[0])
         self.conn.commit(); return result
+
+    def create_invitation(self, invitation: InvitationRecord) -> str:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT auth_create_invitation(%s,%s,%s,%s,%s,%s)", (invitation.tenant_id, invitation.email, invitation.role, invitation.token_digest, invitation.invited_by, invitation.expires_at)); row=cur.fetchone()
+        except Exception as exc:
+            # The partial pending-invite index is the concurrent backstop; normalize only
+            # its conflict for the policy layer (which maps it to HTTP 409).
+            if exc.__class__.__name__ == "UniqueViolation": raise ValueError("duplicate pending invitation") from exc
+            raise
+        self.conn.commit(); return str(row[0])
+    @staticmethod
+    def _invitation(row: dict) -> InvitationRecord:
+        return InvitationRecord(str(row['id']),str(row['tenant_id']),row['email'],row['role'],row['token_digest'],None if row['invited_by'] is None else str(row['invited_by']),row['status'],row['expires_at'],row.get('accepted_at'),row.get('created_at'))
+    def get_invitation(self, token_digest: str) -> InvitationRecord | None:
+        with self.conn.cursor(row_factory=dict_row) as cur: cur.execute("SELECT * FROM auth_get_invitation(%s)",(token_digest,)); row=cur.fetchone()
+        return None if row is None else self._invitation(row)
+    def accept_invitation(self, token_digest: str, password_hash: str, when: datetime) -> AcceptedInvite | None:
+        with self.conn.cursor(row_factory=dict_row) as cur: cur.execute("SELECT * FROM auth_accept_invitation(%s,%s,%s)",(token_digest,password_hash,when)); row=cur.fetchone()
+        self.conn.commit(); return None if row is None else AcceptedInvite(str(row['tenant_id']),str(row['user_id']),row['role'])
+    def list_invitations(self, tenant_id: str) -> list[InvitationRecord]:
+        with self.conn.cursor(row_factory=dict_row) as cur: cur.execute("SELECT * FROM auth_list_invitations(%s)",(tenant_id,)); return [self._invitation(r) for r in cur.fetchall()]
+    def revoke_invitation(self, tenant_id: str, invitation_id: str) -> bool:
+        with self.conn.cursor() as cur: cur.execute("SELECT auth_revoke_invitation(%s,%s)",(tenant_id,invitation_id)); result=bool(cur.fetchone()[0])
+        self.conn.commit(); return result
+    def record_audit(self, entry: AuditEntry) -> int:
+        import json
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT auth_record_audit(%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::inet,%s)",(entry.tenant_id,entry.actor_id,entry.actor_type,entry.action,entry.target_type,entry.target_id,entry.impersonated_by,json.dumps(entry.before) if entry.before is not None else None,json.dumps(entry.after) if entry.after is not None else None,entry.ip,entry.user_agent)); result=cur.fetchone()[0]
+        self.conn.commit(); return int(result)
 
     @staticmethod
     def _to_record(row: dict) -> RefreshTokenRecord:
