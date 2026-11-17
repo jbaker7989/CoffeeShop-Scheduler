@@ -39,8 +39,11 @@ from auth.service import (
     AUTH_JWT_AUDIENCE_ENV,
     AUTH_JWT_ISSUER_ENV,
     TenantAuthService,
+    _positive_env_int,
 )
 from auth.tokens import OpaqueRefreshTokenService
+from auth.reset import PasswordResetService
+from auth.mfa import MfaSecretCipher
 
 
 _AUTH_CREDENTIAL_TABLES = ("tenant_users", "auth_refresh_tokens")
@@ -111,6 +114,41 @@ class PooledAuthRepository(AuthRepository):
             self._pool.open()
         with self._pool.connection() as conn:
             return self._repo(conn).revoke_family(family_id, when)
+
+    # Explicit CS-061b port; each method is one SECURITY DEFINER auth_* call.
+    def access_state(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).access_state(*a)
+    def revoke_access_token(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).revoke_access_token(*a)
+    def revoke_user_sessions(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).revoke_user_sessions(*a)
+    def issue_password_reset(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).issue_password_reset(*a)
+    def consume_password_reset(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).consume_password_reset(*a)
+    def record_login_attempt(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).record_login_attempt(*a)
+    def login_locked(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).login_locked(*a)
+    def get_mfa(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).get_mfa(*a)
+    def store_mfa(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).store_mfa(*a)
+    def consume_mfa_step(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).consume_mfa_step(*a)
+    def consume_recovery_code(self,*a):
+        if self._pool.closed: self._pool.open()
+        with self._pool.connection() as c: return self._repo(c).consume_recovery_code(*a)
 
 
 def _auth_pool(dsn: str) -> Any:
@@ -197,6 +235,8 @@ def build_auth_service_from_env(
         key_ring = RS256KeyRing.from_environment(source)
         token_service = RS256TokenService(key_ring, issuer=issuer, audience=audience)
         refresh_service = OpaqueRefreshTokenService.from_environment(source)
+        reset_service = PasswordResetService(source.get("AUTH_PASSWORD_RESET_PEPPER", ""), now or datetime.now, _positive_env_int(source, "AUTH_PASSWORD_RESET_TTL_SECONDS", 3600))
+        mfa_cipher = MfaSecretCipher.from_environment(source)
     except Exception as exc:  # JWTConfigurationError / ValueError — never echo key material
         raise GatewayAuthConfigError(f"CS-061a auth configuration is invalid: {exc}") from exc
 
@@ -213,6 +253,10 @@ def build_auth_service_from_env(
         password_service=Argon2idPasswordService(),
         token_service=token_service,
         refresh_token_service=refresh_service,
+        reset_service=reset_service,
+        mfa_cipher=mfa_cipher,
+        throttle_max_failures=_positive_env_int(source, "AUTH_LOGIN_MAX_FAILURES", 5),
+        throttle_window_seconds=_positive_env_int(source, "AUTH_LOGIN_LOCKOUT_SECONDS", 900),
         **kwargs,
     )
 

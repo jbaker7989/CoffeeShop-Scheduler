@@ -30,7 +30,10 @@ class F61MigrationAndDeploymentContractTests(unittest.TestCase):
         revisions = [revision for revision, _ in metadata.values()]
         self.assertEqual(len(revisions), len(set(revisions)), "Alembic revision identifiers must be unique")
         parents = {parent for _, parent in metadata.values() if parent is not None}
-        self.assertEqual({"0010"}, set(revisions) - parents, "auth must be the one migration head")
+        heads = set(revisions) - parents
+        self.assertEqual(1, len(heads), "Alembic must have exactly one linear migration head")
+        self.assertIn("0011", heads, "CS-061b must extend, not fork, the CS-061a chain")
+        self.assertIn("0010", parents, "CS-061a migration must remain an ancestor of later auth migrations")
 
     # spec: F61.ac1 — deployment uses a separate login principal; routine RLS roles and a
     # superuser DSN must never receive credential lookup/refresh authority.

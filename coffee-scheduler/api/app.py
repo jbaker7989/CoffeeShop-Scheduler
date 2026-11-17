@@ -23,7 +23,7 @@ from typing import Any, Callable
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 
 from auth.api import create_auth_router
-from auth.service import AuthenticationError, Principal, TenantAuthService
+from auth.service import AuthenticationError, Principal, TenantAuthService, TenantSuspendedError
 
 from .auth_gateway import ACCESS_COOKIE_NAME, build_auth_service_from_env, extract_access_credential
 
@@ -58,7 +58,9 @@ def create_app(
         if token is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
         try:
-            return auth_service.authenticate_access_token(token)
+            return auth_service.authorize_access_request(token)
+        except TenantSuspendedError:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
         except AuthenticationError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 

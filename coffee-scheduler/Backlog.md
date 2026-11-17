@@ -1976,6 +1976,180 @@ closing regression evidence.
 - **Risk if unfixed:** a valid 7-day refresh session offers no user benefit, producing recurring authentication
   outages and encouraging an insecure client-side token workaround.
 
+### BUG-038 — F61/CS-061b: auth hardening is bypassed over the production (pooled) repository
+- **Feature:** [F61](./FEATURES.md) (CS-061b) · **Priority:** P0 · **Size:** M · **Pattern:** D2/D3
+- **Status:** Open · **Type:** Integration / security-boundary defect (fail-open) · **Found:** 2026-11-16 (candidate validation)
+- **Developer:** Unassigned (Codex to fix) · **Duration:** ~1d (est.)
+- **Root cause:** `TenantAuthService` routes **every** CS-061b behaviour through concrete-class checks
+  `isinstance(self._repo, DatabaseAuthRepository)` / `isinstance(self._repo, InMemoryAuthRepository)`
+  (`coffee-scheduler/auth/service.py` — `authorize_access_request`, `login_json`, `revoke_user_sessions`,
+  `request_password_reset`, `redeem_password_reset`, `begin/confirm_mfa_enrollment`). The production gateway
+  (`api/auth_gateway.build_auth_service_from_env`) wires `PooledAuthRepository`, which subclasses
+  `AuthRepository` — **not** `DatabaseAuthRepository` — and does not implement the CS-061b repository methods
+  (`access_state`, `revoke_user_sessions`, `record_login_attempt`, `login_locked`, `get_mfa`, `store_mfa`,
+  `issue/consume_password_reset`, …). So over the real production repo every DB branch is skipped and the
+  service silently falls back to in-process memory. Concretely, in production:
+  - **Tenant suspension is never enforced.** `authorize_access_request` first checks the constructor-frozen
+    `self._tenant_status` (always `"active"`; nothing updates it from `tenants.status`) and, because the repo
+    is not a `DatabaseAuthRepository`, never calls the owner-run `auth_access_state` function. A suspended /
+    churned / trial tenant's unexpired access tokens keep authorizing `/stores` and `/me` → **403 is never
+    returned** (F61.AC3.4 / AC3.6 fail open). *(User **deactivation** is still caught, via the CS-061a
+    `get_tenant_user_by_id` reconciliation in `authenticate_access_token`; tenant status is the gap.)*
+  - **Password-reset redeem crashes and never persists.** `redeem_password_reset` takes the in-memory branch
+    and dereferences `self._repo._users`, which `PooledAuthRepository` does not have →
+    `AttributeError: 'PooledAuthRepository' object has no attribute '_users'`. The DB password is never
+    updated and no session is invalidated (F61.AC4.7–4.9).
+  - **Revocation / throttle / MFA are process-local, not durable or shared.** `revoke_user_sessions` matches
+    neither isinstance branch, so it never calls `auth_revoke_user_sessions` — refresh families are not
+    revoked in the DB and the cutoff lives only in one process's dict; login throttle uses the in-process
+    `LoginRateLimiter` and MFA uses the in-process `self._mfa` dict, so the migration-0011 tables
+    (`auth_login_attempts`, `auth_mfa_recovery_codes`, `auth_revoked_tokens`) and their functions are **dead
+    in production**. A load balancer sending the next request to another instance — or any process restart —
+    resets lockout, drops revocations, and loses MFA state (F61.AC3.5, AC4.10–4.13).
+- **Reproduction (verified 2026-11-16 against a disposable PostgreSQL 16, migrations `0001..0011` applied):**
+  - `coffee-scheduler/test/test_cs061b_production_repo_path.py` (no DB) — three RED assertions: over a
+    minimal non-fixture `AuthRepository` that reports its tenant suspended, `authorize_access_request` does
+    **not** raise `TenantSuspendedError` and never calls `access_state`; `redeem_password_reset` raises the
+    `self._repo._users` `AttributeError`.
+  - `coffee-scheduler/test/test_cs061b_service_integration.py` (opt-in `CS061B_DATABASE_INTEGRATION=1`) — the
+    **five** service-over-`DatabaseAuthRepository` proofs PASS (suspension, durable session revocation, reset
+    consume + session invalidation, throttle lockout, MFA enrol/require/replay — each across a fresh auth_svc
+    connection), while `test_production_pooled_repository_enforces_suspension` (service over the real
+    `PooledAuthRepository`, tenant suspended after login) FAILS: `TenantSuspendedError not raised`.
+  - Direct probe (same DB): `isinstance(PooledAuthRepository(pool), DatabaseAuthRepository) == False`;
+    `DatabaseAuthRepository` → `TenantSuspendedError` (correct), `PooledAuthRepository` → authorize returns a
+    valid `Principal` for the suspended tenant.
+- **Impact:** the migration, the `auth_*` functions, `DatabaseAuthRepository`, and the Codex
+  `test_cs061b_database_integration.py` repository-level proof are all correct, but the **reachable gateway**
+  never exercises them. Integrating the candidate as-is ships an auth boundary where tenant suspension does
+  not take effect, password reset 500s, and revocation/lockout/MFA are per-process — i.e. the CS-061b
+  acceptance criteria are not met where it counts, despite a green in-memory contract suite.
+- **Acceptance criteria (for the fix):**
+  - Drive all CS-061b behaviour through the `AuthRepository` interface, not concrete-class `isinstance`
+    checks: declare the CS-061b operations (`access_state`, `revoke_user_sessions`, `record_login_attempt`,
+    `login_locked`, `issue/consume_password_reset`, `store/get/consume` MFA) on `AuthRepository` and implement
+    them on **both** `InMemoryAuthRepository` and `PooledAuthRepository` (which must delegate to its per-call
+    `DatabaseAuthRepository`, as it already does for the CS-061a methods).
+  - Enforce tenant `status` per request from the database of record (or an equivalent durable source) rather
+    than the constructor-frozen `self._tenant_status`, so a suspended tenant is refused on the next protected
+    request through the pooled repo.
+  - Back revocation list, session cutoffs, login throttle/lockout, and MFA with the migration-0011 tables in
+    production so they are durable and shared across instances; `redeem_password_reset` must persist through
+    `auth_consume_password_reset` and never touch an in-memory `_users`.
+  - Keep the existing authoritative contracts and the CS-061a suite green; turn
+    `test_cs061b_production_repo_path.py` and the pooled case in `test_cs061b_service_integration.py` green
+    **without** weakening either test.
+- **Secondary findings (same fix pass, lower severity, do not block on their own):**
+  - **No IP-scoped throttle.** `LoginAttemptKey.account()` ignores `ip`, and `auth_record_login_attempt` /
+    `auth_login_locked` count only by `(tenant_id, email)`; the recorded `ip`/`inet` column is never used, so
+    the independent IP throttle / credential-stuffing defence in F61.AC4 is absent (the account lockout and
+    "no cross-tenant DoS" invariant do hold). Add a bounded IP-scoped limiter or document the deferral.
+  - **Config constants ignored.** `.env.example` advertises `AUTH_LOGIN_MAX_FAILURES`,
+    `AUTH_LOGIN_LOCKOUT_SECONDS`, `AUTH_PASSWORD_RESET_TTL_SECONDS`, but `auth/ratelimit.py` hard-codes `5` /
+    `900`, the SQL hard-codes `>= 5` / `15 minutes`, and `auth/reset.py` hard-codes `3600`. Read them or drop
+    the env keys.
+  - **Bespoke MFA cipher.** `MfaSecretCipher` is an unauthenticated, hand-rolled repeating-keystream XOR
+    (`SHA256(key‖nonce)`); it encrypts-at-rest and round-trips but is not a vetted AEAD for a payroll-adjacent
+    TOTP seed. Consider AES-GCM / Fernet. (Contract only required "encrypted at rest"; flagged as hardening.)
+- **Risk if unfixed:** a suspended / non-paying / compromised tenant retains full API access until every
+  access token naturally expires and across refreshes; password reset is a hard 500; and account lockout and
+  MFA are trivially defeated by a restart or a second instance — the application reports CS-061b green while
+  serving a fail-open auth boundary to real gateway traffic.
+
+### BUG-039 — F61/CS-061b: an undecryptable MFA secret crashes login (500) instead of the opaque auth failure
+- **Feature:** [F61](./FEATURES.md) (CS-061b) · **Priority:** P2 · **Size:** S · **Pattern:** D2
+- **Status:** Open · **Type:** Fail-closed-robustness / security-invariant deviation · **Found:** 2026-11-16 (Claude final independent validation of candidate `2dabcfa`)
+- **Developer:** Unassigned · **Duration:** ~0.5d (est.)
+- **Root cause:** In `TenantAuthService.login_json` (`coffee-scheduler/auth/service.py`, the MFA block ~L144–155)
+  the `try` wrapping the decrypt-and-consume step catches **only** `MfaReplayError`:
+  `secret = self._mfa_cipher.decrypt(state['ciphertext']).decode()` runs inside it, but
+  `MfaSecretCipher.decrypt` raises `ValueError('invalid MFA ciphertext')` (and `.decode()` can raise
+  `UnicodeDecodeError`) whenever the stored `mfa_secret_ciphertext` cannot be authenticated/decrypted. That
+  `ValueError` is **not** caught, so it propagates out of the auth service and surfaces to the gateway as an
+  uncaught exception (HTTP 500), not the generic `AuthenticationError`.
+- **Why it matters (contract):** the CS-061b SDD (`docs/sdd-cs061b.md`, "Security invariants and edge cases")
+  requires **"Fail-closed everywhere … a missing/short pepper or MFA key is a refusal or a hard configuration
+  error — never an open default"** and **"One opaque failure … refusals that reach a client must be
+  externally indistinguishable from an ordinary credential failure — no message, no status … that reveals …
+  MFA-enabled state"**. A per-request `ValueError`/500 is neither a clean refusal nor a startup config error,
+  and the 500-vs-401 difference is an oracle that distinguishes an MFA-enabled account whose secret is
+  undecryptable from an ordinary bad-credential 401. (No token is issued, so there is **no authentication
+  bypass** — the failure is closed in the security sense; the defect is the *form* of the failure.)
+- **Reachable through ordinary operations:** rotating `AUTH_MFA_ENC_KEY` (the key is global; stored secrets
+  are per-user) makes **every** existing MFA secret undecryptable → every MFA owner/manager login 500s until
+  re-enrolment — an availability incident, not a graceful failure. Also triggered by at-rest corruption or a
+  DB-write tamper of the column.
+- **Reproduction (verified 2026-11-16):**
+  - `coffee-scheduler/test/test_f61_mfa_cipher_failclosed_contract.py` (no DB, in-memory contract fixture) —
+    two RED assertions: after a simulated `AUTH_MFA_ENC_KEY` rotation, and after corrupting the stored
+    ciphertext in place, `login_json` raises `ValueError('invalid MFA ciphertext')` where
+    `AuthenticationError` is required.
+  - Live pooled-repo probe over disposable PostgreSQL (migrations `0001..0011`, `CS061B_DATABASE_INTEGRATION=1`):
+    enrol MFA, then `UPDATE tenant_users SET mfa_secret_ciphertext = '\xdeadbeef' WHERE id=…`; the next MFA
+    login over the production `PooledAuthRepository` raises an uncaught `ValueError`, not `AuthenticationError`.
+    (All other pooled-path hardening checks — suspension, deactivation, session cutoff, jti revocation, durable
+    reset + session invalidation, durable throttle lockout, MFA enrol/require/replay/recovery, cross-tenant
+    isolation — passed.)
+- **Acceptance criteria (for the fix):**
+  - A stored MFA secret that cannot be decrypted (key rotation, corruption, tamper) makes `login_json` /
+    `login_browser` raise the generic `AuthenticationError` (opaque credential failure), issuing no tokens and
+    returning the same status/shape/timing as an ordinary bad password — no uncaught `ValueError`, no 500, no
+    MFA-state oracle. Widen the MFA block to map decrypt/`decode` failures to the opaque failure (while still
+    treating a legitimately missing cipher config as the documented hard configuration error).
+  - Add the failing-first regression above and keep every existing CS-061a/CS-061b contract and the live DB
+    integration suite green; do not weaken any negative case.
+- **Related (pre-existing, re-confirmed this pass — not introduced by this candidate; see BUG-038 "Secondary
+  findings"):** the independent **IP-scoped login throttle is still absent** (`LoginAttemptKey.account()`
+  ignores `ip`; `auth_record_login_attempt`/`auth_login_locked` count only by `(tenant_id, email)` — verified
+  live: 10 failures from one IP across distinct emails do not throttle a fresh account from that IP), contrary
+  to SDD AC4.10's "independently, on the client IP"; and the **login/reset config tunables are ignored**
+  (`.env.example` advertises `AUTH_LOGIN_MAX_FAILURES`/`AUTH_LOGIN_LOCKOUT_SECONDS`/`AUTH_PASSWORD_RESET_TTL_SECONDS`
+  but `auth/ratelimit.py` hard-codes `5`/`900`, migration `0011` hard-codes `>= 5`/`15 minutes`, and
+  `auth/reset.py` hard-codes `3600`). Also **code-slop:** `TenantAuthService.from_environment`
+  (`auth/service.py`) is dead (no caller; the gateway uses `build_auth_service_from_env`) and is itself broken
+  — it never `return`s the service it builds and references `DatabaseAuthRepository`, which `service.py` does
+  not import (a `NameError` if ever called). These do not block on their own but should be closed with the fix.
+- **Risk if unfixed:** a routine encryption-key rotation turns into a 500 outage for every MFA-protected
+  owner/manager, and the MFA-path status difference gives an account-state oracle the SDD explicitly forbids.
+
+### BUG-040 — F61/CS-061b: migration 0011 is not reversible — downgrade leaks its auth_* functions, breaking the F43.ac3 round-trip
+- **Feature:** [F61](./FEATURES.md) (CS-061b) · also regresses [F43](./FEATURES.md).ac3 · **Priority:** P1 · **Size:** S · **Pattern:** D4
+- **Status:** Open · **Type:** Migration reversibility regression · **Found:** 2026-11-16 (Claude final independent validation of candidate `2dabcfa`)
+- **Developer:** Unassigned · **Duration:** ~0.5d (est.)
+- **Root cause:** `db/migrations/versions/0011_cs061b_auth_hardening.py` `upgrade()` creates **11** `auth_*`
+  `SECURITY DEFINER` functions with plain `CREATE FUNCTION` (not `CREATE OR REPLACE`), but `downgrade()` only
+  `DROP TABLE`s the four new tables and `DROP COLUMN`s the four `tenant_users` columns — it never
+  `DROP FUNCTION`s `auth_access_state`, `auth_revoke_access_token`, `auth_revoke_user_sessions`,
+  `auth_issue_password_reset`, `auth_consume_password_reset`, `auth_record_login_attempt`,
+  `auth_login_locked`, `auth_store_mfa`, `auth_consume_mfa_step`, `auth_get_mfa`, or
+  `auth_consume_recovery_code`. After a downgrade those functions survive, so the next `upgrade` aborts at
+  `CREATE FUNCTION auth_access_state(...)` with `DuplicateFunction: function "auth_access_state" already
+  exists with same argument types`. The CS-061a migration `0010` established the correct pattern — its
+  `downgrade()` runs `DROP FUNCTION IF EXISTS` for every function it created — which `0011` does not follow.
+- **Reproduction (verified 2026-11-16 on pristine, single-database PostgreSQL 16 clusters — role-clean):**
+  - `coffee-scheduler/test/test_migrations_roundtrip.py::...::test_upgrade_downgrade_upgrade_leaves_only_alembic_metadata_at_base`
+    (the existing F43.ac3 reversibility gate; runs only when `DATABASE_URL` is set): **PASSES at base
+    `f78dc7a` (no 0011)** and **FAILS on the candidate** with `alembic upgrade head failed:
+    psycopg.errors.DuplicateFunction: function "auth_access_state" already exists`. A clean regression:
+    base→green, candidate→red, same pristine cluster.
+  - Equivalent minimal repro: `alembic upgrade head` → `alembic downgrade 0010` → `alembic upgrade head`
+    fails at the re-`CREATE FUNCTION`.
+  - Note: this contract gate is `@skipUnless(DATABASE_URL)`, so a contract run without a live DB (the common
+    path) skips it and never sees the break — which is how the candidate's suite reported green.
+- **Impact:** the forward path (`upgrade head`) and all CS-061b runtime behaviour are correct — every live-DB
+  integration proof over `DatabaseAuthRepository` and the production `PooledAuthRepository` passed — but
+  **rolling `0011` back and re-applying it is impossible** without manually dropping the 11 functions first,
+  and the repo's own migration-reversibility contract (F43.ac3) is red. Any production rollback of the
+  CS-061b slice is blocked.
+- **Acceptance criteria (for the fix):**
+  - `0011.downgrade()` drops every object `upgrade()` created, functions included (`DROP FUNCTION IF EXISTS`
+    with the exact signatures, mirroring `0010`), so `upgrade → downgrade → upgrade` and `downgrade base →
+    upgrade head` both succeed on a clean cluster.
+  - `test_migrations_roundtrip.py` passes with `DATABASE_URL` set; run the reversibility gate against a live
+    PostgreSQL in CI (or document why it is skipped) so an asymmetric migration cannot regress green again.
+- **Risk if unfixed:** a CS-061b rollback leaves the database in a state where the next deploy's
+  `alembic upgrade` crashes, turning a routine revert into a stuck migration during an incident.
+
 ---
 
 ## Backlog summary

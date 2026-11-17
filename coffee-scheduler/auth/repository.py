@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import abc
 import enum
+import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
@@ -172,6 +173,23 @@ class AuthRepository(abc.ABC):
     def revoke_family(self, family_id: str, when: datetime | None = None) -> int:
         """Revoke every not-yet-revoked token in a family. Returns rows affected."""
 
+    # ----- CS-061b hardening port -----
+    # These are deliberately mandatory.  The policy layer must never keep an alternate
+    # in-process copy of security state when a production adapter omits a capability.
+    def access_state(self, tenant_id: str, user_id: str, jti: str, issued_at: datetime) -> dict | None: raise NotImplementedError
+    def revoke_access_token(self, jti: str, tenant_id: str, user_id: str, expires_at: datetime) -> None: raise NotImplementedError
+    def revoke_user_sessions(self, tenant_id: str, user_id: str, when: datetime) -> None: raise NotImplementedError
+    def issue_password_reset(self, tenant_id: str, user_id: str, digest: str, expires_at: datetime) -> None: raise NotImplementedError
+    def consume_password_reset(self, digest: str, password_hash: str, when: datetime) -> tuple[str, str] | None: raise NotImplementedError
+    def record_login_attempt(self, tenant_id: str, email: str, ip: str, succeeded: bool, when: datetime, max_failures: int = 5, window_seconds: int = 900) -> bool: raise NotImplementedError
+    def login_locked(self, tenant_id: str, email: str, ip: str, when: datetime, max_failures: int = 5, window_seconds: int = 900) -> bool: raise NotImplementedError
+    def get_mfa(self, tenant_id: str, user_id: str) -> dict | None: raise NotImplementedError
+    def store_mfa(self, tenant_id: str, user_id: str, ciphertext: bytes, step: int, digests: list[str]) -> None: raise NotImplementedError
+    def consume_mfa_step(self, tenant_id: str, user_id: str, step: int) -> bool: raise NotImplementedError
+    def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool: raise NotImplementedError
+    def set_tenant_status(self, tenant_id: str, status: str) -> None: raise NotImplementedError
+    def set_user_active(self, tenant_id: str, user_id: str, active: bool) -> None: raise NotImplementedError
+
 
 class InMemoryAuthRepository(AuthRepository):
     """Process-local store for tests and the CS-061a contract fixture.
@@ -189,10 +207,95 @@ class InMemoryAuthRepository(AuthRepository):
     def __init__(self) -> None:
         self._users: dict[tuple[str, str], TenantUserRecord] = {}
         self._tokens: dict[str, RefreshTokenRecord] = {}
+        # CS-061b test-double state belongs to the repository, never the service.
+        self._hardening_lock = threading.RLock()
+        self._tenant_status: dict[str, str] = {}
+        self._session_cutoffs: dict[tuple[str, str], datetime] = {}
+        self._revoked_jtis: set[str] = set()
+        self._reset_records: dict[str, tuple[str,str,datetime,bool]] = {}
+        self._attempts: dict[tuple[str,str,str], list[datetime]] = {}
+        self._mfa: dict[tuple[str, str], dict] = {}
 
     # ----- fixture helpers -----
     def add_user(self, user: TenantUserRecord) -> None:
         self._users[(user.tenant_slug, user.email.lower())] = user
+        self._tenant_status.setdefault(user.tenant_id, "active")
+
+    def access_state(self, tenant_id: str, user_id: str, jti: str, issued_at: datetime) -> dict | None:
+        member=self.get_tenant_user_by_id(tenant_id,user_id)
+        if member is None: return None
+        with self._hardening_lock:
+            cutoff=self._session_cutoffs.get((tenant_id,user_id))
+            return {"role":member.role,"is_active":member.is_active,"tenant_active":self._tenant_status.get(tenant_id)=="active","revoked":jti in self._revoked_jtis or (cutoff is not None and issued_at < cutoff)}
+    def revoke_user_sessions(self, tenant_id: str, user_id: str, when: datetime) -> None:
+        with self._hardening_lock:
+            self._session_cutoffs[(tenant_id,user_id)]=when
+            for token in list(self._tokens.values()):
+                if token.tenant_id == tenant_id and token.user_id == user_id:
+                    self.revoke_family(token.family_id, when)
+    def revoke_access_token(self, jti: str, tenant_id: str, user_id: str, expires_at: datetime) -> None:
+        with self._hardening_lock: self._revoked_jtis.add(jti)
+    def issue_password_reset(self, tenant_id: str, user_id: str, digest: str, expires_at: datetime) -> None:
+        with self._hardening_lock:
+            for d,(t,u,e,c) in list(self._reset_records.items()):
+                if t==tenant_id and u==user_id: self._reset_records[d]=(t,u,e,True)
+            self._reset_records[digest]=(tenant_id,user_id,expires_at,False)
+    def consume_password_reset(self, digest: str, password_hash: str, when: datetime):
+        with self._hardening_lock:
+            record=self._reset_records.get(digest)
+            if record is None or record[3] or record[2] <= when: return None
+            tid,uid,expires,_=record; self._reset_records[digest]=(tid,uid,expires,True)
+            for k,u in list(self._users.items()):
+                if u.tenant_id==tid and u.id==uid: self._users[k]=replace(u,password_hash=password_hash)
+            self.revoke_user_sessions(tid,uid,when); return tid,uid
+    def set_tenant_status(self, tenant_id: str, status: str) -> None:
+        with self._hardening_lock: self._tenant_status[tenant_id] = status
+    def set_user_active(self, tenant_id: str, user_id: str, active: bool) -> None:
+        with self._hardening_lock:
+            for key, user in list(self._users.items()):
+                if user.tenant_id == tenant_id and user.id == user_id:
+                    self._users[key] = replace(user, is_active=active)
+    def login_locked(self, tenant_id: str, email: str, ip: str | datetime, when: datetime | None = None, max_failures: int = 5, window_seconds: int = 900) -> bool:
+        if isinstance(ip, datetime): when, ip = ip, "0.0.0.0"
+        assert when is not None
+        with self._hardening_lock:
+            cutoff = when.timestamp() - window_seconds
+            failures = [t for t in self._attempts.get((tenant_id, email.lower(), "account"), []) if t.timestamp() > cutoff]
+            self._attempts[(tenant_id, email.lower(), "account")] = failures
+            ip_key=(tenant_id, ip, "ip")
+            ip_failures=[t for t in self._attempts.get(ip_key, []) if t.timestamp() > cutoff]
+            self._attempts[ip_key] = ip_failures
+            return len(failures) >= max_failures or len(ip_failures) >= max_failures
+    def record_login_attempt(self, tenant_id: str, email: str, ip: str, succeeded: bool, when: datetime, max_failures: int = 5, window_seconds: int = 900) -> bool:
+        key=(tenant_id, email.lower(), "account"); ip_key=(tenant_id, ip, "ip")
+        with self._hardening_lock:
+            if succeeded:
+                self._attempts.pop(key, None)
+                return False
+            self._attempts.setdefault(key, []).append(when); self._attempts.setdefault(ip_key, []).append(when)
+            return self.login_locked(tenant_id, email, ip, when, max_failures, window_seconds)
+    def get_mfa(self, tenant_id: str, user_id: str) -> dict | None:
+        with self._hardening_lock:
+            state=self._mfa.get((tenant_id,user_id))
+            return None if state is None else {"ciphertext": state["ciphertext"], "last_timestep": state["last_timestep"], "recovery_digests": list(state["recovery_digests"])}
+    def store_mfa(self, tenant_id: str, user_id: str, ciphertext: bytes, step: int, digests: list[str]) -> None:
+        with self._hardening_lock: self._mfa[(tenant_id,user_id)]={"ciphertext":bytes(ciphertext),"last_timestep":step,"recovery_digests":list(digests)}
+    def consume_mfa_step(self, tenant_id: str, user_id: str, step: int) -> bool:
+        with self._hardening_lock:
+            state=self._mfa.get((tenant_id,user_id))
+            if state is None or step <= state["last_timestep"]: return False
+            state["last_timestep"] = step
+            return True
+    def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool:
+        import hmac
+        with self._hardening_lock:
+            state=self._mfa.get((tenant_id,user_id))
+            if state is None: return False
+            for candidate in state["recovery_digests"]:
+                if hmac.compare_digest(candidate, digest):
+                    state["recovery_digests"].remove(candidate)
+                    return True
+            return False
 
     @classmethod
     def with_contract_fixture(
@@ -414,6 +517,47 @@ class DatabaseAuthRepository(AuthRepository):
         with self.conn.cursor() as cur:
             cur.execute("SELECT auth_revoke_refresh_family(%s, %s)", (family_id, when))
             return cur.fetchone()[0]
+
+    # CS-061b operations exclusively invoke owner-run, pinned-search-path auth_* functions.
+    # No application role gets a credential-table grant.
+    def access_state(self, tenant_id: str, user_id: str, jti: str, issued_at: datetime) -> dict | None:
+        with self.conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM auth_access_state(%s,%s,%s,%s)", (tenant_id,user_id,jti,issued_at))
+            return cur.fetchone()
+    def revoke_access_token(self, jti: str, tenant_id: str, user_id: str, expires_at: datetime) -> None:
+        with self.conn.cursor() as cur: cur.execute("SELECT auth_revoke_access_token(%s,%s,%s,%s)",(jti,tenant_id,user_id,expires_at))
+        self.conn.commit()
+    def revoke_user_sessions(self, tenant_id: str, user_id: str, when: datetime) -> None:
+        with self.conn.cursor() as cur: cur.execute("SELECT auth_revoke_user_sessions(%s,%s,%s)",(tenant_id,user_id,when))
+        self.conn.commit()
+    def issue_password_reset(self, tenant_id: str, user_id: str, digest: str, expires_at: datetime) -> None:
+        with self.conn.cursor() as cur: cur.execute("SELECT auth_issue_password_reset(%s,%s,%s,%s)",(tenant_id,user_id,digest,expires_at))
+        self.conn.commit()
+    def consume_password_reset(self, digest: str, password_hash: str, when: datetime) -> tuple[str,str] | None:
+        with self.conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM auth_consume_password_reset(%s,%s,%s)",(digest,password_hash,when)); row=cur.fetchone()
+        self.conn.commit()
+        return None if row is None else (str(row['tenant_id']),str(row['user_id']))
+    def record_login_attempt(self, tenant_id: str, email: str, ip: str, succeeded: bool, when: datetime, max_failures: int = 5, window_seconds: int = 900) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT locked FROM auth_record_login_attempt(%s,%s,%s::inet,%s,%s,%s,%s)",(tenant_id,email,ip,succeeded,when,max_failures,window_seconds)); result=bool(cur.fetchone()[0])
+        self.conn.commit(); return result
+    def login_locked(self, tenant_id: str, email: str, ip: str | datetime, when: datetime | None = None, max_failures: int = 5, window_seconds: int = 900) -> bool:
+        if isinstance(ip, datetime): when, ip = ip, "0.0.0.0"
+        assert when is not None
+        with self.conn.cursor() as cur: cur.execute("SELECT auth_login_locked(%s,%s,%s::inet,%s,%s,%s)",(tenant_id,email,ip,when,max_failures,window_seconds)); return bool(cur.fetchone()[0])
+    def store_mfa(self, tenant_id: str, user_id: str, ciphertext: bytes, step: int, digests: list[str]) -> None:
+        with self.conn.cursor() as cur: cur.execute("SELECT auth_store_mfa(%s,%s,%s,%s,%s)",(tenant_id,user_id,ciphertext,step,digests))
+        self.conn.commit()
+    def consume_mfa_step(self, tenant_id: str, user_id: str, step: int) -> bool:
+        with self.conn.cursor() as cur: cur.execute("SELECT auth_consume_mfa_step(%s,%s,%s)",(tenant_id,user_id,step)); result=bool(cur.fetchone()[0])
+        self.conn.commit(); return result
+    def get_mfa(self, tenant_id: str, user_id: str) -> dict | None:
+        with self.conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM auth_get_mfa(%s,%s)",(tenant_id,user_id)); return cur.fetchone()
+    def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool:
+        with self.conn.cursor() as cur: cur.execute("SELECT auth_consume_recovery_code(%s,%s,%s)",(tenant_id,user_id,digest)); result=bool(cur.fetchone()[0])
+        self.conn.commit(); return result
 
     @staticmethod
     def _to_record(row: dict) -> RefreshTokenRecord:

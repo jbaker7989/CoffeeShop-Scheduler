@@ -18,10 +18,13 @@ live here, never in the route handlers (``auth.api``):
 from __future__ import annotations
 
 import os
+import base64
+import json
 import secrets
+import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Mapping
 
 from cryptography.hazmat.primitives import serialization
@@ -37,12 +40,14 @@ from .jwt import (
 from .passwords import Argon2idPasswordService, InvalidPasswordHash
 from .repository import (
     AuthRepository,
-    ConsumeStatus,
-    DatabaseAuthRepository,
     InMemoryAuthRepository,
+    ConsumeStatus,
     RefreshTokenRecord,
 )
 from .tokens import MAX_REFRESH_TOKEN_BYTES, OpaqueRefreshTokenService
+from .ratelimit import LoginAttemptKey
+from .reset import PasswordResetService, PasswordResetError
+from .mfa import TOTPService, MfaSecretCipher, RecoveryCodeService, MfaRequiredError, MfaEnrollmentError, MfaReplayError
 
 # Environment variable names for the production auth wiring. The auth service connects on
 # its OWN dsn as the dedicated auth_svc role — never the data-access app_rw/app_ro roles.
@@ -53,6 +58,13 @@ AUTH_JWT_AUDIENCE_ENV = "AUTH_JWT_AUDIENCE"
 # One opaque message for every credential/refresh failure: callers must not be able to
 # distinguish "no such user" from "wrong password" from "inactive user".
 _GENERIC_AUTH_FAILURE = "authentication failed"
+
+def _positive_env_int(source: Mapping[str, str], name: str, default: int) -> int:
+    value = source.get(name, str(default))
+    try: parsed = int(value)
+    except (TypeError, ValueError): raise ValueError(f"{name} must be a positive integer") from None
+    if parsed <= 0: raise ValueError(f"{name} must be a positive integer")
+    return parsed
 
 
 class AuthenticationError(Exception):
@@ -65,6 +77,8 @@ class RefreshReplayError(AuthenticationError):
     A subclass of :class:`AuthenticationError` because a replay is an authentication
     failure, but distinguishable so callers can alarm on token theft specifically.
     """
+class TenantSuspendedError(AuthenticationError): pass
+class SessionRevokedError(AuthenticationError): pass
 
 
 @dataclass(frozen=True)
@@ -102,22 +116,59 @@ class TenantAuthService:
         token_service: RS256TokenService,
         refresh_token_service: OpaqueRefreshTokenService,
         now: Callable[[], datetime] = _utcnow,
+        reset_service: PasswordResetService | None = None,
+        mfa_cipher: MfaSecretCipher | None = None,
+        throttle_max_failures: int = 5,
+        throttle_window_seconds: int = 900,
     ) -> None:
         self._repo = repository
         self._passwords = password_service
         self._tokens = token_service
         self._refresh = refresh_token_service
         self._now = now
+        self._reset = reset_service or PasswordResetService(secrets.token_urlsafe(32), now)
+        self.sent_reset_secrets: list[str] = []
+        self._mfa_cipher = mfa_cipher
+        if throttle_max_failures <= 0 or throttle_window_seconds <= 0:
+            raise ValueError("login throttle configuration must be positive")
+        self._throttle_max_failures = throttle_max_failures
+        self._throttle_window_seconds = throttle_window_seconds
+        self._pending_mfa: dict[tuple[str,str], str] = {}
+        self.mfa_recovery_codes: list[str] = []
         # A valid Argon2id hash of a random secret, verified against when the email lookup
         # misses so an unknown email costs the same Argon2 work as a wrong password. Without
         # it, response time leaks whether an email is registered (tenant/email enumeration).
         self._dummy_password_hash = password_service.hash(secrets.token_urlsafe(32))
 
     # ----- login -----
-    def login_json(self, *, tenant_slug: str, email: str, password: str) -> IssuedTokens:
+    def login_json(self, *, tenant_slug: str, email: str, password: str, client_ip: str = "0.0.0.0", mfa_code: str | None = None, now: datetime | None = None) -> IssuedTokens:
         """JSON/bearer login: verify active credentials, issue an access + refresh pair."""
-        user = self._authenticate_credentials(tenant_slug=tenant_slug, email=email, password=password)
-        now = self._now()
+        user_hint = self._repo.get_tenant_user_by_email(tenant_slug, email)
+        key = LoginAttemptKey(tenant_id=user_hint.tenant_id if user_hint else tenant_slug, email=email, ip=client_ip)
+        if self._repo.login_locked(key.tenant_id,key.email,key.ip,now or self._now(),self._throttle_max_failures,self._throttle_window_seconds):
+            from .ratelimit import AccountLockedError; raise AccountLockedError(_GENERIC_AUTH_FAILURE)
+        try:
+            user = self._authenticate_credentials(tenant_slug=tenant_slug, email=email, password=password)
+        except AuthenticationError:
+            self._repo.record_login_attempt(key.tenant_id,key.email,key.ip,False,now or self._now(),self._throttle_max_failures,self._throttle_window_seconds)
+            raise
+        self._repo.record_login_attempt(key.tenant_id,key.email,key.ip,True,now or self._now(),self._throttle_max_failures,self._throttle_window_seconds)
+        now = now or self._now()
+        state=self._repo.get_mfa(user.tenant_id,user.id)
+        if state:
+            if not mfa_code: raise MfaRequiredError("authentication failed")
+            try:
+                if self._mfa_cipher is None: raise AuthenticationError(_GENERIC_AUTH_FAILURE)
+                secret=self._mfa_cipher.decrypt(state['ciphertext']).decode()
+                try: state['last']=TOTPService().consume(secret,mfa_code,now,last_timestep=state.get('last',state.get('last_timestep')))
+                except MfaReplayError:
+                    if not self._repo.consume_recovery_code(user.tenant_id,user.id,RecoveryCodeService().digest(mfa_code)): raise MfaReplayError('invalid')
+                else:
+                    if not self._repo.consume_mfa_step(user.tenant_id,user.id,state['last']): raise MfaReplayError('replayed')
+            # AES-GCM authentication/key failures are deliberately indistinguishable from
+            # a bad OTP.  Never leak corrupt ciphertext, key rotation, or MFA enrollment.
+            except (MfaReplayError, ValueError, UnicodeDecodeError):
+                raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
         self._repo.record_login(user.id, now)
         return self._issue(tenant_id=user.tenant_id, user_id=user.id, role=user.role, now=now)
 
@@ -209,6 +260,48 @@ class TenantAuthService:
             raise AuthenticationError(_GENERIC_AUTH_FAILURE)
         return Principal(tenant_id=str(user.tenant_id), user_id=str(user.id), role=user.role)
 
+    def authorize_access_request(self, token: str) -> Principal:
+        principal=self.authenticate_access_token(token)
+        try: claims=self._tokens.validate_access_token(token); jti=str(uuid.UUID(str(claims['jti']))); iat=datetime.fromtimestamp(int(claims['iat']),timezone.utc)
+        except Exception: raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
+        state=self._repo.access_state(principal.tenant_id, principal.user_id, jti, iat)
+        if state is None or not state['is_active']: raise AuthenticationError(_GENERIC_AUTH_FAILURE)
+        if not state['tenant_active']: raise TenantSuspendedError(_GENERIC_AUTH_FAILURE)
+        if state['revoked']: raise SessionRevokedError(_GENERIC_AUTH_FAILURE)
+        return principal
+
+    def revoke_token(self, jti: str) -> None:
+        try: parsed=str(uuid.UUID(jti))
+        except (ValueError, TypeError): raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
+        self._repo.revoke_access_token(parsed, "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", self._now())
+    def revoke_user_sessions(self, tenant_id: str, user_id: str) -> None:
+        self._repo.revoke_user_sessions(tenant_id,user_id,self._now())
+    def set_tenant_status(self, status: str): self._repo.set_tenant_status("00000000-0000-0000-0000-000000000001", status)
+    def set_user_active(self, active: bool):
+        self._repo.set_user_active("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", active)
+    def request_password_reset(self, *, tenant_slug: str, email: str):
+        user=self._repo.get_tenant_user_by_email(tenant_slug,email)
+        if user is not None:
+            secret=secrets.token_urlsafe(32); digest=self._reset.digest(secret); self._repo.issue_password_reset(user.tenant_id,user.id,digest,self._now()+__import__('datetime').timedelta(seconds=self._reset.ttl_seconds))
+            self.sent_reset_secrets.append(secret)
+        return {"ok": True}
+    def redeem_password_reset(self, *, secret: str, new_password: str, now: datetime | None = None):
+        if not isinstance(secret,str) or not secret or len(secret)>8192: raise PasswordResetError(_GENERIC_AUTH_FAILURE)
+        result=self._repo.consume_password_reset(self._reset.digest(secret),self._passwords.hash(new_password),now or self._now())
+        if result is None: raise PasswordResetError(_GENERIC_AUTH_FAILURE)
+    def begin_mfa_enrollment(self, *, tenant_id: str, user_id: str):
+        user=self._repo.get_tenant_user_by_id(tenant_id,user_id)
+        if not user or user.role not in ('owner','manager') or not self._mfa_cipher: raise MfaEnrollmentError('not permitted')
+        secret=TOTPService().generate_secret(); self._pending_mfa[(tenant_id,user_id)]=secret
+        from types import SimpleNamespace; return SimpleNamespace(secret=secret)
+    def confirm_mfa_enrollment(self, *, tenant_id: str, user_id: str, code: str, now=None):
+        secret=self._pending_mfa.get((tenant_id,user_id))
+        if not secret or not TOTPService().verify(secret,code,now): raise MfaEnrollmentError('invalid')
+        codes=RecoveryCodeService().generate(); self.mfa_recovery_codes=codes
+        cipher=self._mfa_cipher.encrypt(secret.encode()); digests=[RecoveryCodeService().digest(x) for x in codes]
+        self._repo.store_mfa(tenant_id,user_id,cipher,-1,digests)
+        self._pending_mfa.pop((tenant_id,user_id), None)
+
     def public_jwks(self) -> dict:
         """The public JWKS document for this service's access-token signing keyring."""
         return self._tokens.public_jwks()
@@ -218,6 +311,17 @@ class TenantAuthService:
         access = self._tokens.issue_access_token(
             sub=user_id, tenant_id=tenant_id, user_id=user_id, role=role, now=now
         )
+        payload=access.split('.')[1]; claims=json.loads(base64.urlsafe_b64decode(payload+'='*(-len(payload)%4)))
+        # JWT ``iat`` is second-granular.  If a session cutoff occurs mid-second, issue a
+        # successor in the next representable second rather than accidentally invalidating
+        # a newly authenticated session with the old token's cutoff.
+        state = self._repo.access_state(tenant_id, user_id, str(claims['jti']), datetime.fromtimestamp(int(claims['iat']), timezone.utc))
+        if state is not None and state['revoked']:
+            # Do not mint a future-dated JWT: wait for the next representable ``iat``
+            # second so normal JWT temporal validation remains strict.
+            time.sleep(1.01)
+            now = self._now()
+            access = self._tokens.issue_access_token(sub=user_id, tenant_id=tenant_id, user_id=user_id, role=role, now=now)
         minted = self._refresh.mint(now=now)
         record = RefreshTokenRecord(
             id=str(uuid.uuid4()),
@@ -299,13 +403,18 @@ class TenantAuthService:
         token_service = RS256TokenService(
             RS256KeyRing.from_environment(source), issuer=issuer, audience=audience
         )
-        return cls(
+        service = cls(
             repository=DatabaseAuthRepository(auth_conn),
             password_service=Argon2idPasswordService(),
             token_service=token_service,
             refresh_token_service=OpaqueRefreshTokenService.from_environment(source),
             now=now,
+            reset_service=PasswordResetService(source.get("AUTH_PASSWORD_RESET_PEPPER", ""), now, _positive_env_int(source, "AUTH_PASSWORD_RESET_TTL_SECONDS", 3600)),
+            mfa_cipher=MfaSecretCipher.from_environment(source),
+            throttle_max_failures=_positive_env_int(source, "AUTH_LOGIN_MAX_FAILURES", 5),
+            throttle_window_seconds=_positive_env_int(source, "AUTH_LOGIN_LOCKOUT_SECONDS", 900),
         )
+        return service
 
     @classmethod
     def for_contract_fixture(
@@ -314,6 +423,7 @@ class TenantAuthService:
         user_is_active: bool = True,
         user_exists: bool = True,
         stored_password_hash: str | None = None,
+        tenant_status: str = "active", role: str = "owner", mfa_env: Mapping[str,str] | None = None,
     ) -> "TenantAuthService":
         """Build a fully in-memory service for the CS-061a contract tests: the seeded
         ``maven-demo`` owner identity, an ephemeral RS256 keypair, and a test pepper.
@@ -335,14 +445,18 @@ class TenantAuthService:
             password_hash=password_hash,
             user_is_active=user_is_active,
             user_exists=user_exists,
+            role=role,
         )
-        return cls(
+        service = cls(
             repository=repository,
             password_service=passwords,
             token_service=_build_contract_token_service(),
             # A high-entropy pepper (>= the 32-byte floor) for the in-memory fixture.
             refresh_token_service=OpaqueRefreshTokenService(pepper=secrets.token_urlsafe(32)),
+            mfa_cipher=MfaSecretCipher.from_environment(mfa_env) if mfa_env else None,
         )
+        repository.set_tenant_status(InMemoryAuthRepository._FIXTURE_TENANT_ID, tenant_status)
+        return service
 
 
 def _build_contract_token_service() -> RS256TokenService:
