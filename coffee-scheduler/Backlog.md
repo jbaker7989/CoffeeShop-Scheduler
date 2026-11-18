@@ -2232,6 +2232,65 @@ closing regression evidence.
   order (or vice-versa) and assert the order in a shared contract test.
 - **Risk if unfixed:** the admin invitation list orders differently in tests vs production.
 
+### BUG-045 — F61/CS-061b: login never captures the client IP → per-IP lockout collapses into a tenant-wide DoS, and audit logs 0.0.0.0
+- **Feature:** [F61](./FEATURES.md) (CS-061b) · also F30/CS-070 (gateway must forward client IP) · **Priority:** P1 · **Size:** S · **Pattern:** D2/D3 (integration gap + wrong aggregation)
+- **Status:** 🐞 Open · **Type:** Security/availability defect (throttle mis-keying) + audit-integrity gap · **Found:** 2026-11-17 (Claude review of the committed auth surface)
+- **Root cause:** `auth/api.py` `login` / `browser_login` call `service.login_json(...)` / `login_browser(...)`
+  **without** `client_ip`, so it defaults to `"0.0.0.0"`. The CS-061b throttle (`auth_record_login_attempt` /
+  `auth_login_locked`, migration `0011:50,52`) locks when `account_failures >= max OR ip_failures >= max`,
+  where `ip_failures` counts failed attempts for `(tenant_id, ip)` in the window. Because every login is
+  recorded with `ip = 0.0.0.0`, the IP dimension collapses — `ip_failures` becomes *all* failed logins for the
+  tenant across every email and every real client. (The `/invitations/accept` route *does* extract
+  `request.client.host`; login does not — inconsistent.) Compounding it: Next.js rewrites `/api/*`
+  server-side, so even `request.client.host` would be the Next proxy's IP for all users — the same collapse —
+  unless a **trusted** `X-Forwarded-For` hop is parsed. The CS-061c audit events (`auth.login.succeeded/failed`)
+  likewise record `ip=0.0.0.0` for every login.
+- **Reproduction:** (1) **Lockout:** POST 5 failed `/auth/login` for tenant *T* against any email(s);
+  `auth_login_locked(T, <any email>, '0.0.0.0', …)` then returns true for **every** user in *T* (tenant-wide),
+  because all failures share `0.0.0.0`. A later *successful* login clears only that email's `account` failures
+  (`DELETE … WHERE email=…`), not the shared IP failures, so the lockout persists for the full window.
+  (2) **Audit:** after any login, `SELECT ip FROM audit_log WHERE action LIKE 'auth.login%'` is `0.0.0.0` on
+  every row.
+- **Impact:** a single attacker locks out an entire tenant with 5 failed logins (availability/DoS); the per-IP
+  brute-force control is non-functional and inverted into a weapon; `audit_log.ip` is forensically useless
+  (defeats architecture §14.3). Supersedes the stale BUG-039 "IP throttle absent" note — the IP branch **is**
+  implemented in SQL; it is defeated by the missing IP capture.
+- **Acceptance criteria (SDD):**
+  - **Failing-first** `spec: F61.ac4` — two distinct client IPs each submit `<max` failed logins for the same
+    tenant; **neither** is locked (today both share `0.0.0.0` → the tenant locks). **Failing-first**
+    `spec: F61.ac5` — an audited login records the real client IP, not `0.0.0.0`.
+  - Gateway derives the client IP from a **trusted** source: `request.client.host`, overridden by the
+    rightmost-untrusted `X-Forwarded-For` hop **only** when the immediate peer is the configured trusted Next
+    proxy; never trust a client-supplied XFF blindly (IP spoofing would evade/weaponize the throttle).
+  - Thread `client_ip` through `login` / `browser_login` / the refresh routes into both the throttle and the
+    audit entry; keep every existing CS-061b throttle/MFA/reset contract green.
+- **Risk if unfixed:** trivial tenant-wide login DoS; no real per-IP brute-force protection; audit trail blind
+  on IP.
+- **Cross-refs:** the trusted-proxy / forwarded-header boundary is owned by **CS-070**; fix IP capture there and
+  consume it in CS-061b.
+
+### BUG-046 — F69/CS-087: `restore()` / `list_including_deleted()` leave `app.show_deleted` on, leaking soft-deleted rows into the rest of the transaction
+- **Feature:** [F69](./FEATURES.md) (CS-087) · **Priority:** P3 · **Size:** XS · **Pattern:** D3 (state leak / API asymmetry)
+- **Status:** 🐞 Open · **Type:** Transaction-scoped visibility leak · **Found:** 2026-11-17 (Claude review of CS-087)
+- **Root cause:** In `data_access/soft_delete.py`, `soft_delete()` saves and restores `app.show_deleted`
+  (`_show_deleted_for_write` / `_restore_show_deleted_setting`), but `restore()` and `list_including_deleted()`
+  call `enable_show_deleted(conn)` (`SET LOCAL app.show_deleted='on'`) and **never** restore it. `SET LOCAL`
+  persists to end of transaction, so any later query in the same transaction bypasses the restrictive
+  `soft_delete_hidden` SELECT policy and sees soft-deleted rows.
+- **Reproduction:** within one `open_session_context` transaction, call `list_including_deleted(conn, 'stores', …)`
+  (or `restore(…)`), then run a normal `SELECT` on a Tier-A table → soft-deleted rows appear in the normal read.
+  `soft_delete()` in the same position does not leak (it restores the prior setting).
+- **Impact:** low today (admin "show deleted"/restore paths typically run in their own request/transaction,
+  which ends and resets `SET LOCAL`), but any code mixing a restore/list-including-deleted with an ordinary read
+  in one transaction silently defeats the hide-by-default guarantee — the exact inconsistency `soft_delete()`
+  was written to avoid.
+- **Acceptance criteria (SDD):** `spec: F69` — a test that, within one transaction, calls
+  `list_including_deleted` then a normal read and asserts the normal read still hides soft-deleted rows. Make
+  `restore()` / `list_including_deleted()` save/restore `app.show_deleted` as `soft_delete()` does (or wrap the
+  scoped read in a context manager that resets on exit). Keep `test_soft_delete*` green.
+- **Risk if unfixed:** a future admin/restore flow sharing a transaction with ordinary reads silently exposes
+  deleted rows.
+
 ---
 
 ## Backlog summary
