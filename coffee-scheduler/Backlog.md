@@ -2506,3 +2506,37 @@ closing regression evidence.
 | BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
 | BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |
 | BUG-050 | F61 | P3 | XS | ✅ Fixed — explicit auth state transitions and one digest calculation per reset |
+
+### BUG-051 — F61: centralize pooled auth repository delegation
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** In Progress
+- **Description:** `PooledAuthRepository` repeats pool lifecycle and connection borrowing logic across every method, while many CS-061b/c methods accept untyped `*args`. The duplication makes a security-sensitive adapter harder to audit and lets the wrapper drift from the `AuthRepository` contract.
+- **Story:** As an auth maintainer, I want every pooled repository operation to use one shared connection/delegation path and retain the abstract port's explicit signatures, so connection lifecycle and forwarding behavior are consistent and statically reviewable.
+- **Acceptance criteria:**
+  - Add one private delegation helper that opens a closed pool, borrows exactly one connection, creates the transient database repository, invokes the named operation, and returns its result.
+  - Every public adapter method keeps an explicit signature and return annotation matching `AuthRepository`; keyword-only arguments remain keyword-only.
+  - Exceptions propagate unchanged and the pool connection context exits on both success and failure.
+  - Focused fake-pool tests cover closed-pool open, one borrow/delegation, returned value, keyword forwarding, and exception cleanup.
+
+### BUG-052 — F61: validate access token once per authorization
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** XS
+- **Status:** In Progress
+- **Description:** `authorize_access_request` calls `authenticate_access_token` and then validates the same RS256 JWT a second time to read `jti` and `iat`. This doubles signature verification on every protected request and splits identity reconciliation from the claims that drive revocation checks.
+- **Story:** As a gateway operator, I want authorization to validate a signed token once and carry its validated claims through canonical membership and revocation checks, so each request has one consistent validation result and avoids duplicate crypto work.
+- **Acceptance criteria:**
+  - A private helper returns both reconciled `Principal` and the validated claims from one `validate_access_token` call.
+  - `authenticate_access_token` retains its existing public return contract and errors.
+  - `authorize_access_request` derives UUID `jti` and UTC `iat` only from the helper's validated claims and fails closed for malformed claims.
+  - Tests assert exactly one validation call per authorized request and cover invalid signature, missing/malformed `jti`/`iat`, inactive membership, and revocation outcomes.
+
+### BUG-053 — F61: persist single-session logout revocation
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** In Progress
+- **Description:** `revoke_token(jti)` writes hard-coded fixture tenant/user UUIDs, which violates real tenant/user foreign-key identity and cannot safely revoke the caller's actual session. The reachable `/auth/logout` route only clears cookies, leaving the access token usable until expiry and its refresh family able to mint more credentials.
+- **Story:** As a tenant user, I want logout to revoke the presented access token and its presented refresh-token family server-side before dropping browser credentials, so the logged-out session cannot continue making protected requests or rotate refresh credentials.
+- **Acceptance criteria:**
+  - The service accepts the access-token credential, validates it and reconciles canonical membership, then persists the token's actual `jti`, tenant, user, and expiry; callers cannot supply identity/JTI fields independently.
+  - If a refresh cookie is present and maps to a live record, revoke its family using the stored digest lookup; never store/log raw refresh secrets.
+  - `/auth/logout` uses the same unambiguous access credential extraction as protected routes and only accepts the browser refresh cookie for family revocation.
+  - Missing, expired, malformed, or ambiguous credentials still produce idempotent logout and clear both cookie paths; valid credentials are revoked before returning success. Persistence errors are not swallowed as successful revocation.
+  - Tests cover bearer and browser-cookie logout, subsequent access rejection, refresh-family rejection, absent/expired/duplicate credential cookie-clearing, and correct real tenant/user/JTI/expiry arguments.
