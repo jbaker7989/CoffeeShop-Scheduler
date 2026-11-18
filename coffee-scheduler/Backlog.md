@@ -2316,7 +2316,7 @@ closing regression evidence.
 
 ### BUG-048 — F61/CS-061a: arbitrary-claims contract token signer is part of the production service API
 - **Feature:** [F61](./FEATURES.md) (CS-061a) · **Priority:** P1 · **Size:** XS · **Pattern:** D2 (test seam exposure)
-- **Status:** 🐞 Open · **Type:** Security-boundary / testability defect · **Found:** 2026-11-18 (code-quality review)
+- **Status:** ✅ Fixed (2026-11-18) — signer moved to test support; auth, gateway, manager UI, and invitation suites pass (38 tests) · **Type:** Security-boundary / testability defect · **Found:** 2026-11-18 (code-quality review)
 - **Root cause:** `TenantAuthService.issue_contract_token()` lives on the production service class and can
   sign caller-selected tenant, user, role, and overridden claim values using its private token service. Its
   docstring says it is test-only, but every production service instance still exposes this capability.
@@ -2501,6 +2501,6 @@ closing regression evidence.
 | BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
 | BUG-025 | F60 | P2 | XS | 🐞 Open — tenant context lost on autocommit conn; role not pinned under pooling |
 | BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
-| BUG-048 | F61 | P1 | XS | 🐞 Open — arbitrary-claims test signer exposed on production auth service |
+| BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
 | BUG-049 | F61 | P2 | XS | 🐞 Open — required repository methods are not abstract/enforced |
 | BUG-050 | F61 | P3 | XS | 🐞 Open — dense auth code obscures transitions and repeats digest work |

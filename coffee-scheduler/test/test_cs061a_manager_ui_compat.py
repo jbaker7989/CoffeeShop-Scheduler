@@ -92,7 +92,9 @@ class ManagerUiBrowserCompatTests(unittest.TestCase):
 
     # spec: F61.ac2 / BUG-036 — an expired browser access cookie cannot authenticate a page.
     def test_expired_access_cookie_fails_closed(self) -> None:
-        expired = self.service.issue_contract_token(claim_overrides={"exp": 1})
+        from auth_test_support import issue_contract_token
+
+        expired = issue_contract_token(self.service, claim_overrides={"exp": 1})
         for path in ("/me", "/stores"):
             response = self.client.get(path, headers={"cookie": f"access_token={expired}"})
             self.assertEqual(401, response.status_code, response.text)
@@ -128,9 +130,11 @@ class ManagerUiBrowserCompatTests(unittest.TestCase):
     # spec: BUG-037 — the server side of the UI recovery: an expired access credential is refreshed
     # once with the Path=/auth/browser cookie and the retried request then succeeds.
     def test_expired_access_recovers_via_refresh_then_retry_succeeds(self) -> None:
+        from auth_test_support import issue_contract_token
+
         login = self._browser_login()
         refresh = login.cookies["refresh_token"]
-        expired = self.service.issue_contract_token(claim_overrides={"exp": 1})
+        expired = issue_contract_token(self.service, claim_overrides={"exp": 1})
         # 1) The protected request fails closed with the expired access cookie.
         self.assertEqual(401, self.client.get("/me", headers={"cookie": f"access_token={expired}"}).status_code)
         self.assertEqual([], self.spy.calls)

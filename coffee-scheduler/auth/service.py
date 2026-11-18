@@ -401,52 +401,6 @@ class TenantAuthService:
         self._repo.insert_refresh_token(record)
         return IssuedTokens(access_token=access, expires_in=ACCESS_TOKEN_TTL_SECONDS, refresh_token=minted.secret)
 
-    def issue_contract_token(
-        self,
-        *,
-        tenant_id: str | None = None,
-        user_id: str | None = None,
-        role: str = "owner",
-        claim_overrides: Mapping | None = None,
-    ) -> str:
-        """Mint a *correctly signed* access token with caller-chosen claims, for the
-        adversarial contract only.
-
-        Two uses, both proving :meth:`authenticate_access_token` rejects a well-signed token
-        on something other than its signature:
-
-        * ``claim_overrides`` — start from a fully valid tenant claim set for the seeded
-          fixture identity, then overwrite individual claims (a wrong issuer/audience, an
-          expired ``exp``, a future ``nbf``, an empty ``jti``, a non-UUID id, a disallowed
-          ``role``, an ``is_saas_admin: True``, a mismatched ``sub``). Validation must fail
-          closed on the tampered claim even though the signature and ``kid`` are genuine.
-        * ``tenant_id``/``user_id``/``role`` — a valid, well-formed token whose
-          ``(tenant_id, user_id)`` is not a real membership, proving canonical reconciliation
-          rejects a cross-tenant/role escape.
-
-        It is never a login path; production access tokens come only from the credentialed
-        login/refresh flows via :meth:`RS256TokenService.issue_access_token`.
-        """
-        uid = str(user_id) if user_id is not None else InMemoryAuthRepository._FIXTURE_USER_ID
-        tid = str(tenant_id) if tenant_id is not None else InMemoryAuthRepository._FIXTURE_TENANT_ID
-        iat = int(self._now().timestamp())
-        claims = {
-            "iss": self._tokens.issuer,
-            "aud": self._tokens.audience,
-            "sub": uid,
-            "tenant_id": tid,
-            "user_id": uid,
-            "role": role,
-            "is_saas_admin": False,
-            "jti": str(uuid.uuid4()),
-            "iat": iat,
-            "nbf": iat,
-            "exp": iat + self._tokens.ttl_seconds,
-        }
-        if claim_overrides:
-            claims.update(claim_overrides)
-        return self._tokens.sign_unchecked(claims)
-
     @classmethod
     def from_environment(
         cls, auth_conn, *, env: Mapping[str, str] | None = None, now: Callable[[], datetime] = _utcnow

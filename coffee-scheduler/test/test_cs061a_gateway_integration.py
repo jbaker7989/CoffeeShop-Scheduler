@@ -152,7 +152,11 @@ class GatewayIntegrationTests(unittest.TestCase):
     # ----- tenant authority -----
     # spec: F61.ac2 / BUG-035 — a validly signed token for a non-member tenant is rejected.
     def test_cross_tenant_token_rejected(self) -> None:
-        forged = self.service.issue_contract_token(tenant_id=OTHER_TENANT, user_id=FIXTURE_TENANT, role="owner")
+        from auth_test_support import issue_contract_token
+
+        forged = issue_contract_token(
+            self.service, tenant_id=OTHER_TENANT, user_id=FIXTURE_TENANT, role="owner"
+        )
         r = self.client.get("/stores", headers={"authorization": f"Bearer {forged}"})
         self.assertEqual(401, r.status_code, r.text)
         self.assertEqual([], self.spy.calls)
