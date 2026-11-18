@@ -339,10 +339,25 @@ class TenantAuthService:
             raise SessionRevokedError(_GENERIC_AUTH_FAILURE)
         return principal
 
-    def revoke_token(self, jti: str) -> None:
-        try: parsed=str(uuid.UUID(jti))
-        except (ValueError, TypeError): raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
-        self._repo.revoke_access_token(parsed, "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", self._now())
+    def revoke_token(self, access_token: str, refresh_token: str | None = None) -> None:
+        """Revoke the validated access token and, when found, its refresh-token family."""
+        _principal, claims = self._authenticate_access_token_with_claims(access_token)
+        try:
+            jti = str(uuid.UUID(str(claims["jti"])))
+            expires_at = datetime.fromtimestamp(int(claims["exp"]), timezone.utc)
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
+        if isinstance(refresh_token, str) and refresh_token:
+            try:
+                refresh_size = len(refresh_token.encode("utf-8"))
+            except UnicodeEncodeError:
+                refresh_size = MAX_REFRESH_TOKEN_BYTES + 1
+            if refresh_size <= MAX_REFRESH_TOKEN_BYTES:
+                record = self._repo.get_refresh_token(self._refresh.digest(refresh_token))
+                if record is not None:
+                    self._repo.revoke_family(record.family_id, self._now())
+        self._repo.revoke_access_token(jti, _principal.tenant_id, _principal.user_id, expires_at)
+
     def revoke_user_sessions(self, tenant_id: str, user_id: str) -> None:
         self._repo.revoke_user_sessions(tenant_id,user_id,self._now())
         self._audit(AuditEntry(tenant_id,user_id,"tenant_user","auth.sessions.revoked"))

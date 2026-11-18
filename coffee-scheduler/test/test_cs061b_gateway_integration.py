@@ -98,7 +98,7 @@ class CS061bGatewayEnforcementTests(unittest.TestCase):
         service = TenantAuthService.for_contract_fixture()
         client, spy = self._app(service)
         token = self._token(client)
-        service.revoke_token(_jti(token))
+        service.revoke_token(token)
         r = client.get("/me", headers={"authorization": f"Bearer {token}"})
         self.assertEqual(401, r.status_code, r.text)
 

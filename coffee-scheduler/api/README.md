@@ -25,7 +25,7 @@ Routes:
   `Authorization: Bearer <token>` header **or** the browser `access_token` cookie (never
   both, never duplicated). The tenant id is taken only from the reconciled claims; a request
   body/query/cookie cannot select a tenant.
-- `POST /auth/logout` — clears the browser cookies. Server-side refresh revocation is CS-061b.
+- `POST /auth/logout` — revokes the presented access token and matching browser refresh family when available, then clears both browser cookies.
 
 Startup **fails closed**: a missing or invalid auth DSN, JWT keyring, issuer/audience, or
 refresh pepper raises at app construction. There is no fallback to `SESSION_SECRET` or the

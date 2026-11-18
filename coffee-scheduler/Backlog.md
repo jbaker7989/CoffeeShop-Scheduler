@@ -2506,10 +2506,13 @@ closing regression evidence.
 | BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
 | BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |
 | BUG-050 | F61 | P3 | XS | ✅ Fixed — explicit auth state transitions and one digest calculation per reset |
+| BUG-051 | F61 | P2 | S | ✅ Fixed — centralized typed pooled repository delegation |
+| BUG-052 | F61 | P2 | XS | ✅ Fixed — one JWT validation per protected authorization |
+| BUG-053 | F61 | P1 | S | ✅ Fixed — logout revokes access token and presented refresh family |
 
 ### BUG-051 — F61: centralize pooled auth repository delegation
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** S
-- **Status:** In Progress
+- **Status:** ✅ Fixed — centralized typed delegation with pool lifecycle regression coverage
 - **Description:** `PooledAuthRepository` repeats pool lifecycle and connection borrowing logic across every method, while many CS-061b/c methods accept untyped `*args`. The duplication makes a security-sensitive adapter harder to audit and lets the wrapper drift from the `AuthRepository` contract.
 - **Story:** As an auth maintainer, I want every pooled repository operation to use one shared connection/delegation path and retain the abstract port's explicit signatures, so connection lifecycle and forwarding behavior are consistent and statically reviewable.
 - **Acceptance criteria:**
@@ -2520,7 +2523,7 @@ closing regression evidence.
 
 ### BUG-052 — F61: validate access token once per authorization
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** XS
-- **Status:** In Progress
+- **Status:** ✅ Fixed — authorization reuses the single validated claim set
 - **Description:** `authorize_access_request` calls `authenticate_access_token` and then validates the same RS256 JWT a second time to read `jti` and `iat`. This doubles signature verification on every protected request and splits identity reconciliation from the claims that drive revocation checks.
 - **Story:** As a gateway operator, I want authorization to validate a signed token once and carry its validated claims through canonical membership and revocation checks, so each request has one consistent validation result and avoids duplicate crypto work.
 - **Acceptance criteria:**
@@ -2531,7 +2534,7 @@ closing regression evidence.
 
 ### BUG-053 — F61: persist single-session logout revocation
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** In Progress
+- **Status:** ✅ Fixed — logout revokes the presented access token and known refresh family
 - **Description:** `revoke_token(jti)` writes hard-coded fixture tenant/user UUIDs, which violates real tenant/user foreign-key identity and cannot safely revoke the caller's actual session. The reachable `/auth/logout` route only clears cookies, leaving the access token usable until expiry and its refresh family able to mint more credentials.
 - **Story:** As a tenant user, I want logout to revoke the presented access token and its presented refresh-token family server-side before dropping browser credentials, so the logged-out session cannot continue making protected requests or rotate refresh credentials.
 - **Acceptance criteria:**

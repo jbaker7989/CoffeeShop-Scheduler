@@ -93,7 +93,7 @@ class F61RevocationListTests(unittest.TestCase):
         service = TenantAuthService.for_contract_fixture()
         first = service.login_json(**LOGIN).access_token
         second = service.login_json(**LOGIN).access_token
-        service.revoke_token(_claims(first)["jti"])
+        service.revoke_token(first)
         with self.assertRaises(SessionRevokedError):
             service.authorize_access_request(first)
         # The other live session is not collateral damage.

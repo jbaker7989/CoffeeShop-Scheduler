@@ -187,9 +187,16 @@ def create_app(
         return {"stores": fetch_stores(principal.tenant_id)}
 
     @app.post("/auth/logout")
-    def logout(response: Response) -> dict[str, bool]:
-        # Clear the CS-061a browser cookies. True server-side refresh revocation is CS-061b; this
-        # only drops the client's credentials from the two cookie scopes the browser transport sets.
+    def logout(request: Request, response: Response) -> dict[str, bool]:
+        access_token = extract_access_credential(request)
+        refresh_token = request.cookies.get(BROWSER_REFRESH_COOKIE)
+        if access_token is not None:
+            try:
+                auth_service.revoke_token(access_token, refresh_token)
+            except AuthenticationError:
+                # Logout is idempotent for expired or otherwise invalid credentials. A
+                # persistence failure is deliberately not caught and cannot masquerade as success.
+                pass
         response.delete_cookie(ACCESS_COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=True)
         response.delete_cookie(
             BROWSER_REFRESH_COOKIE, path=BROWSER_REFRESH_PATH, httponly=True, samesite="strict", secure=True
