@@ -2344,7 +2344,7 @@ closing regression evidence.
 
 ### BUG-050 — F61/CS-061b/c: dense one-line auth code obscures state transitions and duplicates work
 - **Feature:** [F61](./FEATURES.md) (CS-061b/c) · **Priority:** P3 · **Size:** XS · **Pattern:** D4 (code clarity)
-- **Status:** 🐞 Open · **Type:** Technical debt / reviewability · **Found:** 2026-11-18 (code-quality review)
+- **Status:** ✅ Fixed (2026-11-18) — auth helpers/routes expanded; reset/throttle/invitation suites pass (25 tests) · **Type:** Technical debt / reviewability · **Found:** 2026-11-18 (code-quality review)
 - **Root cause:** security-sensitive limiter/reset helpers and invitation route handlers compress validation,
   mutation, exceptions, and returns into semicolon-separated or one-line statements. The reset mint path
   computes the same HMAC digest twice. This style makes ordering and state changes harder to audit.
@@ -2505,4 +2505,4 @@ closing regression evidence.
 | BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
 | BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
 | BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |
-| BUG-050 | F61 | P3 | XS | 🐞 Open — dense auth code obscures transitions and repeats digest work |
+| BUG-050 | F61 | P3 | XS | ✅ Fixed — explicit auth state transitions and one digest calculation per reset |

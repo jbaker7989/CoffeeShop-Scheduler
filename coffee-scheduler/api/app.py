@@ -85,24 +85,60 @@ def create_app(
         return dependency
 
     @app.post("/invitations")
-    def create_invitation(body: InvitationCreateRequest, principal: Principal = Depends(require_role("owner", "manager"))) -> dict[str, Any]:
-        try: issued = auth_service.create_invitation(principal, body.email, body.role, accept_url_base="/invitations/accept")
-        except InvitationPermissionError: raise HTTPException(status_code=403, detail="Forbidden")
-        except InvitationError: raise HTTPException(status_code=409, detail="invitation unavailable")
-        return {"invitation_id": issued.invitation_id, "expires_at": issued.expires_at, "accept_url": f"/invitations/accept?token={issued.token}", "token": issued.token}
+    def create_invitation(
+        body: InvitationCreateRequest,
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> dict[str, Any]:
+        try:
+            issued = auth_service.create_invitation(
+                principal,
+                body.email,
+                body.role,
+                accept_url_base="/invitations/accept",
+            )
+        except InvitationPermissionError:
+            raise HTTPException(status_code=403, detail="Forbidden") from None
+        except InvitationError:
+            raise HTTPException(status_code=409, detail="invitation unavailable") from None
+        return {
+            "invitation_id": issued.invitation_id,
+            "expires_at": issued.expires_at,
+            "accept_url": f"/invitations/accept?token={issued.token}",
+            "token": issued.token,
+        }
 
     @app.get("/invitations")
-    def list_invitations(principal: Principal = Depends(require_role("owner", "manager"))) -> list[dict[str, Any]]:
-        return [{"id": r.id, "email": r.email, "role": r.role, "status": r.status, "expires_at": r.expires_at} for r in auth_service.list_invitations(principal)]
+    def list_invitations(
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": invitation.id,
+                "email": invitation.email,
+                "role": invitation.role,
+                "status": invitation.status,
+                "expires_at": invitation.expires_at,
+            }
+            for invitation in auth_service.list_invitations(principal)
+        ]
 
     @app.delete("/invitations/{invitation_id}")
-    def revoke_invitation(invitation_id: str, principal: Principal = Depends(require_role("owner", "manager"))) -> dict[str, bool]:
-        try: auth_service.revoke_invitation(principal, invitation_id)
-        except InvitationError: raise HTTPException(status_code=404, detail="Not found")
+    def revoke_invitation(
+        invitation_id: str,
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> dict[str, bool]:
+        try:
+            auth_service.revoke_invitation(principal, invitation_id)
+        except InvitationError:
+            raise HTTPException(status_code=404, detail="Not found") from None
         return {"ok": True}
 
     @app.post("/invitations/accept")
-    def accept_invitation(body: InvitationAcceptRequest, response: Response, request: Request) -> dict[str, Any]:
+    def accept_invitation(
+        body: InvitationAcceptRequest,
+        response: Response,
+        request: Request,
+    ) -> dict[str, Any]:
         if request.client is None:
             raise HTTPException(status_code=503, detail="temporarily unavailable")
         ip = request.client.host
@@ -110,17 +146,30 @@ def create_app(
         try:
             key.client_ip_bucket()
         except ValueError:
-            raise HTTPException(status_code=503, detail="temporarily unavailable") from None
+            raise HTTPException(
+                status_code=503,
+                detail="temporarily unavailable",
+            ) from None
         try:
             invitation_limiter.check_ip(key)
-            tokens = auth_service.accept_invitation(body.token, body.password, body.display_name)
-        except AccountLockedError: raise HTTPException(status_code=429, detail="authentication failed")
+            tokens = auth_service.accept_invitation(
+                body.token,
+                body.password,
+                body.display_name,
+            )
+        except AccountLockedError:
+            raise HTTPException(status_code=429, detail="authentication failed") from None
         except InvitationError:
             invitation_limiter.record_ip_failure(key)
-            raise HTTPException(status_code=401, detail="authentication failed")
+            raise HTTPException(status_code=401, detail="authentication failed") from None
         invitation_limiter.record_ip_success(key)
         _set_browser_cookies(response, tokens, BrowserCookieConfig())
-        return {"access_token": tokens.access_token, "refresh_token": tokens.refresh_token, "token_type": tokens.token_type, "expires_in": tokens.expires_in}
+        return {
+            "access_token": tokens.access_token,
+            "refresh_token": tokens.refresh_token,
+            "token_type": tokens.token_type,
+            "expires_in": tokens.expires_in,
+        }
 
     @app.get("/me")
     def me(principal: Principal = Depends(current_principal)) -> dict[str, Any]:
