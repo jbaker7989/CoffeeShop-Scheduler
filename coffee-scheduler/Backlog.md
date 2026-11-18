@@ -2328,15 +2328,17 @@ closing regression evidence.
 
 ### BUG-049 — F61/CS-061b: repository hardening operations are described as mandatory but are not abstract
 - **Feature:** [F61](./FEATURES.md) (CS-061b) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (interface contract)
-- **Status:** 🐞 Open · **Type:** Adapter completeness / maintainability defect · **Found:** 2026-11-18 (code-quality review)
+- **Status:** ✅ Fixed (2026-11-18) — required DB-backed operations are abstract; incomplete adapter rejected and all production adapters are concrete · **Type:** Adapter completeness / maintainability defect · **Found:** 2026-11-18 (code-quality review)
 - **Root cause:** `AuthRepository` says CS-061b hardening operations are mandatory, but methods such as
   `access_state`, `revoke_access_token`, reset, throttle, and MFA operations are ordinary methods that raise
   `NotImplementedError`, not abstract methods. An incomplete adapter can instantiate and fail only when a
   security path calls the missing operation. The mandatory invitation/audit methods already use
   `@abstractmethod`, so enforcement is inconsistent.
-- **Acceptance criteria:** make every required repository capability fail at adapter construction time
-  (abstract methods or a statically checked protocol); ensure the in-memory, database, pooled, and test
-  adapters satisfy the contract; add a minimal incomplete-adapter test that proves instantiation is rejected.
+- **Acceptance criteria:** make every required persisted repository capability fail at adapter
+  construction time (`@abstractmethod`); ensure the in-memory, database, pooled, and test adapters satisfy
+  the contract; add a minimal incomplete-adapter test that proves instantiation is rejected. Move
+  `set_tenant_status` and `set_user_active` out of the shared production interface/service and into test-only
+  fixture support because only `InMemoryAuthRepository` implements them.
 - **Risk if unfixed:** an adapter can silently omit revocation or persistence behavior until a live request
   reaches that path.
 
@@ -2502,5 +2504,5 @@ closing regression evidence.
 | BUG-025 | F60 | P2 | XS | 🐞 Open — tenant context lost on autocommit conn; role not pinned under pooling |
 | BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
 | BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
-| BUG-049 | F61 | P2 | XS | 🐞 Open — required repository methods are not abstract/enforced |
+| BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |
 | BUG-050 | F61 | P3 | XS | 🐞 Open — dense auth code obscures transitions and repeats digest work |

@@ -36,3 +36,24 @@ def issue_contract_token(
     if claim_overrides:
         claims.update(claim_overrides)
     return token_service.sign_unchecked(claims)
+
+
+def _fixture_repository(service) -> InMemoryAuthRepository:
+    repository = service._repo
+    if not isinstance(repository, InMemoryAuthRepository):
+        raise TypeError("auth fixture mutation requires InMemoryAuthRepository")
+    return repository
+
+
+def set_fixture_tenant_status(service, status: str) -> None:
+    repository = _fixture_repository(service)
+    repository.set_tenant_status(repository._FIXTURE_TENANT_ID, status)
+
+
+def set_fixture_user_active(service, active: bool) -> None:
+    repository = _fixture_repository(service)
+    repository.set_user_active(
+        repository._FIXTURE_TENANT_ID,
+        repository._FIXTURE_USER_ID,
+        active,
+    )

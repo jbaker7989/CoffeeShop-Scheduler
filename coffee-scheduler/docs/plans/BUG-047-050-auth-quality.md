@@ -50,9 +50,13 @@ that separate distributed-state defect.
 
 ### BUG-049 — enforce repository completeness
 
-- Mark all required CS-061b repository operations (`access_state`, token/session revocation,
-  reset, throttle, MFA, tenant status, and user-active operations) as abstract methods using
-  standard multi-line signatures and `@abc.abstractmethod`.
+- Mark all persisted CS-061b repository operations (`access_state`, token/session revocation,
+  reset, throttle, and MFA) as abstract methods using standard signatures and
+  `@abc.abstractmethod`.
+- The `set_tenant_status` and `set_user_active` mutators are fixture-only: remove them from
+  `AuthRepository` and `TenantAuthService`, keep them on `InMemoryAuthRepository`, and expose
+  test-only wrappers in `test/auth_test_support.py`. Production database/pool adapters must
+  not be required to implement a test fixture control.
 - Keep the existing invitation/audit abstract methods. Do not split the interface in this
   patch; the minimal safe change is consistent runtime enforcement across all declared
   capabilities.

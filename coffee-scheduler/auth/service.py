@@ -340,9 +340,6 @@ class TenantAuthService:
     def revoke_user_sessions(self, tenant_id: str, user_id: str) -> None:
         self._repo.revoke_user_sessions(tenant_id,user_id,self._now())
         self._audit(AuditEntry(tenant_id,user_id,"tenant_user","auth.sessions.revoked"))
-    def set_tenant_status(self, status: str): self._repo.set_tenant_status("00000000-0000-0000-0000-000000000001", status)
-    def set_user_active(self, active: bool):
-        self._repo.set_user_active("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", active)
     def request_password_reset(self, *, tenant_slug: str, email: str):
         user=self._repo.get_tenant_user_by_email(tenant_slug,email)
         if user is not None:

@@ -60,24 +60,26 @@ class F61RevocationStatusRecheckTests(unittest.TestCase):
     # spec: F61.ac3 — a token minted while the tenant was active is rejected on the NEXT
     # request after suspension, well inside the access-token TTL (not deferred to expiry).
     def test_token_minted_before_suspension_rejected_next_request(self) -> None:
+        from auth_test_support import set_fixture_tenant_status
         from auth.service import TenantAuthService, TenantSuspendedError
 
         service = TenantAuthService.for_contract_fixture()
         token = service.login_json(**LOGIN).access_token
         # Token is still well within its 900s lifetime.
         self.assertGreater(_claims(token)["exp"], datetime.now(timezone.utc).timestamp())
-        service.set_tenant_status("suspended")
+        set_fixture_tenant_status(service, "suspended")
         with self.assertRaises(TenantSuspendedError):
             service.authorize_access_request(token)
 
     # spec: F61.ac3 — a deactivated user is refused on the next request even with a live,
     # unexpired access token (membership recheck is per request, as in CS-061a, kept here).
     def test_deactivated_user_refused_per_request(self) -> None:
+        from auth_test_support import set_fixture_user_active
         from auth.service import AuthenticationError, TenantAuthService
 
         service = TenantAuthService.for_contract_fixture()
         token = service.login_json(**LOGIN).access_token
-        service.set_user_active(False)
+        set_fixture_user_active(service, False)
         with self.assertRaises(AuthenticationError):
             service.authorize_access_request(token)
 

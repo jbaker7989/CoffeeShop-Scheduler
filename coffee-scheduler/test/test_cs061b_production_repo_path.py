@@ -77,11 +77,16 @@ def _make_repo(*, tenant_active: bool):
             self.calls.append("access_state")
             return {"role": "owner", "is_active": True, "tenant_active": tenant_active, "revoked": False}
 
+        def revoke_access_token(self, jti, tenant_id, user_id, expires_at): self.calls.append("revoke_access_token")
         def revoke_user_sessions(self, tenant_id, user_id, when): self.calls.append("revoke_user_sessions")
         def issue_password_reset(self, *a): self.calls.append("issue_password_reset")
         def consume_password_reset(self, *a): self.calls.append("consume_password_reset"); return (TENANT, USER)
         def record_login_attempt(self, *a): self.calls.append("record_login_attempt"); return False
         def login_locked(self, *a): self.calls.append("login_locked"); return False
+        def get_mfa(self, *a): self.calls.append("get_mfa"); return None
+        def store_mfa(self, *a): self.calls.append("store_mfa")
+        def consume_mfa_step(self, *a): self.calls.append("consume_mfa_step"); return False
+        def consume_recovery_code(self, *a): self.calls.append("consume_recovery_code"); return False
         # CS-061c mandatory repository seam (not exercised by this CS-061b probe).
         def create_invitation(self, *a): raise NotImplementedError
         def get_invitation(self, *a): return None
