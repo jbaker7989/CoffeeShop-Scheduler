@@ -8,6 +8,7 @@ if str(SCHEDULER_ROOT) not in sys.path:
     sys.path.insert(0, str(SCHEDULER_ROOT))
 
 class AccessTokenSingleValidationTests(unittest.TestCase):
+    # spec: F61.ac3 / BUG-052 — authorization validates a token exactly once.
     def test_authorization_validates_token_once(self):
         from auth.service import TenantAuthService
 

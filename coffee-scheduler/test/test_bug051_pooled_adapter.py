@@ -49,6 +49,7 @@ class _DatabaseRepo:
 
 
 class PooledAdapterDelegationTests(unittest.TestCase):
+    # spec: F61.ac3 / BUG-051 — pooled adapter operations use one balanced connection lifecycle.
     def test_shared_call_opens_pool_borrows_once_and_forwards(self):
         from api.auth_gateway import PooledAuthRepository
 
@@ -60,6 +61,7 @@ class PooledAdapterDelegationTests(unittest.TestCase):
         self.assertEqual((1, 1, 1), (pool.opened, pool.entered, pool.exited))
         self.assertFalse(pool.closed)
 
+    # spec: F61.ac3 / BUG-051 — pooled adapter operations use one balanced connection lifecycle.
     def test_connection_is_released_when_delegate_raises(self):
         from api.auth_gateway import PooledAuthRepository
 
@@ -70,6 +72,7 @@ class PooledAdapterDelegationTests(unittest.TestCase):
             repository._call("access_state", "tenant", "user", "jti", "iat", marker=True)
         self.assertEqual((1, 1), (pool.entered, pool.exited))
 
+    # spec: F61.ac3 / BUG-051 — pooled adapter operations use one balanced connection lifecycle.
     def test_public_adapter_method_has_explicit_signature(self):
         from api.auth_gateway import PooledAuthRepository
 

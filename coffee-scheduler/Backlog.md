@@ -2509,6 +2509,9 @@ closing regression evidence.
 | BUG-051 | F61 | P2 | S | ✅ Fixed — centralized typed pooled repository delegation |
 | BUG-052 | F61 | P2 | XS | ✅ Fixed — one JWT validation per protected authorization |
 | BUG-053 | F61 | P1 | S | ✅ Fixed — logout revokes access token and presented refresh family |
+| BUG-054 | F69 | P1 | S | 🐞 Open — restore deleted-row visibility setting after helper calls |
+| BUG-055 | F45 | P2 | XS | 🐞 Open — validate and bound repository list pagination |
+| BUG-056 | F36/F38 | P1 | M | 🐞 Open — limit collector exposure and require TLS for remote OTLP |
 
 ### BUG-051 — F61: centralize pooled auth repository delegation
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** S
@@ -2543,3 +2546,40 @@ closing regression evidence.
   - `/auth/logout` uses the same unambiguous access credential extraction as protected routes and only accepts the browser refresh cookie for family revocation.
   - Missing, expired, malformed, or ambiguous credentials still produce idempotent logout and clear both cookie paths; valid credentials are revoked before returning success. Persistence errors are not swallowed as successful revocation.
   - Tests cover bearer and browser-cookie logout, subsequent access rejection, refresh-family rejection, absent/expired/duplicate credential cookie-clearing, and correct real tenant/user/JTI/expiry arguments.
+
+### BUG-054 — F69: restore the deleted-row visibility setting after helper calls
+- **Feature:** [F69](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** 🐞 Open
+- **Description:** `restore()` and `list_including_deleted()` set transaction-local `app.show_deleted='on'` and leave it enabled for the rest of the caller's transaction. Any later query through the same `app_rw` connection can see other soft-deleted Tier-A rows, even when the caller only requested one restore or one include-deleted listing.
+- **AC1:** After a successful `restore()` call, a normal query in the same transaction sees only live records unless the caller had explicitly enabled deleted visibility beforehand.
+- **AC2:** After `list_including_deleted()` returns, a normal query in the same transaction sees only live records unless the caller had explicitly enabled deleted visibility beforehand.
+- **AC3:** Both helpers restore the exact prior setting when it was explicitly set, and restore the unset default when it was unset.
+- **AC4:** Both helpers restore the prior setting when the underlying SQL operation raises.
+- **Edge / adversarial cases:** Prior `on`, prior `off`, unset GUC, nested helper call, SQL exception after override, and repeated helper invocation in one transaction.
+- **Cross-references:** `data_access/soft_delete.py`, migration `0013_cs087_soft_delete.py`, `test/test_soft_delete_lifecycle.py`, F60 RLS visibility policy.
+- **Expected outcome:** Deleted-row visibility is operation-scoped and does not leak across tenant queries.
+
+### BUG-055 — F45: bound and validate repository list pagination
+- **Feature:** [F45](./FEATURES.md) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open
+- **Description:** `Repository.list()` converts `limit` and `offset` with `int()` but does not reject negative values or cap page size. PostgreSQL treats a negative LIMIT as unlimited, so a caller can accidentally or deliberately retrieve the entire tenant table; negative offsets and lossy values also create surprising behavior.
+- **AC1:** `limit` accepts only a non-boolean integer in the inclusive range 1..1000; default remains 100.
+- **AC2:** `offset` accepts only a non-boolean integer greater than or equal to zero; default remains zero.
+- **AC3:** Invalid pagination raises a descriptive `ValueError` before any cursor or SQL operation is used.
+- **AC4:** Valid pagination continues to bind values as SQL parameters and preserves existing filters and ordering.
+- **Edge / adversarial cases:** zero/negative limit, limit 1000 and 1001, negative offset, bool, float, numeric string, enormous integer, and invalid arguments on a fake connection that must not execute SQL.
+- **Cross-references:** `data_access/repository.py::Repository.list`, `test/test_data_access.py`, F45 repository contracts.
+- **Expected outcome:** List reads have a predictable bounded cost and explicit input contract.
+
+### BUG-056 — F36/F38: protect telemetry endpoints and require TLS off loopback
+- **Feature:** [F36](./FEATURES.md) + [F38](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** 🐞 Open
+- **Description:** The observability compose file publishes OTLP and health-check ports on all host interfaces, while the SDK always sets `insecure=True`. Collector OTLP receivers are unauthenticated. A machine reachable on the host network can submit telemetry or probe health, and telemetry sent to a remote endpoint has no transport encryption.
+- **AC1:** Compose publishes development OTLP and health ports on `127.0.0.1` only while preserving service-to-service access on the compose network.
+- **AC2:** SDK configuration permits plaintext only for an explicitly recognized loopback endpoint.
+- **AC3:** A non-loopback endpoint requires TLS credentials and fails closed before exporter construction when credentials are absent or invalid.
+- **AC4:** Production Collector configuration supports TLS and optional client authentication while local compose configuration remains explicitly local-development mode.
+- **AC5:** Documentation describes the local-only trust boundary and production TLS/auth settings without committing secrets.
+- **Edge / adversarial cases:** IPv4 and IPv6 loopback spellings, hostname aliases, DNS names resolving to loopback, malformed endpoints, remote hostname with missing CA, incomplete client cert/key pair, and accidental insecure override.
+- **Cross-references:** `otel/telemetry.py`, `otel/collector-config.yaml`, root `docker-compose.observability.yml`, `test/test_cs036_otel_foundation.py`, `test/test_cs038_otel_collector.py`.
+- **Expected outcome:** The collector is not exposed to the LAN by default and remote OTLP transport is encrypted and authenticated.

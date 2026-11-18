@@ -24,6 +24,7 @@ class LogoutRevocationTests(unittest.TestCase):
         self.assertEqual(200, response.status_code, response.text)
         return response.cookies["access_token"], response.cookies["refresh_token"]
 
+    # spec: F61.ac3 / BUG-053 — logout revokes a validated session and its known family.
     def test_browser_logout_revokes_access_and_refresh_family(self):
         access, refresh = self._login()
         response = self.client.post("/auth/logout", headers={
@@ -37,12 +38,14 @@ class LogoutRevocationTests(unittest.TestCase):
         self.assertIn("access_token=", raw)
         self.assertIn("refresh_token=", raw)
 
+    # spec: F61.ac3 / BUG-053 — logout revokes a validated session and its known family.
     def test_bearer_logout_revokes_access(self):
         access, _refresh = self._login()
         response = self.client.post("/auth/logout", headers={"authorization": f"Bearer {access}"})
         self.assertEqual(200, response.status_code)
         self.assertEqual(401, self.client.get("/me", headers={"authorization": f"Bearer {access}"}).status_code)
 
+    # spec: F61.ac3 / BUG-053 — logout revokes a validated session and its known family.
     def test_missing_invalid_or_ambiguous_credentials_clear_cookies(self):
         for headers in ({}, {"authorization": "Bearer invalid"}, {
             "authorization": "Bearer one", "cookie": "access_token=two"
@@ -53,6 +56,7 @@ class LogoutRevocationTests(unittest.TestCase):
             self.assertIn("access_token=", raw)
             self.assertIn("refresh_token=", raw)
 
+    # spec: F61.ac3 / BUG-053 — logout revokes a validated session and its known family.
     def test_malformed_refresh_cookie_does_not_prevent_access_revocation(self):
         access, _refresh = self._login()
         response = self.client.post("/auth/logout", headers={
@@ -61,6 +65,7 @@ class LogoutRevocationTests(unittest.TestCase):
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual(401, self.client.get("/me", headers={"authorization": f"Bearer {access}"}).status_code)
 
+    # spec: F61.ac3 / BUG-053 — logout revokes a validated session and its known family.
     def test_valid_revocation_uses_canonical_identity_and_claim_jti_expiry(self):
         from auth.service import TenantAuthService
         from datetime import datetime, timezone
