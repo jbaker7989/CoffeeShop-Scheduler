@@ -2293,6 +2293,64 @@ closing regression evidence.
 
 ---
 
+### BUG-047 — F61/CS-061c: invitation accept limiter drops the client-IP key
+- **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (key aggregation)
+- **Status:** ✅ Fixed (2026-11-18) — distinct IP buckets; invitation accept and login-throttle suites pass (15 tests) · **Type:** Availability / rate-limit isolation defect · **Found:** 2026-11-18 (code-quality review)
+- **Root cause:** `/invitations/accept` constructs `LoginAttemptKey("invite", "accept", ip)`, but
+  `LoginAttemptKey.account()` returns only `(tenant_id, email)`. `LoginRateLimiter` keys failures and locks
+  exclusively with that account tuple, so all client IPs share `("invite", "accept")`; the supplied `ip`
+  is ignored. One client's failed tokens can lock the endpoint for all clients, and any successful accept
+  clears the shared bucket. This is distinct from BUG-043's per-process durability gap and complements it.
+- **Reproduction:** send `MAX_FAILED_ATTEMPTS` invalid accept attempts from client A, then attempt a valid
+  invitation from client B against the same app instance. Client B receives 429 even though its IP had no
+  failures. A success from either client also clears the other's counter.
+- **Acceptance criteria:**
+  - Add an explicit IP-bucket operation for anonymous invitation acceptance; do not encode endpoint scope
+    by overloading the account key or silently discard `ip`.
+  - A failures-to-lock sequence from IP A does not lock IP B; failures from A still lock A at threshold.
+  - Success clears only the relevant IP bucket; expiry/window boundary and concurrent access remain correct.
+  - Keep the CS-061b account lockout contracts and BUG-043's future distributed-persistence requirement
+    separate and intact.
+- **Risk if unfixed:** a single client can deny invitation acceptance for all clients sharing one gateway.
+- **Cross-refs:** related to BUG-043 (distributed persistence); BUG-047 covers distinct-client isolation.
+
+### BUG-048 — F61/CS-061a: arbitrary-claims contract token signer is part of the production service API
+- **Feature:** [F61](./FEATURES.md) (CS-061a) · **Priority:** P1 · **Size:** XS · **Pattern:** D2 (test seam exposure)
+- **Status:** 🐞 Open · **Type:** Security-boundary / testability defect · **Found:** 2026-11-18 (code-quality review)
+- **Root cause:** `TenantAuthService.issue_contract_token()` lives on the production service class and can
+  sign caller-selected tenant, user, role, and overridden claim values using its private token service. Its
+  docstring says it is test-only, but every production service instance still exposes this capability.
+- **Acceptance criteria:** move arbitrary-claims signing into test-only support; remove the method from
+  `TenantAuthService`; migrate adversarial tests to the test helper; prove the production service no longer
+  exposes an unchecked token-minting method. Preserve all existing invalid-claim and cross-tenant tests.
+- **Risk if unfixed:** future application code can accidentally use a contract-only signing path to mint
+  tokens outside the validated login/refresh flow.
+
+### BUG-049 — F61/CS-061b: repository hardening operations are described as mandatory but are not abstract
+- **Feature:** [F61](./FEATURES.md) (CS-061b) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (interface contract)
+- **Status:** 🐞 Open · **Type:** Adapter completeness / maintainability defect · **Found:** 2026-11-18 (code-quality review)
+- **Root cause:** `AuthRepository` says CS-061b hardening operations are mandatory, but methods such as
+  `access_state`, `revoke_access_token`, reset, throttle, and MFA operations are ordinary methods that raise
+  `NotImplementedError`, not abstract methods. An incomplete adapter can instantiate and fail only when a
+  security path calls the missing operation. The mandatory invitation/audit methods already use
+  `@abstractmethod`, so enforcement is inconsistent.
+- **Acceptance criteria:** make every required repository capability fail at adapter construction time
+  (abstract methods or a statically checked protocol); ensure the in-memory, database, pooled, and test
+  adapters satisfy the contract; add a minimal incomplete-adapter test that proves instantiation is rejected.
+- **Risk if unfixed:** an adapter can silently omit revocation or persistence behavior until a live request
+  reaches that path.
+
+### BUG-050 — F61/CS-061b/c: dense one-line auth code obscures state transitions and duplicates work
+- **Feature:** [F61](./FEATURES.md) (CS-061b/c) · **Priority:** P3 · **Size:** XS · **Pattern:** D4 (code clarity)
+- **Status:** 🐞 Open · **Type:** Technical debt / reviewability · **Found:** 2026-11-18 (code-quality review)
+- **Root cause:** security-sensitive limiter/reset helpers and invitation route handlers compress validation,
+  mutation, exceptions, and returns into semicolon-separated or one-line statements. The reset mint path
+  computes the same HMAC digest twice. This style makes ordering and state changes harder to audit.
+- **Acceptance criteria:** expand the affected `auth/ratelimit.py`, `auth/reset.py`, and invitation endpoint
+  code in `api/app.py` into conventional typed methods/blocks; compute each digest once; preserve externally
+  observable behavior and all existing auth/invitation contracts. No unrelated formatting sweep.
+- **Risk if unfixed:** reviewers can miss ordering, expiry, or lock-state mistakes in authentication paths.
+
 ## Backlog summary
 
 | Story | Feature | Priority | Size | Status |
@@ -2442,3 +2500,7 @@ closing regression evidence.
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
 | BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
 | BUG-025 | F60 | P2 | XS | 🐞 Open — tenant context lost on autocommit conn; role not pinned under pooling |
+| BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
+| BUG-048 | F61 | P1 | XS | 🐞 Open — arbitrary-claims test signer exposed on production auth service |
+| BUG-049 | F61 | P2 | XS | 🐞 Open — required repository methods are not abstract/enforced |
+| BUG-050 | F61 | P3 | XS | 🐞 Open — dense auth code obscures transitions and repeats digest work |

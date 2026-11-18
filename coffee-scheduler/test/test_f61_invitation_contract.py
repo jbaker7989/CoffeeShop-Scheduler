@@ -42,12 +42,49 @@ class InvitationContractTests(unittest.TestCase):
     def test_asgi_invite_accept_flow_uses_reconciled_principal(self):
         from fastapi.testclient import TestClient
         from api.app import create_app
-        client = TestClient(create_app(self.service, fetch_stores=lambda _: []))
+        client = TestClient(
+            create_app(self.service, fetch_stores=lambda _: []),
+            client=("203.0.113.12", 41000),
+        )
         login = client.post("/auth/login", json={"tenant_slug": "maven-demo", "email": "owner@maven.example", "password": "correct horse battery staple"})
         created = client.post("/invitations", json={"email":"api@maven.example","role":"staff"}, headers={"Authorization": "Bearer " + login.json()["access_token"]})
         self.assertEqual(200, created.status_code)
         accepted = client.post("/invitations/accept", json={"token":created.json()["token"],"password":"password"})
         self.assertEqual(200, accepted.status_code)
         self.assertIn("refresh_token", accepted.json())
+
+    def test_invitation_accept_lockout_is_isolated_by_client_ip(self):
+        from auth.ratelimit import MAX_FAILED_ATTEMPTS
+        from fastapi.testclient import TestClient
+        from api.app import create_app
+
+        issued = self.service.create_invitation(self.owner, "isolated@maven.example", "staff")
+        app = create_app(self.service, fetch_stores=lambda _: [])
+        client_a = TestClient(app, client=("203.0.113.10", 41000))
+        client_b = TestClient(app, client=("203.0.113.11", 41001))
+
+        for _ in range(MAX_FAILED_ATTEMPTS):
+            response = client_a.post(
+                "/invitations/accept", json={"token": "invalid", "password": "password"}
+            )
+            self.assertEqual(401, response.status_code)
+        self.assertEqual(
+            429,
+            client_a.post(
+                "/invitations/accept", json={"token": "invalid", "password": "password"}
+            ).status_code,
+        )
+
+        accepted = client_b.post(
+            "/invitations/accept",
+            json={"token": issued.token, "password": "password"},
+        )
+        self.assertEqual(200, accepted.status_code)
+        self.assertEqual(
+            429,
+            client_a.post(
+                "/invitations/accept", json={"token": "invalid", "password": "password"}
+            ).status_code,
+        )
 
 if __name__ == "__main__": unittest.main()

@@ -103,16 +103,22 @@ def create_app(
 
     @app.post("/invitations/accept")
     def accept_invitation(body: InvitationAcceptRequest, response: Response, request: Request) -> dict[str, Any]:
-        ip = request.client.host if request.client else "0.0.0.0"
+        if request.client is None:
+            raise HTTPException(status_code=503, detail="temporarily unavailable")
+        ip = request.client.host
         key = LoginAttemptKey("invite", "accept", ip)
         try:
-            invitation_limiter.check(key)
+            key.client_ip_bucket()
+        except ValueError:
+            raise HTTPException(status_code=503, detail="temporarily unavailable") from None
+        try:
+            invitation_limiter.check_ip(key)
             tokens = auth_service.accept_invitation(body.token, body.password, body.display_name)
         except AccountLockedError: raise HTTPException(status_code=429, detail="authentication failed")
         except InvitationError:
-            invitation_limiter.record_failure(key)
+            invitation_limiter.record_ip_failure(key)
             raise HTTPException(status_code=401, detail="authentication failed")
-        invitation_limiter.record_success(key)
+        invitation_limiter.record_ip_success(key)
         _set_browser_cookies(response, tokens, BrowserCookieConfig())
         return {"access_token": tokens.access_token, "refresh_token": tokens.refresh_token, "token_type": tokens.token_type, "expires_in": tokens.expires_in}
 
