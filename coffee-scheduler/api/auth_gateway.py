@@ -28,6 +28,7 @@ from auth.jwt import RS256KeyRing, RS256TokenService
 from auth.passwords import Argon2idPasswordService
 from auth.repository import (
     AuthRepository,
+    AcceptedInvite,
     ConsumeResult,
     DatabaseAuthRepository,
     RefreshTokenRecord,
@@ -71,104 +72,85 @@ class PooledAuthRepository(AuthRepository):
     def _repo(self, conn) -> DatabaseAuthRepository:
         return DatabaseAuthRepository(conn)
 
-    def get_tenant_user_by_email(self, tenant_slug: str, email: str) -> TenantUserRecord | None:
+    def _call(self, operation: str, *args: Any, **kwargs: Any) -> Any:
         if self._pool.closed:
             self._pool.open()
         with self._pool.connection() as conn:
-            return self._repo(conn).get_tenant_user_by_email(tenant_slug, email)
+            return getattr(self._repo(conn), operation)(*args, **kwargs)
+
+    def get_tenant_user_by_email(self, tenant_slug: str, email: str) -> TenantUserRecord | None:
+        return self._call("get_tenant_user_by_email", tenant_slug, email)
 
     def get_tenant_user_by_id(self, tenant_id: str, user_id: str) -> TenantMembershipRecord | None:
-        if self._pool.closed:
-            self._pool.open()
-        with self._pool.connection() as conn:
-            return self._repo(conn).get_tenant_user_by_id(tenant_id, user_id)
+        return self._call("get_tenant_user_by_id", tenant_id, user_id)
 
     def record_login(self, user_id: str, when: datetime | None = None) -> None:
-        if self._pool.closed:
-            self._pool.open()
-        with self._pool.connection() as conn:
-            self._repo(conn).record_login(user_id, when)
+        return self._call("record_login", user_id, when)
 
     def insert_refresh_token(self, record: RefreshTokenRecord) -> None:
-        if self._pool.closed:
-            self._pool.open()
-        with self._pool.connection() as conn:
-            self._repo(conn).insert_refresh_token(record)
+        return self._call("insert_refresh_token", record)
 
     def get_refresh_token(self, token_digest: str) -> RefreshTokenRecord | None:
-        if self._pool.closed:
-            self._pool.open()
-        with self._pool.connection() as conn:
-            return self._repo(conn).get_refresh_token(token_digest)
+        return self._call("get_refresh_token", token_digest)
 
     def consume_and_replace(
         self, *, presented_digest: str, child: RefreshTokenRecord, now: datetime | None = None
     ) -> ConsumeResult:
-        if self._pool.closed:
-            self._pool.open()
-        with self._pool.connection() as conn:
-            return self._repo(conn).consume_and_replace(
-                presented_digest=presented_digest, child=child, now=now
-            )
+        return self._call("consume_and_replace", presented_digest=presented_digest, child=child, now=now)
 
     def revoke_family(self, family_id: str, when: datetime | None = None) -> int:
-        if self._pool.closed:
-            self._pool.open()
-        with self._pool.connection() as conn:
-            return self._repo(conn).revoke_family(family_id, when)
+        return self._call("revoke_family", family_id, when)
 
-    # Explicit CS-061b port; each method is one SECURITY DEFINER auth_* call.
-    def access_state(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).access_state(*a)
-    def revoke_access_token(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).revoke_access_token(*a)
-    def revoke_user_sessions(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).revoke_user_sessions(*a)
-    def issue_password_reset(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).issue_password_reset(*a)
-    def consume_password_reset(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).consume_password_reset(*a)
-    def record_login_attempt(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).record_login_attempt(*a)
-    def login_locked(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).login_locked(*a)
-    def get_mfa(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).get_mfa(*a)
-    def store_mfa(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).store_mfa(*a)
-    def consume_mfa_step(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).consume_mfa_step(*a)
-    def consume_recovery_code(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).consume_recovery_code(*a)
-    def create_invitation(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).create_invitation(*a)
-    def get_invitation(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).get_invitation(*a)
-    def accept_invitation(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).accept_invitation(*a)
-    def list_invitations(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).list_invitations(*a)
-    def revoke_invitation(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).revoke_invitation(*a)
-    def record_audit(self,*a):
-        if self._pool.closed: self._pool.open()
-        with self._pool.connection() as c: return self._repo(c).record_audit(*a)
+    def access_state(self, tenant_id: str, user_id: str, jti: str, issued_at: datetime) -> dict | None:
+        return self._call("access_state", tenant_id, user_id, jti, issued_at)
+
+    def revoke_access_token(self, jti: str, tenant_id: str, user_id: str, expires_at: datetime) -> None:
+        return self._call("revoke_access_token", jti, tenant_id, user_id, expires_at)
+
+    def revoke_user_sessions(self, tenant_id: str, user_id: str, when: datetime) -> None:
+        return self._call("revoke_user_sessions", tenant_id, user_id, when)
+
+    def issue_password_reset(self, tenant_id: str, user_id: str, digest: str, expires_at: datetime) -> None:
+        return self._call("issue_password_reset", tenant_id, user_id, digest, expires_at)
+
+    def consume_password_reset(self, digest: str, password_hash: str, when: datetime) -> tuple[str, str] | None:
+        return self._call("consume_password_reset", digest, password_hash, when)
+
+    def record_login_attempt(self, tenant_id: str, email: str, ip: str, succeeded: bool, when: datetime, max_failures: int = 5, window_seconds: int = 900) -> bool:
+        return self._call("record_login_attempt", tenant_id, email, ip, succeeded, when, max_failures, window_seconds)
+
+    def login_locked(self, tenant_id: str, email: str, ip: str, when: datetime, max_failures: int = 5, window_seconds: int = 900) -> bool:
+        return self._call("login_locked", tenant_id, email, ip, when, max_failures, window_seconds)
+
+    def get_mfa(self, tenant_id: str, user_id: str) -> dict | None:
+        return self._call("get_mfa", tenant_id, user_id)
+
+    def store_mfa(self, tenant_id: str, user_id: str, ciphertext: bytes, step: int, digests: list[str]) -> None:
+        return self._call("store_mfa", tenant_id, user_id, ciphertext, step, digests)
+
+    def consume_mfa_step(self, tenant_id: str, user_id: str, step: int) -> bool:
+        return self._call("consume_mfa_step", tenant_id, user_id, step)
+
+    def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool:
+        return self._call("consume_recovery_code", tenant_id, user_id, digest)
+
+    def create_invitation(self, invitation: InvitationRecord) -> str:
+        return self._call("create_invitation", invitation)
+
+    def get_invitation(self, token_digest: str) -> InvitationRecord | None:
+        return self._call("get_invitation", token_digest)
+
+    def accept_invitation(self, token_digest: str, password_hash: str, when: datetime) -> AcceptedInvite | None:
+        return self._call("accept_invitation", token_digest, password_hash, when)
+
+    def list_invitations(self, tenant_id: str) -> list[InvitationRecord]:
+        return self._call("list_invitations", tenant_id)
+
+    def revoke_invitation(self, tenant_id: str, invitation_id: str) -> bool:
+        return self._call("revoke_invitation", tenant_id, invitation_id)
+
+    def record_audit(self, entry: AuditEntry) -> int:
+        return self._call("record_audit", entry)
 
 
 def _auth_pool(dsn: str) -> Any:
