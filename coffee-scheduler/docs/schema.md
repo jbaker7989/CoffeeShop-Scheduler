@@ -62,6 +62,28 @@ A partitioned table's primary key **must include the partition key**, so those P
 | `app_ro` | `SELECT` only | Labor-Compliance agent, analytics, read paths |
 | `secrets_rw` | DML on `employee_pii` / future `tenant_secrets` only | the narrow path that needs PII/secrets |
 
+### 1.6 Soft-delete lifecycle
+- **Tier A editable records** — `employer_config`, `stores`, `store_hours`, `stations`, `fixed_tasks`,
+  `coverage_rules`, `shift_rules`, `cost_targets`, `throughput_standards`, `demand_adjustments`,
+  `product_taxonomy`, `taxonomy_meta`, `employees`, `employee_pii`, `labor_rules`, `consent_waivers`,
+  `school_calendars`, `school_calendar_days`, `holidays`, `schedules`, `shifts`, `shift_assignments`, and
+  `forecasts` carry `deleted_at TIMESTAMPTZ NULL` and `deleted_by UUID NULL`. Normal deletion sets those
+  markers; it never removes a row. Each has `idx_<table>_live (tenant_id) WHERE deleted_at IS NULL` and an
+  `AS RESTRICTIVE FOR SELECT` `soft_delete_hidden` policy. The policy hides marked rows unless a trusted
+  admin transaction has set `SET LOCAL app.show_deleted = 'on'`; its
+  `current_setting('app.show_deleted', true)` form safely hides rows when the GUC is unset.
+- **Tier B existing lifecycle** — `tenants.status`, `tenant_invitations.status`, `tenant_users.is_active`,
+  and `events.status` remain their lifecycle markers; no duplicate marker columns are added.
+- **Tier C exclusions** — `calibration_log`, `rule_eval_log`, `audit_log`, and `auth_login_attempts` are
+  append-only/immutable; `transactions`, `weather_hourly`, and `weather_daily` are immutable ingested source
+  data and are re-ingested rather than edited; `weather_codes` is a global reference; and
+  `auth_refresh_tokens`, `auth_revoked_tokens`, `auth_password_reset_tokens`, `auth_mfa_recovery_codes`, and
+  `saas_admins` are security-token/admin infrastructure with their own expiry/consumption hygiene. None gets
+  a soft-delete marker.
+- **F69 carve-out** — the audited GDPR erasure path is the only hard-delete exception: it may erase
+  `employee_pii` after the retention process or purge a whole tenant, including backup purge. It is not an
+  ordinary repository, migration, or UI operation.
+
 ---
 
 ## 2. ERD
@@ -138,8 +160,8 @@ Seed row: `maven-demo` (`active`, `pro`, `NY-STATE+NYC`).
 
 ### 3.2 `employer_config`
 Source: `coffee_shop_labor_rules.xlsx!Employer_Config`. | PK `(tenant_id, employer_id)`.
-`employer_id, employer_name, jurisdiction, wage_order, fww_covered BOOLEAN, chain_location_count INT, notes`.
-RLS. Index `(tenant_id, employer_id)`.
+`employer_id, employer_name, jurisdiction, wage_order, fww_covered BOOLEAN, chain_location_count INT, notes,
+deleted_at TIMESTAMPTZ NULL, deleted_by UUID NULL`. RLS. Index `(tenant_id, employer_id)` plus live-row index.
 
 ### 3.3 `stores` + `store_hours` *(split from the workbook's `Store_Profile` sheet)*
 Source: `labor_standards!Store_Profile`. **Split into two tables** so every store FK has a unique store key
@@ -151,53 +173,62 @@ Source: `labor_standards!Store_Profile`. **Split into two tables** so every stor
 - **`store_hours`** *(per-day grid)* — PK `(tenant_id, location_id, day_of_week)`;
   FK `(tenant_id, location_id)` → `stores`. `open_time TIME, close_time TIME, pre_open_minutes INT,
   post_close_minutes INT, first_staff_in TIME, last_staff_out TIME`.
-Both RLS. `first_staff_in`/`last_staff_out` are populated by ETL from open/close ± pre/post minutes (plain
-columns in `0001`, not generated, to keep the first migration simple).
+Both carry `deleted_at TIMESTAMPTZ NULL, deleted_by UUID NULL` and a live-row index. `first_staff_in`/
+`last_staff_out` are populated by ETL from open/close ± pre/post minutes (plain columns in `0001`, not generated,
+to keep the first migration simple).
 
 ### 3.4 `stations`
 Source: `labor_standards!Stations`. | PK `(tenant_id, station_id)`.
 `station_id, location_id INT, store_location TEXT, station_type TEXT, staffed_by_role TEXT`.
-FK `(tenant_id, location_id)` → `stores.location_id` (`ON DELETE CASCADE`). RLS.
+FK `(tenant_id, location_id)` → `stores.location_id` (`ON DELETE CASCADE`). RLS. `deleted_at TIMESTAMPTZ NULL`,
+`deleted_by UUID NULL`, and a live-row index.
 
 ### 3.5 `fixed_tasks`
 Source: `labor_standards!Fixed_Tasks`. | PK `(tenant_id, task_id)`.
 `task_id, location_id INT, task TEXT, role TEXT, duration_minutes INT, timing TEXT, frequency TEXT, basis TEXT`.
-FK location. RLS.
+FK location. RLS. `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`, and a live-row index.
 
 ### 3.6 `coverage_rules`
 Source: `labor_standards!Coverage_Rules`. | PK `(tenant_id, rule_id)`.
 `rule_id TEXT, location_id INT NULL, description TEXT, value TEXT, unit TEXT, basis TEXT`. `location_id` NULL = all
-stores. RLS. Cross-ref: F26 reconciliation with `labor_rules`.
+stores. RLS. `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`, and a live-row index. Cross-ref: F26
+reconciliation with `labor_rules`.
 
 ### 3.7 `shift_rules`
 Source: `labor_standards!Shift_Rules`. | PK `(tenant_id, rule_id)`.
-`rule_id TEXT, description TEXT, value TEXT, unit TEXT, basis TEXT`. RLS.
+`rule_id TEXT, description TEXT, value TEXT, unit TEXT, basis TEXT, deleted_at TIMESTAMPTZ NULL, deleted_by UUID NULL`.
+RLS. Live-row index.
 
 ### 3.8 `cost_targets`
 Source: `labor_standards!Cost_Targets`. | PK `(tenant_id, location_id)`.
 `location_id INT, store_location TEXT, target_labor_pct_of_sales NUMERIC, weekly_overtime_budget_usd NUMERIC(10,2),
-understaffing_penalty_weight NUMERIC, premium_penalty_weight NUMERIC, basis TEXT`. FK location. RLS.
+understaffing_penalty_weight NUMERIC, premium_penalty_weight NUMERIC, basis TEXT, deleted_at TIMESTAMPTZ NULL,
+deleted_by UUID NULL`. FK location. RLS. Live-row index.
 
 ### 3.9 `throughput_standards`
 Source: `labor_standards!Throughput_Standards`. | PK `(tenant_id, product_category)`.
 `product_category TEXT, prep_role TEXT, items_sold_jan_jun_2023 INT, seconds_per_unit NUMERIC,
 units_per_labor_hour NUMERIC, basis TEXT, notes TEXT`. Includes the `(per transaction overhead)` pseudo-row.
-RLS. Coverage invariant with `product_taxonomy.product_category` (BUG-002 guard → DB `CHECK`/trigger or ETL assert).
+RLS. `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`, and a live-row index. Coverage invariant with
+`product_taxonomy.product_category` (BUG-002 guard → DB `CHECK`/trigger or ETL assert).
 
 ### 3.10 `demand_adjustments`
 Source: `labor_standards!Demand_Adjustments`. | PK `(tenant_id, adjustment_id)`.
 `adjustment_id TEXT, trigger_type TEXT, condition TEXT, location_id INT NULL, demand_multiplier NUMERIC,
-staff_delta INT, applies_hours TEXT, basis TEXT, notes TEXT`. RLS. `demand_multiplier` `CHECK BETWEEN 0.5 AND 1.5`.
+staff_delta INT, applies_hours TEXT, basis TEXT, notes TEXT, deleted_at TIMESTAMPTZ NULL, deleted_by UUID NULL`.
+RLS. Live-row index. `demand_multiplier` `CHECK BETWEEN 0.5 AND 1.5`.
 
 ### 3.11 `product_taxonomy`
 Source: `labor_standards!Product_Taxonomy` (CS-009). | PK `(tenant_id, product_id)`.
 `product_id INT, product_detail TEXT, product_type TEXT, product_category TEXT, taxonomy_version TEXT`.
 FK `(tenant_id, taxonomy_version)` → `taxonomy_meta`. RLS. `product_id → product_category` is a function
-(enforced by PK + app/ETL assert, per F29.AC2).
+(enforced by PK + app/ETL assert, per F29.AC2). Also `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`,
+and a live-row index.
 
 ### 3.12 `taxonomy_meta`
 Source: `labor_standards!Taxonomy_Meta`. | PK `(tenant_id, taxonomy_version)`.
-`taxonomy_version TEXT, source_period TEXT, generated_on DATE, n_products INT, n_types INT, n_categories INT`. RLS.
+`taxonomy_version TEXT, source_period TEXT, generated_on DATE, n_products INT, n_types INT, n_categories INT,
+deleted_at TIMESTAMPTZ NULL, deleted_by UUID NULL`. RLS. Live-row index.
 
 ### 3.13 `calibration_log`
 Source: `labor_standards!Calibration_Log` (CS-008). | PK `(tenant_id, calibration_id)`.
@@ -215,12 +246,14 @@ grade_band TEXT CHECK IN('HS','College','None'), has_other_employer BOOLEAN`.
 FKs: `(tenant_id, home_location_id)` → `stores`; `(tenant_id, school_calendar_id)` → `school_calendars`
 (NULL iff not enrolled, `CHECK (is_enrolled = (school_calendar_id IS NOT NULL))`). RLS.
 Legality `CHECK`s (minor never key-holder; minor weekly caps) carried from `validate_roster_fields.py`.
+`deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`, and a live-row index.
 
 ### 3.15 `employee_pii` *(restricted)*
 Source: `data/private/coffee_shop_staff_pii.xlsx`. | PK `(tenant_id, employee_id)`; FK → `employees` (`ON DELETE CASCADE`).
 `ssn TEXT, line1 TEXT, line2 TEXT, city TEXT, state TEXT, zipcode TEXT` (encrypted at rest; app-level
 envelope encryption for `ssn`). Separate RLS + **separate grant**: only `secrets_rw`/`migrator` read it; `app_rw`/`app_ro`
-have **no** grant. Supports employee-level right-to-be-forgotten (F69).
+have **no** grant. `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`, and the new restrictive policy do not
+widen that grant; it has a live-row index. Supports employee-level right-to-be-forgotten (F69).
 
 ### 3.16 `labor_rules` *(temporal)*
 Source: `labor_rules!Labor_Rules`. | PK `(tenant_id, rule_id, effective_from)`.
@@ -229,12 +262,14 @@ applies_school_status, applies_day_type, applies_season, requires_employer_flag,
 value_time TIME, value_text, unit, consequence, waivable_by_consent BOOLEAN, waiver_doc_required BOOLEAN, priority INT,
 effective_from DATE, effective_to DATE NULL, source_citation, source_url, verification_status, verified_on DATE, notes`.
 Temporal: `validity daterange` + `EXCLUDE USING gist (tenant_id =, rule_id =, validity &&)` — no overlapping versions of a rule.
-RLS. Index `(tenant_id, jurisdiction, rule_category)`.
+RLS. Index `(tenant_id, jurisdiction, rule_category)`, plus `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`,
+and a live-row index.
 
 ### 3.17 `consent_waivers` *(temporal)*
 Source: `labor_rules!Consent_Waivers`. | PK `(tenant_id, waiver_id)`.
 `waiver_id TEXT, employee_id INT, rule_id TEXT, document_type TEXT, valid_from DATE, valid_to DATE NULL, doc_reference TEXT, notes TEXT`.
-FKs employee, rule. `EXCLUDE (tenant_id =, employee_id =, rule_id =, validity &&)` — one active waiver per employee×rule. RLS.
+FKs employee, rule. `EXCLUDE (tenant_id =, employee_id =, rule_id =, validity &&)` — one active waiver per employee×rule.
+RLS. `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`, and a live-row index.
 
 ### 3.18 `rule_eval_log` *(partitioned, append-only)*
 Source: `labor_rules!Rule_Eval_Log`. | PK `(tenant_id, eval_id, evaluated_at)`; **PARTITION BY RANGE (evaluated_at)** monthly.
@@ -248,11 +283,13 @@ Source: `labor_rules!School_Calendar`. Split the flat sheet into a header (`scho
 and day rows (`school_calendar_days`: PK `(tenant_id, calendar_id, date)`, `in_session BOOLEAN, day_before_school_day BOOLEAN`).
 FK days→header. RLS. **Normalized form chosen in migration `0001`** so `employees.school_calendar_id` has a
 unique FK target (`school_calendars.calendar_id`); a flat single table has no unique `calendar_id` to point at.
+Both tables have `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`, and a live-row index.
 
 ### 3.20 `holidays`
 Source: `labor_rules!Holiday_Calendar`. | PK `(tenant_id, holiday_id)`.
 `holiday_id TEXT, date DATE, holiday TEXT, jurisdiction TEXT, calendar_source, source_url, effective_from DATE,
-effective_to DATE NULL, is_assumption BOOLEAN, notes TEXT`. Index `(tenant_id, date, jurisdiction)`. RLS.
+effective_to DATE NULL, is_assumption BOOLEAN, notes TEXT, deleted_at TIMESTAMPTZ NULL, deleted_by UUID NULL`.
+Index `(tenant_id, date, jurisdiction)` plus a live-row index. RLS.
 
 ### 3.21 `transactions` *(partitioned)*
 Source: `coffee_shop_sales.xlsx` (~149k rows). | PK `(tenant_id, transaction_id, transaction_date)`;
@@ -288,7 +325,9 @@ Referenced by `rule_eval_log`; produced by the solver (F11) and forecaster (F8/F
 - `shift_assignments` — PK `(tenant_id, shift_id, employee_id)`; FK shift + employee; `is_meal_break_covered BOOLEAN`.
 - `forecasts` — PK `(tenant_id, forecast_id UUID)`; `location_id, product_category, forecast_hour TIMESTAMPTZ,
   p70 NUMERIC, lower NUMERIC, upper NUMERIC, model_version, taxonomy_version` (consumes CS-009/CS-012 contract).
-All RLS; indexes `(tenant_id, location_id, week_start/forecast_hour)`.
+All have `deleted_at TIMESTAMPTZ NULL`, `deleted_by UUID NULL`, and a live-row index. Solver regeneration
+soft-deletes superseded schedules/shifts rather than deleting them. All RLS; indexes
+`(tenant_id, location_id, week_start/forecast_hour)`.
 
 ### 3.27 Derived / QA (materialized views, not base tables)
 - `hourly_demand` (from `transactions`) ← `labor_standards!Hourly_Demand`: a **materialized view** aggregating

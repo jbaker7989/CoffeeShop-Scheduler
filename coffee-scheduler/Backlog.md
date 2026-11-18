@@ -951,6 +951,12 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
   - Tenant delete timeline: soft-delete (`churned`) → grace → hard delete → **backup purge**, reactivation window, audit-logged (F69.AC2); **employee-level** right-to-be-forgotten (F69.AC3); documented **per-tenant restore** path + encrypted backups (F69.AC4).
 - **Cross-refs:** PLAN §15.12; architecture §14.12.
 
+### CS-087 — Soft-delete data lifecycle
+- **Feature:** [F69](./FEATURES.md) · **Priority:** P1 · **Size:** M · **Status:** ✅ Done
+- **Detailed specifications:** Tier-A editable records have marker columns, restrictive live-row policies, and
+  partial indexes; the repository helper and CI guard prohibit normal hard deletes. Tier-B/C classifications and
+  the audited F69 erasure carve-out are documented in `docs/plans/CS-087-soft-delete-lifecycle.md`.
+
 ### CS-070 — Tenant routing
 - **Feature:** [F70](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked (on CS-061)
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
@@ -2330,6 +2336,7 @@ closing regression evidence.
 | CS-068 | F68 | P0 | M | Blocked (gate) |
 | CS-069 | F69 | P2 | M | Blocked |
 | CS-070 | F70 | P0 | S | Blocked |
+| CS-087 | F69 | P1 | M | ✅ Done — restrictive soft-delete lifecycle, helper, guard, and schema contract |
 | CS-071 | F71 | P1 | M | Not started — employee app shell + `employee` role & self-scoped RLS |
 | CS-072 | F71 | P1 | S | Not started — my-schedule view (published-only, offline-cached) |
 | CS-073 | F72 | P1 | M | Not started — availability model & intake (effective-dated, solver constraint) |

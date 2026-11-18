@@ -45,7 +45,9 @@ class F61bMigrationGraphContractTests(unittest.TestCase):
         revisions = [revision for revision, _ in metadata.values()]
         self.assertEqual(len(revisions), len(set(revisions)), "revision ids must stay unique")
         parents = {parent for _, parent in metadata.values() if parent is not None}
-        self.assertEqual({"0012"}, set(revisions) - parents, "0012 must be the one migration head")
+        heads = set(revisions) - parents
+        self.assertEqual(1, len(heads), "Alembic must retain exactly one migration head")
+        self.assertIn("0012", parents, "later migrations must extend 0012 rather than fork CS-061b")
 
 
 class F61bSchemaContractTests(unittest.TestCase):

@@ -6,7 +6,8 @@
   no surrogate `id` is assumed.
 - Does **not** add a Python tenant filter — RLS (F60) is the isolation boundary. The
   caller establishes the role + `app.tenant_id` via `data_access.session`.
-- Append-only tables (`rule_eval_log`, `calibration_log`) reject update/delete.
+- Append-only tables (`rule_eval_log`, `calibration_log`) reject update/delete; every
+  domain deletion is rejected here and uses ``data_access.soft_delete`` instead.
 
 Rows are returned as dicts (`dict_row`).
 """
@@ -20,6 +21,10 @@ from .tables import TableSpec, introspect
 
 
 class AppendOnlyError(RuntimeError):
+    pass
+
+
+class HardDeleteForbiddenError(RuntimeError):
     pass
 
 
@@ -88,12 +93,9 @@ class Repository:
     def delete(self, pk: dict) -> bool:
         if self.spec.append_only:
             raise AppendOnlyError(f"{self.spec.name} is append-only; DELETE is not permitted")
-        self.spec.validate_pk(pk)
-        where = " AND ".join(f"{_ident(k)} = %s" for k in self.spec.pk)
-        sql = f"DELETE FROM {_ident(self.spec.name)} WHERE {where}"
-        with self.conn.cursor() as cur:
-            cur.execute(sql, [pk[k] for k in self.spec.pk])
-            return cur.rowcount > 0
+        raise HardDeleteForbiddenError(
+            f"{self.spec.name} may not be hard-deleted; use data_access.soft_delete"
+        )
 
     def append(self, **values) -> dict:
         """Insert into an append-only log (the only write it permits)."""

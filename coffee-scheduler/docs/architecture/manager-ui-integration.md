@@ -54,6 +54,8 @@ SameSite=None / CORS / cross-site-CSRF problems. Server components fetch the gat
 - No/invalid session → 401 at the gateway; Next middleware also presence-gates `/dashboard` and the
   `(manager)` layout redirects to `/login` on a 401 from `/me` (defense in depth).
 - No tenant context in a DB transaction → RLS returns 0 rows (the safe direction), never a cross-tenant leak.
+- Manager UI “delete” actions are soft-deletes: normal list/detail reads see only live rows through the
+  restrictive lifecycle policy, while an explicitly privileged transaction may inspect or restore deleted rows.
 
 ## LangGraph-state binding convention (for F12 / CS-015 — documented, not built)
 When the agent runtime lands, a screen binds to a graph run by **`thread_id`**. Graph state persists in the

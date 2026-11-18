@@ -599,7 +599,7 @@ Convert the single-tenant deployment into a multi-tenant SaaS serving SMB coffee
   - **Cross-refs:** PLAN §9 + §15.14; architecture §11 + §14.14.
 
 ### F69. Data export / delete (GDPR)
-- **Status:** Not started · **Size:** M · **Priority:** P2
+- **Status:** ◑ Partial — CS-087 establishes the normal-operation soft-delete lifecycle; audited retention and erasure remain blocked · **Size:** M · **Priority:** P2
 - **Description:** Per-tenant data export — JSON dump of every row owned by the tenant, packaged and delivered to the requesting user. Per-tenant hard delete — removes every row across every domain table in a single transaction; audit-logged; tenant row marked `churned` rather than deleted (so historical invoices remain). Right-to-be-forgotten flow for individual users.
 - **Expected outcome:** EU customers can request data export / deletion per GDPR Article 15 and Article 17; the SaaS can fulfil both within statutory windows.
 - **Acceptance criteria:**
