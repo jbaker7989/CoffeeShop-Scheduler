@@ -303,12 +303,8 @@ class TenantAuthService:
     refresh_browser = refresh_json
 
     # ----- access-token authentication -----
-    def authenticate_access_token(self, token: str) -> Principal:
-        """Validate a bearer access token and reconcile it against the canonical identity.
-
-        Signature/shape validation proves integrity; this method proves *authority* — the
-        token's tenant and role must match the identity stored for its ``(tenant_id,
-        user_id)``, or it is rejected before any F60 tenant context is opened."""
+    def _authenticate_access_token_with_claims(self, token: str) -> tuple[Principal, Mapping[str, object]]:
+        """Validate once, then reconcile the signed identity against canonical membership."""
         try:
             claims = self._tokens.validate_access_token(token)
         except TokenValidationError:
@@ -318,19 +314,29 @@ class TenantAuthService:
         user = self._repo.get_tenant_user_by_id(tenant_id, user_id)
         if user is None or not user.is_active:
             raise AuthenticationError(_GENERIC_AUTH_FAILURE)
-        # Canonical record is authoritative over the token's claims.
         if str(user.tenant_id) != str(tenant_id) or user.role != claims["role"]:
             raise AuthenticationError(_GENERIC_AUTH_FAILURE)
-        return Principal(tenant_id=str(user.tenant_id), user_id=str(user.id), role=user.role)
+        return Principal(tenant_id=str(user.tenant_id), user_id=str(user.id), role=user.role), claims
+
+    def authenticate_access_token(self, token: str) -> Principal:
+        """Validate an access token and reconcile it against the canonical identity."""
+        principal, _claims = self._authenticate_access_token_with_claims(token)
+        return principal
 
     def authorize_access_request(self, token: str) -> Principal:
-        principal=self.authenticate_access_token(token)
-        try: claims=self._tokens.validate_access_token(token); jti=str(uuid.UUID(str(claims['jti']))); iat=datetime.fromtimestamp(int(claims['iat']),timezone.utc)
-        except Exception: raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
-        state=self._repo.access_state(principal.tenant_id, principal.user_id, jti, iat)
-        if state is None or not state['is_active']: raise AuthenticationError(_GENERIC_AUTH_FAILURE)
-        if not state['tenant_active']: raise TenantSuspendedError(_GENERIC_AUTH_FAILURE)
-        if state['revoked']: raise SessionRevokedError(_GENERIC_AUTH_FAILURE)
+        principal, claims = self._authenticate_access_token_with_claims(token)
+        try:
+            jti = str(uuid.UUID(str(claims["jti"])))
+            issued_at = datetime.fromtimestamp(int(claims["iat"]), timezone.utc)
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
+        state = self._repo.access_state(principal.tenant_id, principal.user_id, jti, issued_at)
+        if state is None or not state["is_active"]:
+            raise AuthenticationError(_GENERIC_AUTH_FAILURE)
+        if not state["tenant_active"]:
+            raise TenantSuspendedError(_GENERIC_AUTH_FAILURE)
+        if state["revoked"]:
+            raise SessionRevokedError(_GENERIC_AUTH_FAILURE)
         return principal
 
     def revoke_token(self, jti: str) -> None:
