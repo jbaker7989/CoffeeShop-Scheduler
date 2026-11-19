@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 
+from .routing import TenantRoutingConfig
+
 
 GATEWAY_DATABASE_URL = os.environ.get(
     "GATEWAY_DATABASE_URL",
@@ -34,3 +36,20 @@ except ValueError:
 DEMO_TENANT_SLUG = os.environ.get("DEMO_TENANT_SLUG", "maven-demo")
 DEMO_MANAGER_EMAIL = os.environ.get("DEMO_MANAGER_EMAIL", "manager@maven-demo.coffee")
 DEMO_MANAGER_PASSWORD_HASH = os.environ.get("DEMO_MANAGER_PASSWORD_HASH")
+
+
+def tenant_routing_config_from_env() -> TenantRoutingConfig | None:
+    """Build the CS-070 edge configuration, failing before the gateway starts.
+
+    **Opt-in** (SDD AC3.4): tenant routing installs only when ``TENANT_ROUTING_ENABLED=true``.
+    Until the manager UI adopts the ``/t/<slug>/`` dev topology (and prod subdomains), the
+    default is the CS-030/CS-061 single-tenant same-origin behavior — otherwise the routing
+    middleware would 404 the shell's unprefixed ``/me`` / ``/stores`` / ``/auth/login`` calls
+    (BUG-057). When enabled, the full topology is validated fail-fast at startup.
+
+    Kept as a function so ASGI/unit-test imports can supply an explicit topology without
+    process-global environment mutation. The production app invokes it in ``api.app.__getattr__``.
+    """
+    if os.environ.get("TENANT_ROUTING_ENABLED", "").lower() != "true":
+        return None
+    return TenantRoutingConfig.from_environment()

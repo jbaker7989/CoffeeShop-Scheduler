@@ -256,7 +256,7 @@ class TenantAuthService:
         return user
 
     # ----- refresh -----
-    def refresh_json(self, *, refresh_token: str) -> IssuedTokens:
+    def refresh_json(self, *, refresh_token: str, client_ip: str = "0.0.0.0") -> IssuedTokens:
         """Atomically consume a refresh token and issue a replacement access + refresh pair
         in the same family. The repository derives the family/tenant/user from the locked
         parent and returns them on the rotated child, so the successor access token is
@@ -282,7 +282,7 @@ class TenantAuthService:
         )
         result = self._repo.consume_and_replace(presented_digest=presented_digest, child=child, now=now)
         if result.replayed:
-            self._audit(AuditEntry(None, None, "system", "auth.refresh.reuse_detected"))
+            self._audit(AuditEntry(None, None, "system", "auth.refresh.reuse_detected", ip=client_ip))
             raise RefreshReplayError("refresh token reuse detected")
         if result.status is not ConsumeStatus.ROTATED:
             # EXPIRED / NOT_FOUND / any non-rotation outcome.

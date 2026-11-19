@@ -969,11 +969,12 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
   round-trip `0013↔0015` verified; all suites green.
 
 ### CS-070 — Tenant routing
-- **Feature:** [F70](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked (on CS-061)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Feature:** [F70](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** ✅ Done (2026-11-19) — strict edge resolver (`api/routing.py`), `resolve_active_slug` (active+trial routable; suspended/churned/unknown → uniform 404), reserved-slug denylist, trusted-proxy client-IP boundary (fixes BUG-045), principal↔route 403 binding before RLS, origin-CSRF for cookie-authed unsafe methods, and safe 308 canonical redirects. 16 CS-070 tests + BUG-045 regression green; f61 65, isolation_gate 14, api_foundation 9, next build+lint clean. **Independent review (Claude):** applied an opt-in gate (`TENANT_ROUTING_ENABLED`) so the default single-tenant demo keeps working (BUG-056); filed BUG-056/BUG-057. Wildcard TLS/CORS-engine/cache-partitioning/CS-068b/CS-062 deferred per plan.
+- **Developer:** Codex (dev+tests) / Claude (review) · **Started:** 2026-11-19 · **Duration:** ~1d
 - **Detailed specifications:**
-  - Resolver sets tenant context from subdomain (prod) / path-prefix (dev) before any data access; unknown/suspended → 404 (F70.AC1).
-  - **Reserved-slug denylist** enforced (F70.AC2); wildcard TLS; **CORS** locked to tenant origins; **CSRF** + secure cookie flags (F70.AC3). Custom domains noted as a later feature.
+  - `api/routing.py` resolves an immutable route context from strict production subdomains or development `/t/<slug>/`, before handler/RLS work; unknown/suspended/churned/lookup failure share one cache-safe 404 (F70.AC1).
+  - Shared **reserved-slug denylist**, trusted-proxy forwarding/client-IP boundary, principal↔route binding, exact-origin cookie CSRF check, and safe canonical 308 aliases are covered by `test_cs070_routing.py` / `test_cs070_client_ip.py` (F70.AC2/AC3).
+  - Wildcard TLS issuance, HTTP→HTTPS edge redirect, certificate monitoring, full CORS allow-list/cache partitioning, CS-068b attack matrix, and CS-062 signup validation remain deliberately deferred per the locked CS-070 plan.
 - **Cross-refs:** PLAN §15.10; architecture §14.10.
 
 ---
@@ -2245,7 +2246,7 @@ closing regression evidence.
 
 ### BUG-045 — F61/CS-061b: login never captures the client IP → per-IP lockout collapses into a tenant-wide DoS, and audit logs 0.0.0.0
 - **Feature:** [F61](./FEATURES.md) (CS-061b) · also F30/CS-070 (gateway must forward client IP) · **Priority:** P1 · **Size:** S · **Pattern:** D2/D3 (integration gap + wrong aggregation)
-- **Status:** 🐞 Open · **Type:** Security/availability defect (throttle mis-keying) + audit-integrity gap · **Found:** 2026-11-17 (Claude review of the committed auth surface)
+- **Status:** ✅ Resolved (CS-070, 2026-11-19) — login/browser-login/refresh now thread the CS-070 trusted-proxy client IP (`scope["client_ip"]` via `_client_ip`) into both the throttle and the CS-061c audit entry, and `_route_slug` stops the login body overriding the routed tenant. Regression `test_cs070_client_ip.py` (two IPs independent, trusted vs untrusted XFF, real audited IP) passed independent review. **Caveat (BUG-057):** effective only with routing enabled **and** `TRUSTED_PROXY_CIDRS` set; the empty default collapses to the direct peer IP. · **Type:** Security/availability defect (throttle mis-keying) + audit-integrity gap · **Found:** 2026-11-17 (Claude review of the committed auth surface)
 - **Root cause:** `auth/api.py` `login` / `browser_login` call `service.login_json(...)` / `login_browser(...)`
   **without** `client_ip`, so it defaults to `"0.0.0.0"`. The CS-061b throttle (`auth_record_login_attempt` /
   `auth_login_locked`, migration `0011:50,52`) locks when `account_failures >= max OR ip_failures >= max`,
@@ -2465,7 +2466,7 @@ closing regression evidence.
 | CS-067 | F67 | P1 | M | Blocked |
 | CS-068 | F68 | P0 | M | Blocked (gate) |
 | CS-069 | F69 | P2 | M | Blocked |
-| CS-070 | F70 | P0 | S | Blocked |
+| CS-070 | F70 | P0 | S | Ready for independent review |
 | CS-087 | F69 | P1 | M | ✅ Done — restrictive soft-delete lifecycle, helper, guard, and schema contract |
 | CS-071 | F71 | P1 | M | Not started — employee app shell + `employee` role & self-scoped RLS |
 | CS-072 | F71 | P1 | S | Not started — my-schedule view (published-only, offline-cached) |
@@ -2581,3 +2582,40 @@ closing regression evidence.
 - **Edge / adversarial cases:** IPv4 and IPv6 loopback spellings, hostname aliases, DNS names resolving to loopback, malformed endpoints, remote hostname with missing CA, incomplete client cert/key pair, and accidental insecure override.
 - **Cross-references:** `otel/telemetry.py`, `otel/collector-config.yaml`, root `docker-compose.observability.yml`, `test/test_cs036_otel_foundation.py`, `test/test_cs038_otel_collector.py`.
 - **Expected outcome:** The collector is not exposed to the LAN by default and remote OTLP transport is encrypted and authenticated.
+
+### BUG-056 — F70/CS-070: tenant routing was unconditionally enabled, 404-ing the existing unprefixed manager-UI calls
+- **Feature:** [F70](./FEATURES.md) (CS-070) · also F30 · **Priority:** P2 · **Size:** S · **Pattern:** D3 (integration regression)
+- **Status:** ✅ Gated in review (2026-11-19); frontend migration follow-up open · **Type:** Deploy-time integration regression · **Found:** 2026-11-19 (Claude review of CS-070)
+- **Root cause:** the CS-070 production app (`api.app.__getattr__('app')`) installed `TenantRoutingMiddleware`
+  **unconditionally** (default mode `development`, requiring a `/t/<slug>/` prefix). The manager-UI server
+  components still fetch **unprefixed** `/me` and `/stores`, and the shell posts to unprefixed `/auth/login`
+  (via the `/api/*` rewrite). With routing active, every non-global unprefixed path returns the cache-safe 404,
+  so `uvicorn api.app:app` breaks the authenticated demo. Unit tests passed only because they build `create_app`
+  **without** `routing_config`. Contradicts SDD AC3.4 ("routes that do not install tenant routing preserve the
+  existing same-origin behavior").
+- **Reproduction (verified 2026-11-19):** `create_app` with a default dev `TenantRoutingConfig` → `GET /me`,
+  `GET /stores`, `POST /auth/login` all **404**; only `/t/maven-demo/me` reaches the handler.
+- **Impact:** running the gateway with the pre-CS-070 frontend breaks login + dashboard.
+- **Fix applied in review:** `tenant_routing_config_from_env()` now returns `None` unless
+  `TENANT_ROUTING_ENABLED=true`, so the default is the CS-030/CS-061 single-tenant same-origin behavior and
+  routing is opt-in (SDD AC3.4). CS-070 tests (which pass `routing_config` explicitly) and `test_api_foundation`
+  stay green.
+- **Remaining follow-up:** migrate the manager-UI server components + login/session-refresh to the `/t/<slug>/`
+  dev topology (and prod subdomains) so routing can be enabled end-to-end; until then the shell runs with routing
+  off. Tracked for CS-031–035 / the CS-070 frontend handoff.
+- **Risk if unfixed (follow-up):** routing cannot be turned on in a real multi-tenant deploy until the shell uses
+  routed URLs.
+
+### BUG-057 — F70/CS-061b: the BUG-045 client-IP fix is inert unless `TRUSTED_PROXY_CIDRS` is configured
+- **Feature:** [F70](./FEATURES.md) (CS-070) / [F61](./FEATURES.md) (CS-061b) · **Priority:** P3 · **Size:** XS · **Pattern:** D3 (config-dependent control)
+- **Status:** 🐞 Open · **Type:** Deployment-config hazard (brute-force control) · **Found:** 2026-11-19 (Claude review of CS-070)
+- **Root cause:** `extract_client_ip` trusts `X-Forwarded-For` only when the direct peer is in
+  `config.trusted_networks`; otherwise it returns the direct peer IP. `TRUSTED_PROXY_CIDRS` defaults to empty, so
+  with routing enabled but no CIDR set, every request behind the Next proxy resolves to the **Next server's IP** —
+  the per-IP throttle still collapses to one shared bucket (better than BUG-045's `0.0.0.0`, but not per-client).
+- **Impact:** BUG-045 is only truly resolved when the operator configures `TRUSTED_PROXY_CIDRS` with the
+  Next/ingress network; a misconfigured deploy silently keeps a tenant-wide-ish throttle collapse.
+- **Acceptance criteria:** document `TRUSTED_PROXY_CIDRS` as required when routing is enabled (`.env.example` +
+  the routing docs); emit a startup warning (or fail closed) if routing is enabled in production with no trusted
+  CIDR; add a test asserting the warning/behavior.
+- **Risk if unfixed:** a production deploy believes BUG-045 is fixed while the per-IP throttle is still collapsed.

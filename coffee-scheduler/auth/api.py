@@ -131,6 +131,24 @@ def _cookie_pair_count(request: Request, name: str) -> int:
     return count
 
 
+def _client_ip(request: Request) -> str:
+    """Use the CS-070 middleware's trusted boundary, never raw XFF here."""
+    trusted = request.scope.get("client_ip")
+    if isinstance(trusted, str) and trusted:
+        return trusted
+    return request.client.host if request.client is not None else "0.0.0.0"
+
+
+def _route_slug(request: Request, supplied_slug: str) -> str:
+    """The CS-070 authority/path wins over a legacy login-body slug.
+
+    The body field remains temporarily for JSON compatibility, but cannot select
+    or override the tenant whenever the gateway routing middleware is active.
+    """
+    route = request.scope.get("tenant_route")
+    return route.slug if route is not None else supplied_slug
+
+
 def create_auth_router(
     service: TenantAuthService, *, cookie_config: BrowserCookieConfig | None = None
 ) -> APIRouter:
@@ -139,28 +157,30 @@ def create_auth_router(
     router = APIRouter()
 
     @router.post("/auth/login", response_model=TokenResponse)
-    def login(body: LoginRequest) -> TokenResponse:
+    def login(body: LoginRequest, request: Request) -> TokenResponse:
         try:
             tokens = service.login_json(
-                tenant_slug=body.tenant_slug, email=body.email, password=body.password
+                tenant_slug=_route_slug(request, body.tenant_slug), email=body.email, password=body.password,
+                client_ip=_client_ip(request),
             )
         except AuthenticationError:
             raise _unauthorized()
         return _json_body(tokens)
 
     @router.post("/auth/refresh", response_model=TokenResponse)
-    def refresh(body: RefreshRequest) -> TokenResponse:
+    def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
         try:
-            tokens = service.refresh_json(refresh_token=body.refresh_token)
+            tokens = service.refresh_json(refresh_token=body.refresh_token, client_ip=_client_ip(request))
         except AuthenticationError:
             raise _unauthorized()
         return _json_body(tokens)
 
     @router.post("/auth/browser/login", response_model=BrowserTokenResponse)
-    def browser_login(body: LoginRequest, response: Response) -> BrowserTokenResponse:
+    def browser_login(body: LoginRequest, response: Response, request: Request) -> BrowserTokenResponse:
         try:
             tokens = service.login_browser(
-                tenant_slug=body.tenant_slug, email=body.email, password=body.password
+                tenant_slug=_route_slug(request, body.tenant_slug), email=body.email, password=body.password,
+                client_ip=_client_ip(request),
             )
         except AuthenticationError:
             raise _unauthorized()
@@ -180,7 +200,7 @@ def create_auth_router(
         if _cookie_pair_count(request, cfg.refresh_name) != 1 or not refresh_token:
             raise _unauthorized()
         try:
-            tokens = service.refresh_browser(refresh_token=refresh_token)
+            tokens = service.refresh_browser(refresh_token=refresh_token, client_ip=_client_ip(request))
         except AuthenticationError:
             raise _unauthorized()
         _set_browser_cookies(response, tokens, cfg)

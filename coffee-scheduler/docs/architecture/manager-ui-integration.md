@@ -46,6 +46,26 @@ SameSite=None / CORS / cross-site-CSRF problems. Server components fetch the gat
    explicit transaction on a PgBouncer-safe pool (`prepare_threshold=None`). RLS scopes every row; no tenant
    context → zero rows (fail-closed).
 
+## CS-070 tenant routing and browser edge
+
+The public authority chooses the tenant before authentication or an RLS-backed fetch: production uses
+`https://<slug>.coffeescheduler.com`, while local development uses the exact
+`http://localhost/t/<slug>/` prefix (or the explicitly configured development host/port).  The FastAPI edge
+validates raw `Host`/`:authority` headers, rejects duplicate or malformed forwarding headers, checks the shared
+reserved-slug namespace, and resolves only `active` or `trial` tenants.  Unknown, suspended, churned, and lookup
+failure outcomes are one cache-safe 404; no request value, cookie, JWT claim, or login body can select another
+tenant.  A signed principal is then compared to the immutable resolved route before any data fetch opens the
+transaction-local `open_session_context` RLS scope.
+
+Next remains the same-origin browser endpoint.  Its middleware copies the public `Host` to
+`X-Forwarded-Host` for `/api/*` and browser-auth rewrites; the gateway honors it only if the immediate peer is in
+`TRUSTED_PROXY_CIDRS`.  The same trust boundary is used for `X-Forwarded-For`, so login throttle and audit events
+record the real client address rather than a shared proxy address.  Cookie-authenticated unsafe tenant requests
+require an exact canonical `Origin` (or `Referer` fallback).  Production GET/HEAD aliases differing only by case,
+one terminal dot, or `:443` redirect once (308) to the canonical HTTPS authority with `Cache-Control: no-store`
+and `Vary: Host`; mutation aliases fail closed.  TLS issuance, HTTP-to-HTTPS edge redirects, and full CORS/cache
+partitioning remain deployment follow-ups documented in the CS-070 manifest rather than application behavior.
+
 ## Two kinds of "role" — do not conflate
 - **UI/RBAC role** (`owner`/`manager`/`staff`/`read_only`) — carried in the JWT, governs what the UI exposes.
 - **Postgres role** — always `app_rw` for tenant-scoped data (the owner role is used only for login-time slug

@@ -52,6 +52,22 @@ def resolve_tenant_id(slug: str) -> str | None:
     return str(row[0]) if row else None
 
 
+def resolve_active_slug(slug: str) -> str | None:
+    """Return only tenants that are routable at the public edge.
+
+    ``trial`` is deliberately routable even though CS-061b's separate
+    ``auth_access_state`` policy currently permits only ``active`` tenants; that
+    reconciliation is tracked separately.  Callers receive no status detail.
+    """
+    with _pooled_connection() as conn:
+        with conn.transaction():
+            row = conn.execute(
+                "SELECT id FROM tenants WHERE slug=%s AND status IN ('active', 'trial')",
+                (slug,),
+            ).fetchone()
+    return str(row[0]) if row else None
+
+
 def fetch_stores(tenant_id: str) -> list[dict]:
     """Return stores visible to the signed-in tenant under RLS."""
     with _pooled_connection() as conn:

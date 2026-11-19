@@ -7,9 +7,10 @@ protected endpoints from *validated, reconciled* CS-061a claims. The legacy CS-0
 exactly one production handler owns each ``/auth/*`` route, and no duplicate ``/auth/login``
 exists for Starlette to shadow.
 
-Tenant context comes ONLY from the reconciled access-token claims: a request body, query, or
-cookie other than the signed access credential cannot select a tenant. Protected reads then open
-the ``app_rw`` RLS transaction with that reconciled ``tenant_id`` (unchanged CS-030 data path).
+CS-070 resolves tenant context from the validated public authority/path before authentication;
+the reconciled access-token tenant must then match that immutable route.  Request body, query,
+cookie, forwarding, or JWT claims cannot select or override the routed tenant.  Protected reads
+then open the ``app_rw`` RLS transaction with that resolved-and-bound identity.
 
 CS-030 compatibility: the Next.js manager shell still authenticates with the legacy ``session``
 cookie; migrating it to the CS-061a browser ``access_token`` cookie is CS-070 (frontend session
@@ -28,6 +29,7 @@ from auth.service import AuthenticationError, InvitationError, InvitationPermiss
 from auth.ratelimit import LoginAttemptKey, LoginRateLimiter, AccountLockedError
 
 from .auth_gateway import ACCESS_COOKIE_NAME, build_auth_service_from_env, extract_access_credential
+from .routing import TenantResolver, TenantRoutingConfig, TenantRoutingMiddleware
 
 
 BROWSER_REFRESH_COOKIE = "refresh_token"
@@ -47,6 +49,8 @@ def create_app(
     auth_service: TenantAuthService,
     *,
     fetch_stores: Callable[[str], list[dict]] | None = None,
+    routing_config: TenantRoutingConfig | None = None,
+    tenant_lookup: Callable[[str], str | None] | None = None,
 ) -> FastAPI:
     """Build the gateway around a CS-061a ``auth_service``.
 
@@ -58,6 +62,14 @@ def create_app(
         from .db import fetch_stores as fetch_stores  # noqa: PLW0127 — lazy production default
 
     app = FastAPI()
+    if routing_config is not None:
+        if tenant_lookup is None:
+            from .db import resolve_active_slug as tenant_lookup  # noqa: PLW0127 — lazy production lookup
+        app.add_middleware(
+            TenantRoutingMiddleware,
+            resolver=TenantResolver(routing_config, tenant_lookup),
+            config=routing_config,
+        )
     invitation_limiter = LoginRateLimiter()
 
     # The four CS-061a auth routes + /.well-known/jwks.json. This is the single owner of
@@ -71,11 +83,17 @@ def create_app(
         if token is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
         try:
-            return auth_service.authorize_access_request(token)
+            principal = auth_service.authorize_access_request(token)
         except TenantSuspendedError:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
         except AuthenticationError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+        route = request.scope.get("tenant_route")
+        if route is not None and principal.tenant_id != route.tenant_id:
+            # This comparison is deliberately before endpoint execution/fetch_stores,
+            # therefore before the sole RLS binding in api.db.fetch_stores.
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+        return principal
 
     def require_role(*roles: str):
         def dependency(principal: Principal = Depends(current_principal)) -> Principal:
@@ -221,6 +239,10 @@ def __getattr__(name: str) -> Any:
     if name == "app":
         global _production_app
         if _production_app is None:
-            _production_app = create_app(build_auth_service_from_env())
+            from .config import tenant_routing_config_from_env
+
+            _production_app = create_app(
+                build_auth_service_from_env(), routing_config=tenant_routing_config_from_env()
+            )
         return _production_app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
