@@ -4,11 +4,12 @@
 
 Owners and managers create a tenant-scoped invitation; the recipient accepts its single-use link,
 chooses a password, and receives the normal access/refresh session. The plaintext invitation token
-is returned only for the dev/test notification stub; storage contains only its digest. Tenant-scoped
-application/admin audit writes use `app_rw`'s INSERT-only `audit_log` grant, while authentication and
-NULL-tenant events use the `auth_svc` `auth_record_audit` SECURITY DEFINER port. `impersonated_by` and
-the SaaS-admin actor type are schema support reserved for CS-064b; this slice does not implement
-impersonation.
+is returned only for the dev/test notification stub; storage contains only its digest. **All** audit
+writes — authentication, NULL-tenant, and application/admin events — go through the `auth_svc`
+`auth_record_audit` SECURITY DEFINER port; `app_rw` has **no** direct `audit_log` grant (migration `0014`
+revoked the earlier INSERT/SELECT grant), and a `BEFORE UPDATE/DELETE` trigger (`0015`) makes the table
+immutable regardless of grants. `impersonated_by` and the SaaS-admin actor type are schema support
+reserved for CS-064b; this slice does not implement impersonation.
 
 The contract every manager-facing screen (CS-031–035) and the P0 auth/routing tier build on. Established by
 CS-030.

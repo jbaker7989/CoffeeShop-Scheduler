@@ -957,6 +957,17 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
   partial indexes; the repository helper and CI guard prohibit normal hard deletes. Tier-B/C classifications and
   the audited F69 erasure carve-out are documented in `docs/plans/CS-087-soft-delete-lifecycle.md`.
 
+### Migrations 0014/0015 — audit_log hardening (reconstructed 2026-11-19)
+- **Feature:** [F61](./FEATURES.md) (CS-061c follow-up) · **Priority:** P1 · **Size:** XS · **Status:** ✅ Done
+- The shared data plane was at Alembic `0015` while the repo chain ended at `0013` — another session had
+  applied two audit-hardening migrations whose files were never committed. Reverse-engineered from the live DB
+  and reconstructed as reversible migrations so repo and DB agree: **`0014`** revokes `app_rw`'s direct
+  `INSERT, SELECT` on `audit_log` (and the `audit_log_id_seq` grant) so audit rows are written **only** through
+  the `auth_svc` `auth_record_audit` function; **`0015`** adds the `audit_log_append_only` `BEFORE UPDATE/DELETE`
+  trigger (`audit_reject_mutation()` → `RAISE 'audit_log is append-only'`) so the table is immutable regardless
+  of grants. `test_isolation_gate` updated (audit_log is now function-write-only like the other auth tables);
+  round-trip `0013↔0015` verified; all suites green.
+
 ### CS-070 — Tenant routing
 - **Feature:** [F70](./FEATURES.md) · **Priority:** P0 · **Size:** S · **Status:** Blocked (on CS-061)
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)

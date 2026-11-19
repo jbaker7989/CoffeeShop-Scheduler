@@ -229,12 +229,9 @@ class CoverageGate(unittest.TestCase):
     def test_auth_owner_bypass_is_limited_to_auth_svc_functions(self):
         with psycopg.connect(DSN) as conn:
             for table in AUTH_OWNER_BYPASS_TABLES:
-                if table == "audit_log":
-                    # CS-061c's deliberate app/admin tenant-scoped append-only port.
-                    self.assertTrue(conn.execute("SELECT has_table_privilege('app_rw', 'audit_log', 'INSERT, SELECT')").fetchone()[0])
-                    for privilege in ("UPDATE", "DELETE"):
-                        self.assertFalse(conn.execute("SELECT has_table_privilege('app_rw', 'audit_log', %s)", (privilege,)).fetchone()[0])
-                    continue
+                # audit_log is function-write-only too: migration 0014 revoked app_rw's direct
+                # INSERT/SELECT so audit rows go only through auth_record_audit (auth_svc), and
+                # 0015's BEFORE UPDATE/DELETE trigger makes the table immutable regardless of grant.
                 for role in ("app_rw", "app_ro"):
                     for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
                         allowed = conn.execute(
