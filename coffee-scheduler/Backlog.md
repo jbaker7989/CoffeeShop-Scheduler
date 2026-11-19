@@ -2509,9 +2509,8 @@ closing regression evidence.
 | BUG-051 | F61 | P2 | S | ✅ Fixed — centralized typed pooled repository delegation |
 | BUG-052 | F61 | P2 | XS | ✅ Fixed — one JWT validation per protected authorization |
 | BUG-053 | F61 | P1 | S | ✅ Fixed — logout revokes access token and presented refresh family |
-| BUG-054 | F69 | P1 | S | 🐞 Open — restore deleted-row visibility setting after helper calls |
-| BUG-055 | F45 | P2 | XS | 🐞 Open — validate and bound repository list pagination |
-| BUG-056 | F36/F38 | P1 | M | 🐞 Open — limit collector exposure and require TLS for remote OTLP |
+| BUG-054 | F45 | P2 | XS | 🐞 Open — validate and bound repository list pagination |
+| BUG-055 | F36/F38 | P1 | M | 🐞 Open — limit collector exposure and require TLS for remote OTLP |
 
 ### BUG-051 — F61: centralize pooled auth repository delegation
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** S
@@ -2547,19 +2546,7 @@ closing regression evidence.
   - Missing, expired, malformed, or ambiguous credentials still produce idempotent logout and clear both cookie paths; valid credentials are revoked before returning success. Persistence errors are not swallowed as successful revocation.
   - Tests cover bearer and browser-cookie logout, subsequent access rejection, refresh-family rejection, absent/expired/duplicate credential cookie-clearing, and correct real tenant/user/JTI/expiry arguments.
 
-### BUG-054 — F69: restore the deleted-row visibility setting after helper calls
-- **Feature:** [F69](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** 🐞 Open
-- **Description:** `restore()` and `list_including_deleted()` set transaction-local `app.show_deleted='on'` and leave it enabled for the rest of the caller's transaction. Any later query through the same `app_rw` connection can see other soft-deleted Tier-A rows, even when the caller only requested one restore or one include-deleted listing.
-- **AC1:** After a successful `restore()` call, a normal query in the same transaction sees only live records unless the caller had explicitly enabled deleted visibility beforehand.
-- **AC2:** After `list_including_deleted()` returns, a normal query in the same transaction sees only live records unless the caller had explicitly enabled deleted visibility beforehand.
-- **AC3:** Both helpers restore the exact prior setting when it was explicitly set, and restore the unset default when it was unset.
-- **AC4:** Both helpers restore the prior setting when the underlying SQL operation raises.
-- **Edge / adversarial cases:** Prior `on`, prior `off`, unset GUC, nested helper call, SQL exception after override, and repeated helper invocation in one transaction.
-- **Cross-references:** `data_access/soft_delete.py`, migration `0013_cs087_soft_delete.py`, `test/test_soft_delete_lifecycle.py`, F60 RLS visibility policy.
-- **Expected outcome:** Deleted-row visibility is operation-scoped and does not leak across tenant queries.
-
-### BUG-055 — F45: bound and validate repository list pagination
+### BUG-054 — F45: bound and validate repository list pagination
 - **Feature:** [F45](./FEATURES.md) · **Priority:** P2 · **Size:** XS
 - **Status:** 🐞 Open
 - **Description:** `Repository.list()` converts `limit` and `offset` with `int()` but does not reject negative values or cap page size. PostgreSQL treats a negative LIMIT as unlimited, so a caller can accidentally or deliberately retrieve the entire tenant table; negative offsets and lossy values also create surprising behavior.
@@ -2571,7 +2558,7 @@ closing regression evidence.
 - **Cross-references:** `data_access/repository.py::Repository.list`, `test/test_data_access.py`, F45 repository contracts.
 - **Expected outcome:** List reads have a predictable bounded cost and explicit input contract.
 
-### BUG-056 — F36/F38: protect telemetry endpoints and require TLS off loopback
+### BUG-055 — F36/F38: protect telemetry endpoints and require TLS off loopback
 - **Feature:** [F36](./FEATURES.md) + [F38](./FEATURES.md) · **Priority:** P1 · **Size:** M
 - **Status:** 🐞 Open
 - **Description:** The observability compose file publishes OTLP and health-check ports on all host interfaces, while the SDK always sets `insecure=True`. Collector OTLP receivers are unauthenticated. A machine reachable on the host network can submit telemetry or probe health, and telemetry sent to a remote endpoint has no transport encryption.

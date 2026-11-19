@@ -1,33 +1,16 @@
-# BUG-054–BUG-056: Codebase quality review follow-ups
+# BUG-054–BUG-055: Codebase quality review follow-ups
 
 ## Review scope and evidence
 
-Reviewed the checked-out codebase's API/gateway, manager UI session recovery, auth adapter, repository/data-access layer, tenant session handling, soft-delete helpers and migration, compliance evaluation, OTel SDK/Collector configuration, data-generation and validation scripts, test layout, and dependency manifests. The three findings below are actionable and tied to current implementations. Existing coverage does not pin the missing contracts.
+Reviewed the checked-out codebase's API/gateway, manager UI session recovery, auth adapter, repository/data-access layer, tenant session handling, soft-delete helpers and migration, compliance evaluation, OTel SDK/Collector configuration, data-generation and validation scripts, test layout, and dependency manifests. Two new findings below are actionable and tied to current implementations. The soft-delete finding is already tracked as BUG-046 and is listed only to explain why it was not duplicated. Existing coverage does not pin the two new contracts.
 
 | Order | Story | Finding | Risk | Size |
 |---|---|---|---|---|
-| 1 | BUG-054 | `restore` and `list_including_deleted` leave `app.show_deleted` on for the rest of the transaction | Deleted-row visibility can bleed into later reads | S |
-| 2 | BUG-055 | `Repository.list` allows negative/unbounded LIMIT and lossy coercion | Unbounded tenant queries and surprising pagination | XS |
-| 3 | BUG-056 | OTLP is plaintext by default and compose publishes collector ports on all interfaces | Telemetry injection, health disclosure, and unencrypted remote telemetry | M |
+| — | BUG-046 (already filed) | `restore` and `list_including_deleted` leave `app.show_deleted` on for the rest of the transaction | Existing duplicate was removed from this audit | — |
+| 1 | BUG-054 | `Repository.list` allows negative/unbounded LIMIT and lossy coercion | Unbounded tenant queries and surprising pagination | XS |
+| 2 | BUG-055 | OTLP is plaintext by default and compose publishes collector ports on all interfaces | Telemetry injection, health disclosure, and unencrypted remote telemetry | M |
 
-## BUG-054 — scope deleted-row visibility
-
-### Current behavior
-
-`soft_delete()` saves the previous `app.show_deleted` setting and restores it in `finally`. `restore()` and `list_including_deleted()` call `enable_show_deleted()` but do not restore the previous setting. Because `SET LOCAL` lasts until transaction completion, a helper call changes subsequent SELECT visibility for the entire transaction.
-
-### Planned implementation
-
-Reuse one context manager that captures the prior transaction-local setting, sets the visibility override, and restores the exact prior value in `finally`. Keep a caller's prior explicit `on` setting intact. Use the helper around only the SQL operation that needs the deleted-row policy bypass. Do not change the policy or grant broader database privileges.
-
-### Verification plan
-
-- Unit-test a recording fake connection for unset, explicit `off`, and explicit `on` prior values.
-- Assert reset occurs after normal return and after `execute()` raises.
-- Database integration: call `list_including_deleted` or `restore`, then issue an ordinary SELECT in the same `app_rw` transaction and assert deleted rows remain hidden; separately prove caller-preenabled `on` remains on.
-- Run `test_soft_delete_lifecycle.py`, RLS tests, and the full suite. DB-backed checks require the configured `DATABASE_URL` test role.
-
-## BUG-055 — validate bounded pagination
+## BUG-054 — validate bounded pagination
 
 ### Current behavior
 
@@ -44,7 +27,7 @@ Define a maximum page size of 1000 and require actual integer values (`bool` is 
 - Existing parameterization, RLS, ordering, and filtering tests remain green.
 - Run the data-access and isolation suites, then the full suite.
 
-## BUG-056 — secure the observability transport
+## BUG-055 — secure the observability transport
 
 ### Current behavior
 
@@ -66,9 +49,9 @@ The SDK constructs both OTLP exporters with `insecure=True` regardless of endpoi
 
 ## Delivery order and completion gates
 
-1. Land the BUG-054 spec and tests before implementation; verify transaction visibility cannot leak.
-2. Land BUG-055 spec and invalid-input tests before implementation; verify SQL is not executed on invalid pagination.
-3. Land BUG-056 spec and config tests before implementation; verify transport mode is selected explicitly and local published ports are loopback-only.
+1. BUG-046 already tracks the soft-delete visibility leak; do not create a duplicate story.
+2. Land the BUG-054 spec and invalid-input tests before implementation; verify SQL is not executed on invalid pagination.
+3. Land BUG-055 spec and config tests before implementation; verify transport mode is selected explicitly and local published ports are loopback-only.
 4. For each story, run its focused suite and adjacent regression suites before committing. Run the full suite and static checks after the series.
 5. Review database-gated and Docker-gated test skips separately; a skipped environment integration test is not reported as executed.
 
@@ -78,4 +61,4 @@ The full unittest discovery ran 274 tests and reported 9 errors with 84 skips in
 
 ## Audit limits
 
-The findings are source-review findings; BUG-054 behavior still needs database-backed proof under the configured RLS role, and BUG-056's deployment transport needs environment-level validation. These three stories are planned for follow-up and are not part of the BUG-051–053 implementation commits.
+The new findings are source-review findings. BUG-054 can be tested with fake cursors and the configured database suite; BUG-055 requires Collector config validation and transport checks in a configured environment. Both stories are planned for follow-up and are not part of the BUG-051–053 implementation commits.
