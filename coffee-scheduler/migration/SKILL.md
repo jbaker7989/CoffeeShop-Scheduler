@@ -88,3 +88,9 @@ python scripts/check_no_hard_delete.py
 - F47 — the canonical schema doc this skill checks against.
 - F44 — the ETL whose invariants must still hold after every migration.
 - F26 — the Coverage_Rules ↔ Labor_Rules reconciliation that must still pass.
+
+## Transaction and pooled-session safety
+
+- `SET LOCAL`, `set_config(..., true)`, and temporary visibility GUCs last through the transaction, not through one helper call. A helper that enables a temporary override must save the previous value and restore it in `finally`, including when SQL fails. Preserve an explicitly set prior value; restore an unset value to its default.
+- Validate values and bounds before SQL execution. Identifiers must come from a code-owned allowlist/catalog and be quoted; all values remain parameters. Pagination and batch sizes need explicit upper bounds to avoid accidental unbounded tenant reads.
+- Include same-transaction regression checks: invoke the helper, then issue a normal query on the same connection and prove tenant/RLS/soft-delete visibility is unchanged. Cover both success and exception paths.
