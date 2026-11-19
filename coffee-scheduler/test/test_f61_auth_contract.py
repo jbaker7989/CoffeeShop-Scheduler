@@ -94,6 +94,12 @@ class F61IdentityAndPersistenceContractTests(unittest.TestCase):
 
 
 class F61JwtAndTenantAuthorityContractTests(unittest.TestCase):
+    def test_production_service_has_no_arbitrary_claim_signer(self) -> None:
+        from auth.service import TenantAuthService
+
+        service = TenantAuthService.for_contract_fixture()
+        self.assertFalse(hasattr(service, "issue_contract_token"))
+
     # spec: F61.ac2 — access JWTs are 15-minute RS256 credentials selected by known kid;
     # neither alg=none nor algorithm/key confusion is accepted.
     def test_rs256_keyring_configuration_and_known_kid_only(self) -> None:
@@ -137,6 +143,7 @@ class F61JwtAndTenantAuthorityContractTests(unittest.TestCase):
     # spec: F61.ac2 — issuer/audience, expiry, nbf, signature, claim shape and canonical
     # tenant membership all fail closed before an F60 session context can be opened.
     def test_tamper_temporal_claim_and_cross_tenant_escape_rejection(self) -> None:
+        from auth_test_support import issue_contract_token
         from auth.service import AuthenticationError, TenantAuthService
 
         service = TenantAuthService.for_contract_fixture()
@@ -152,11 +159,12 @@ class F61JwtAndTenantAuthorityContractTests(unittest.TestCase):
             {"tenant_id": "not-a-uuid"}, {"role": "suspended"},
             {"is_saas_admin": True}, {"sub": "00000000-0000-0000-0000-000000000099"},
         ):
-            forged = service.issue_contract_token(claim_overrides=claim_overrides)
+            forged = issue_contract_token(service, claim_overrides=claim_overrides)
             with self.assertRaises(AuthenticationError, msg=str(claim_overrides)):
                 service.authenticate_access_token(forged)
 
-        forged_membership = service.issue_contract_token(
+        forged_membership = issue_contract_token(
+            service,
             tenant_id="00000000-0000-0000-0000-000000000002",
             user_id="00000000-0000-0000-0000-000000000001",
             role="owner",

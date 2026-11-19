@@ -209,19 +209,28 @@ class AuthRepository(abc.ABC):
     # ----- CS-061b hardening port -----
     # These are deliberately mandatory.  The policy layer must never keep an alternate
     # in-process copy of security state when a production adapter omits a capability.
+    @abc.abstractmethod
     def access_state(self, tenant_id: str, user_id: str, jti: str, issued_at: datetime) -> dict | None: raise NotImplementedError
+    @abc.abstractmethod
     def revoke_access_token(self, jti: str, tenant_id: str, user_id: str, expires_at: datetime) -> None: raise NotImplementedError
+    @abc.abstractmethod
     def revoke_user_sessions(self, tenant_id: str, user_id: str, when: datetime) -> None: raise NotImplementedError
+    @abc.abstractmethod
     def issue_password_reset(self, tenant_id: str, user_id: str, digest: str, expires_at: datetime) -> None: raise NotImplementedError
+    @abc.abstractmethod
     def consume_password_reset(self, digest: str, password_hash: str, when: datetime) -> tuple[str, str] | None: raise NotImplementedError
+    @abc.abstractmethod
     def record_login_attempt(self, tenant_id: str, email: str, ip: str, succeeded: bool, when: datetime, max_failures: int = 5, window_seconds: int = 900) -> bool: raise NotImplementedError
+    @abc.abstractmethod
     def login_locked(self, tenant_id: str, email: str, ip: str, when: datetime, max_failures: int = 5, window_seconds: int = 900) -> bool: raise NotImplementedError
+    @abc.abstractmethod
     def get_mfa(self, tenant_id: str, user_id: str) -> dict | None: raise NotImplementedError
+    @abc.abstractmethod
     def store_mfa(self, tenant_id: str, user_id: str, ciphertext: bytes, step: int, digests: list[str]) -> None: raise NotImplementedError
+    @abc.abstractmethod
     def consume_mfa_step(self, tenant_id: str, user_id: str, step: int) -> bool: raise NotImplementedError
+    @abc.abstractmethod
     def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool: raise NotImplementedError
-    def set_tenant_status(self, tenant_id: str, status: str) -> None: raise NotImplementedError
-    def set_user_active(self, tenant_id: str, user_id: str, active: bool) -> None: raise NotImplementedError
     # CS-061c invitation/audit port.  These remain repository operations so policy never
     # bypasses the SECURITY DEFINER boundary in production.
     @abc.abstractmethod

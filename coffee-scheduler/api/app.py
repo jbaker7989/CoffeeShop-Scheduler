@@ -85,36 +85,91 @@ def create_app(
         return dependency
 
     @app.post("/invitations")
-    def create_invitation(body: InvitationCreateRequest, principal: Principal = Depends(require_role("owner", "manager"))) -> dict[str, Any]:
-        try: issued = auth_service.create_invitation(principal, body.email, body.role, accept_url_base="/invitations/accept")
-        except InvitationPermissionError: raise HTTPException(status_code=403, detail="Forbidden")
-        except InvitationError: raise HTTPException(status_code=409, detail="invitation unavailable")
-        return {"invitation_id": issued.invitation_id, "expires_at": issued.expires_at, "accept_url": f"/invitations/accept?token={issued.token}", "token": issued.token}
+    def create_invitation(
+        body: InvitationCreateRequest,
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> dict[str, Any]:
+        try:
+            issued = auth_service.create_invitation(
+                principal,
+                body.email,
+                body.role,
+                accept_url_base="/invitations/accept",
+            )
+        except InvitationPermissionError:
+            raise HTTPException(status_code=403, detail="Forbidden") from None
+        except InvitationError:
+            raise HTTPException(status_code=409, detail="invitation unavailable") from None
+        return {
+            "invitation_id": issued.invitation_id,
+            "expires_at": issued.expires_at,
+            "accept_url": f"/invitations/accept?token={issued.token}",
+            "token": issued.token,
+        }
 
     @app.get("/invitations")
-    def list_invitations(principal: Principal = Depends(require_role("owner", "manager"))) -> list[dict[str, Any]]:
-        return [{"id": r.id, "email": r.email, "role": r.role, "status": r.status, "expires_at": r.expires_at} for r in auth_service.list_invitations(principal)]
+    def list_invitations(
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": invitation.id,
+                "email": invitation.email,
+                "role": invitation.role,
+                "status": invitation.status,
+                "expires_at": invitation.expires_at,
+            }
+            for invitation in auth_service.list_invitations(principal)
+        ]
 
     @app.delete("/invitations/{invitation_id}")
-    def revoke_invitation(invitation_id: str, principal: Principal = Depends(require_role("owner", "manager"))) -> dict[str, bool]:
-        try: auth_service.revoke_invitation(principal, invitation_id)
-        except InvitationError: raise HTTPException(status_code=404, detail="Not found")
+    def revoke_invitation(
+        invitation_id: str,
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> dict[str, bool]:
+        try:
+            auth_service.revoke_invitation(principal, invitation_id)
+        except InvitationError:
+            raise HTTPException(status_code=404, detail="Not found") from None
         return {"ok": True}
 
     @app.post("/invitations/accept")
-    def accept_invitation(body: InvitationAcceptRequest, response: Response, request: Request) -> dict[str, Any]:
-        ip = request.client.host if request.client else "0.0.0.0"
+    def accept_invitation(
+        body: InvitationAcceptRequest,
+        response: Response,
+        request: Request,
+    ) -> dict[str, Any]:
+        if request.client is None:
+            raise HTTPException(status_code=503, detail="temporarily unavailable")
+        ip = request.client.host
         key = LoginAttemptKey("invite", "accept", ip)
         try:
-            invitation_limiter.check(key)
-            tokens = auth_service.accept_invitation(body.token, body.password, body.display_name)
-        except AccountLockedError: raise HTTPException(status_code=429, detail="authentication failed")
+            key.client_ip_bucket()
+        except ValueError:
+            raise HTTPException(
+                status_code=503,
+                detail="temporarily unavailable",
+            ) from None
+        try:
+            invitation_limiter.check_ip(key)
+            tokens = auth_service.accept_invitation(
+                body.token,
+                body.password,
+                body.display_name,
+            )
+        except AccountLockedError:
+            raise HTTPException(status_code=429, detail="authentication failed") from None
         except InvitationError:
-            invitation_limiter.record_failure(key)
-            raise HTTPException(status_code=401, detail="authentication failed")
-        invitation_limiter.record_success(key)
+            invitation_limiter.record_ip_failure(key)
+            raise HTTPException(status_code=401, detail="authentication failed") from None
+        invitation_limiter.record_ip_success(key)
         _set_browser_cookies(response, tokens, BrowserCookieConfig())
-        return {"access_token": tokens.access_token, "refresh_token": tokens.refresh_token, "token_type": tokens.token_type, "expires_in": tokens.expires_in}
+        return {
+            "access_token": tokens.access_token,
+            "refresh_token": tokens.refresh_token,
+            "token_type": tokens.token_type,
+            "expires_in": tokens.expires_in,
+        }
 
     @app.get("/me")
     def me(principal: Principal = Depends(current_principal)) -> dict[str, Any]:
@@ -132,9 +187,16 @@ def create_app(
         return {"stores": fetch_stores(principal.tenant_id)}
 
     @app.post("/auth/logout")
-    def logout(response: Response) -> dict[str, bool]:
-        # Clear the CS-061a browser cookies. True server-side refresh revocation is CS-061b; this
-        # only drops the client's credentials from the two cookie scopes the browser transport sets.
+    def logout(request: Request, response: Response) -> dict[str, bool]:
+        access_token = extract_access_credential(request)
+        refresh_token = request.cookies.get(BROWSER_REFRESH_COOKIE)
+        if access_token is not None:
+            try:
+                auth_service.revoke_token(access_token, refresh_token)
+            except AuthenticationError:
+                # Logout is idempotent for expired or otherwise invalid credentials. A
+                # persistence failure is deliberately not caught and cannot masquerade as success.
+                pass
         response.delete_cookie(ACCESS_COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=True)
         response.delete_cookie(
             BROWSER_REFRESH_COOKIE, path=BROWSER_REFRESH_PATH, httponly=True, samesite="strict", secure=True

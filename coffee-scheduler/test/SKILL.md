@@ -151,3 +151,15 @@ If any of these is false, the PR is not ready. Do not bypass the gate "to ship f
 - "The validators pass, so it's correct." A green suite proves the snapshot it ran on, not the code. If the edge test is the happy case with different numbers, it isn't an edge test — reach for the D1–D9 table.
 - "`.get(key, 0)` is fine, the key is always there." If it's always there, assert it and raise when it isn't. A default that can't legally fire is a silenced error waiting for new data (D2).
 - "Just `git restore` the workbook before re-running." A human-memory step is not a guard. Make the generator idempotent or refuse the second run (D4).
+
+## Review lessons: state, boundaries, and environment
+
+Use these additional checks when deriving tests from a story:
+
+- **Transaction-local state:** Any helper that changes a GUC, role, visibility flag, or other connection-scoped state must restore the exact previous state in `finally`. Test unset, explicitly set, nested, and exception paths, then perform an ordinary query in the same transaction to detect leakage.
+- **Validate before I/O:** For repository/API inputs, test type, lower/upper bounds, and oversized values before a cursor or network client is used. Reject booleans when an integer is required, reject lossy coercions, and put explicit caps on result sizes. Assert invalid input performs no I/O.
+- **Trust boundaries:** Never accept tenant/user identifiers independently from a validated credential when the credential is the authority. Include tampered, expired, mismatched-membership, ambiguous-cookie, and duplicate-credential cases as applicable.
+- **Sensitive transports:** Test both local-development and remote configuration. Plaintext telemetry is allowed only for explicit loopback use; test that remote endpoints fail closed without TLS configuration. Verify host-published development ports bind to loopback.
+- **Connection adapters:** Test that pools open when needed, each call borrows/releases exactly one connection, keyword arguments reach the delegate, and delegate exceptions are propagated while cleanup still runs.
+- **Test result accounting:** Run the focused story suite first, adjacent regression suites next, and full discovery when practical. Report pass/fail/skip counts separately. A suite with errors is not green; an environment-gated skip is not evidence that integration behavior passed. Name missing optional dependencies/services and the opt-in variable needed to run skipped checks.
+- **Evidence-based review:** Each follow-up story should name the file/symbol, reproduce the failure mode, and define a testable expected result. Do not turn style preference alone into a defect without an observable maintenance or runtime consequence.

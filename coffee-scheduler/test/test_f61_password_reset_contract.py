@@ -46,6 +46,22 @@ class F61PasswordResetModuleContractTests(unittest.TestCase):
         self.assertTrue(callable(PasswordResetService.request_reset))
         self.assertTrue(callable(PasswordResetService.redeem_reset))
 
+    def test_request_reset_computes_the_secret_digest_once(self) -> None:
+        from auth.reset import PasswordResetService
+
+        service = PasswordResetService("p" * 32)
+        original_digest = service.digest
+        digested_secrets = []
+
+        def count_digest(secret: str) -> str:
+            digested_secrets.append(secret)
+            return original_digest(secret)
+
+        service.digest = count_digest
+        secret = service.request_reset("tenant-id", "user-id")
+
+        self.assertEqual([secret], digested_secrets)
+
 
 class F61PasswordResetEnumerationSafetyTests(unittest.TestCase):
     # spec: F61.ac4 — a known-active, a known-inactive, and an unknown account all return the

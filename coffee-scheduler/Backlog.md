@@ -2293,6 +2293,66 @@ closing regression evidence.
 
 ---
 
+### BUG-047 — F61/CS-061c: invitation accept limiter drops the client-IP key
+- **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (key aggregation)
+- **Status:** ✅ Fixed (2026-11-18) — distinct IP buckets; invitation accept and login-throttle suites pass (15 tests) · **Type:** Availability / rate-limit isolation defect · **Found:** 2026-11-18 (code-quality review)
+- **Root cause:** `/invitations/accept` constructs `LoginAttemptKey("invite", "accept", ip)`, but
+  `LoginAttemptKey.account()` returns only `(tenant_id, email)`. `LoginRateLimiter` keys failures and locks
+  exclusively with that account tuple, so all client IPs share `("invite", "accept")`; the supplied `ip`
+  is ignored. One client's failed tokens can lock the endpoint for all clients, and any successful accept
+  clears the shared bucket. This is distinct from BUG-043's per-process durability gap and complements it.
+- **Reproduction:** send `MAX_FAILED_ATTEMPTS` invalid accept attempts from client A, then attempt a valid
+  invitation from client B against the same app instance. Client B receives 429 even though its IP had no
+  failures. A success from either client also clears the other's counter.
+- **Acceptance criteria:**
+  - Add an explicit IP-bucket operation for anonymous invitation acceptance; do not encode endpoint scope
+    by overloading the account key or silently discard `ip`.
+  - A failures-to-lock sequence from IP A does not lock IP B; failures from A still lock A at threshold.
+  - Success clears only the relevant IP bucket; expiry/window boundary and concurrent access remain correct.
+  - Keep the CS-061b account lockout contracts and BUG-043's future distributed-persistence requirement
+    separate and intact.
+- **Risk if unfixed:** a single client can deny invitation acceptance for all clients sharing one gateway.
+- **Cross-refs:** related to BUG-043 (distributed persistence); BUG-047 covers distinct-client isolation.
+
+### BUG-048 — F61/CS-061a: arbitrary-claims contract token signer is part of the production service API
+- **Feature:** [F61](./FEATURES.md) (CS-061a) · **Priority:** P1 · **Size:** XS · **Pattern:** D2 (test seam exposure)
+- **Status:** ✅ Fixed (2026-11-18) — signer moved to test support; auth, gateway, manager UI, and invitation suites pass (38 tests) · **Type:** Security-boundary / testability defect · **Found:** 2026-11-18 (code-quality review)
+- **Root cause:** `TenantAuthService.issue_contract_token()` lives on the production service class and can
+  sign caller-selected tenant, user, role, and overridden claim values using its private token service. Its
+  docstring says it is test-only, but every production service instance still exposes this capability.
+- **Acceptance criteria:** move arbitrary-claims signing into test-only support; remove the method from
+  `TenantAuthService`; migrate adversarial tests to the test helper; prove the production service no longer
+  exposes an unchecked token-minting method. Preserve all existing invalid-claim and cross-tenant tests.
+- **Risk if unfixed:** future application code can accidentally use a contract-only signing path to mint
+  tokens outside the validated login/refresh flow.
+
+### BUG-049 — F61/CS-061b: repository hardening operations are described as mandatory but are not abstract
+- **Feature:** [F61](./FEATURES.md) (CS-061b) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (interface contract)
+- **Status:** ✅ Fixed (2026-11-18) — required DB-backed operations are abstract; incomplete adapter rejected and all production adapters are concrete · **Type:** Adapter completeness / maintainability defect · **Found:** 2026-11-18 (code-quality review)
+- **Root cause:** `AuthRepository` says CS-061b hardening operations are mandatory, but methods such as
+  `access_state`, `revoke_access_token`, reset, throttle, and MFA operations are ordinary methods that raise
+  `NotImplementedError`, not abstract methods. An incomplete adapter can instantiate and fail only when a
+  security path calls the missing operation. The mandatory invitation/audit methods already use
+  `@abstractmethod`, so enforcement is inconsistent.
+- **Acceptance criteria:** make every required persisted repository capability fail at adapter
+  construction time (`@abstractmethod`); ensure the in-memory, database, pooled, and test adapters satisfy
+  the contract; add a minimal incomplete-adapter test that proves instantiation is rejected. Move
+  `set_tenant_status` and `set_user_active` out of the shared production interface/service and into test-only
+  fixture support because only `InMemoryAuthRepository` implements them.
+- **Risk if unfixed:** an adapter can silently omit revocation or persistence behavior until a live request
+  reaches that path.
+
+### BUG-050 — F61/CS-061b/c: dense one-line auth code obscures state transitions and duplicates work
+- **Feature:** [F61](./FEATURES.md) (CS-061b/c) · **Priority:** P3 · **Size:** XS · **Pattern:** D4 (code clarity)
+- **Status:** ✅ Fixed (2026-11-18) — auth helpers/routes expanded; reset/throttle/invitation suites pass (25 tests) · **Type:** Technical debt / reviewability · **Found:** 2026-11-18 (code-quality review)
+- **Root cause:** security-sensitive limiter/reset helpers and invitation route handlers compress validation,
+  mutation, exceptions, and returns into semicolon-separated or one-line statements. The reset mint path
+  computes the same HMAC digest twice. This style makes ordering and state changes harder to audit.
+- **Acceptance criteria:** expand the affected `auth/ratelimit.py`, `auth/reset.py`, and invitation endpoint
+  code in `api/app.py` into conventional typed methods/blocks; compute each digest once; preserve externally
+  observable behavior and all existing auth/invitation contracts. No unrelated formatting sweep.
+- **Risk if unfixed:** reviewers can miss ordering, expiry, or lock-state mistakes in authentication paths.
+
 ## Backlog summary
 
 | Story | Feature | Priority | Size | Status |
@@ -2442,3 +2502,71 @@ closing regression evidence.
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
 | BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
 | BUG-025 | F60 | P2 | XS | 🐞 Open — tenant context lost on autocommit conn; role not pinned under pooling |
+| BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
+| BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
+| BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |
+| BUG-050 | F61 | P3 | XS | ✅ Fixed — explicit auth state transitions and one digest calculation per reset |
+| BUG-051 | F61 | P2 | S | ✅ Fixed — centralized typed pooled repository delegation |
+| BUG-052 | F61 | P2 | XS | ✅ Fixed — one JWT validation per protected authorization |
+| BUG-053 | F61 | P1 | S | ✅ Fixed — logout revokes access token and presented refresh family |
+| BUG-054 | F45 | P2 | XS | 🐞 Open — validate and bound repository list pagination |
+| BUG-055 | F36/F38 | P1 | M | 🐞 Open — limit collector exposure and require TLS for remote OTLP |
+
+### BUG-051 — F61: centralize pooled auth repository delegation
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** ✅ Fixed — centralized typed delegation with pool lifecycle regression coverage
+- **Description:** `PooledAuthRepository` repeats pool lifecycle and connection borrowing logic across every method, while many CS-061b/c methods accept untyped `*args`. The duplication makes a security-sensitive adapter harder to audit and lets the wrapper drift from the `AuthRepository` contract.
+- **Story:** As an auth maintainer, I want every pooled repository operation to use one shared connection/delegation path and retain the abstract port's explicit signatures, so connection lifecycle and forwarding behavior are consistent and statically reviewable.
+- **Acceptance criteria:**
+  - Add one private delegation helper that opens a closed pool, borrows exactly one connection, creates the transient database repository, invokes the named operation, and returns its result.
+  - Every public adapter method keeps an explicit signature and return annotation matching `AuthRepository`; keyword-only arguments remain keyword-only.
+  - Exceptions propagate unchanged and the pool connection context exits on both success and failure.
+  - Focused fake-pool tests cover closed-pool open, one borrow/delegation, returned value, keyword forwarding, and exception cleanup.
+
+### BUG-052 — F61: validate access token once per authorization
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** XS
+- **Status:** ✅ Fixed — authorization reuses the single validated claim set
+- **Description:** `authorize_access_request` calls `authenticate_access_token` and then validates the same RS256 JWT a second time to read `jti` and `iat`. This doubles signature verification on every protected request and splits identity reconciliation from the claims that drive revocation checks.
+- **Story:** As a gateway operator, I want authorization to validate a signed token once and carry its validated claims through canonical membership and revocation checks, so each request has one consistent validation result and avoids duplicate crypto work.
+- **Acceptance criteria:**
+  - A private helper returns both reconciled `Principal` and the validated claims from one `validate_access_token` call.
+  - `authenticate_access_token` retains its existing public return contract and errors.
+  - `authorize_access_request` derives UUID `jti` and UTC `iat` only from the helper's validated claims and fails closed for malformed claims.
+  - Tests assert exactly one validation call per authorized request and cover invalid signature, missing/malformed `jti`/`iat`, inactive membership, and revocation outcomes.
+
+### BUG-053 — F61: persist single-session logout revocation
+- **Feature:** [F61](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** ✅ Fixed — logout revokes the presented access token and known refresh family
+- **Description:** `revoke_token(jti)` writes hard-coded fixture tenant/user UUIDs, which violates real tenant/user foreign-key identity and cannot safely revoke the caller's actual session. The reachable `/auth/logout` route only clears cookies, leaving the access token usable until expiry and its refresh family able to mint more credentials.
+- **Story:** As a tenant user, I want logout to revoke the presented access token and its presented refresh-token family server-side before dropping browser credentials, so the logged-out session cannot continue making protected requests or rotate refresh credentials.
+- **Acceptance criteria:**
+  - The service accepts the access-token credential, validates it and reconciles canonical membership, then persists the token's actual `jti`, tenant, user, and expiry; callers cannot supply identity/JTI fields independently.
+  - If a refresh cookie is present and maps to a live record, revoke its family using the stored digest lookup; never store/log raw refresh secrets.
+  - `/auth/logout` uses the same unambiguous access credential extraction as protected routes and only accepts the browser refresh cookie for family revocation.
+  - Missing, expired, malformed, or ambiguous credentials still produce idempotent logout and clear both cookie paths; valid credentials are revoked before returning success. Persistence errors are not swallowed as successful revocation.
+  - Tests cover bearer and browser-cookie logout, subsequent access rejection, refresh-family rejection, absent/expired/duplicate credential cookie-clearing, and correct real tenant/user/JTI/expiry arguments.
+
+### BUG-054 — F45: bound and validate repository list pagination
+- **Feature:** [F45](./FEATURES.md) · **Priority:** P2 · **Size:** XS
+- **Status:** 🐞 Open
+- **Description:** `Repository.list()` converts `limit` and `offset` with `int()` but does not reject negative values or cap page size. PostgreSQL treats a negative LIMIT as unlimited, so a caller can accidentally or deliberately retrieve the entire tenant table; negative offsets and lossy values also create surprising behavior.
+- **AC1:** `limit` accepts only a non-boolean integer in the inclusive range 1..1000; default remains 100.
+- **AC2:** `offset` accepts only a non-boolean integer greater than or equal to zero; default remains zero.
+- **AC3:** Invalid pagination raises a descriptive `ValueError` before any cursor or SQL operation is used.
+- **AC4:** Valid pagination continues to bind values as SQL parameters and preserves existing filters and ordering.
+- **Edge / adversarial cases:** zero/negative limit, limit 1000 and 1001, negative offset, bool, float, numeric string, enormous integer, and invalid arguments on a fake connection that must not execute SQL.
+- **Cross-references:** `data_access/repository.py::Repository.list`, `test/test_data_access.py`, F45 repository contracts.
+- **Expected outcome:** List reads have a predictable bounded cost and explicit input contract.
+
+### BUG-055 — F36/F38: protect telemetry endpoints and require TLS off loopback
+- **Feature:** [F36](./FEATURES.md) + [F38](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** 🐞 Open
+- **Description:** The observability compose file publishes OTLP and health-check ports on all host interfaces, while the SDK always sets `insecure=True`. Collector OTLP receivers are unauthenticated. A machine reachable on the host network can submit telemetry or probe health, and telemetry sent to a remote endpoint has no transport encryption.
+- **AC1:** Compose publishes development OTLP and health ports on `127.0.0.1` only while preserving service-to-service access on the compose network.
+- **AC2:** SDK configuration permits plaintext only for an explicitly recognized loopback endpoint.
+- **AC3:** A non-loopback endpoint requires TLS credentials and fails closed before exporter construction when credentials are absent or invalid.
+- **AC4:** Production Collector configuration supports TLS and optional client authentication while local compose configuration remains explicitly local-development mode.
+- **AC5:** Documentation describes the local-only trust boundary and production TLS/auth settings without committing secrets.
+- **Edge / adversarial cases:** IPv4 and IPv6 loopback spellings, hostname aliases, DNS names resolving to loopback, malformed endpoints, remote hostname with missing CA, incomplete client cert/key pair, and accidental insecure override.
+- **Cross-references:** `otel/telemetry.py`, `otel/collector-config.yaml`, root `docker-compose.observability.yml`, `test/test_cs036_otel_foundation.py`, `test/test_cs038_otel_collector.py`.
+- **Expected outcome:** The collector is not exposed to the LAN by default and remote OTLP transport is encrypted and authenticated.

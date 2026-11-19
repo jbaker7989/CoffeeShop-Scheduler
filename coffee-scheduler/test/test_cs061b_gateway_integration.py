@@ -67,24 +67,26 @@ class CS061bGatewayEnforcementTests(unittest.TestCase):
     # spec: F61.ac3 — a suspended tenant gets 403 on the next protected request, and no
     # tenant data read is attempted.
     def test_suspended_tenant_gets_403(self) -> None:
+        from auth_test_support import set_fixture_tenant_status
         from auth.service import TenantAuthService
 
         service = TenantAuthService.for_contract_fixture()
         client, spy = self._app(service)
         token = self._token(client)
-        service.set_tenant_status("suspended")
+        set_fixture_tenant_status(service, "suspended")
         r = client.get("/stores", headers={"authorization": f"Bearer {token}"})
         self.assertEqual(403, r.status_code, r.text)
         self.assertEqual([], spy.calls, "a suspended tenant must never reach the data read")
 
     # spec: F61.ac3 — a deactivated user gets 401 on the next protected request.
     def test_deactivated_user_gets_401(self) -> None:
+        from auth_test_support import set_fixture_user_active
         from auth.service import TenantAuthService
 
         service = TenantAuthService.for_contract_fixture()
         client, spy = self._app(service)
         token = self._token(client)
-        service.set_user_active(False)
+        set_fixture_user_active(service, False)
         r = client.get("/stores", headers={"authorization": f"Bearer {token}"})
         self.assertEqual(401, r.status_code, r.text)
         self.assertEqual([], spy.calls)
@@ -96,20 +98,21 @@ class CS061bGatewayEnforcementTests(unittest.TestCase):
         service = TenantAuthService.for_contract_fixture()
         client, spy = self._app(service)
         token = self._token(client)
-        service.revoke_token(_jti(token))
+        service.revoke_token(token)
         r = client.get("/me", headers={"authorization": f"Bearer {token}"})
         self.assertEqual(401, r.status_code, r.text)
 
     # spec: F61.ac3 — enforcement is transport-independent: a suspended tenant is 403 whether
     # the access credential arrives as a bearer header or the browser access cookie.
     def test_enforcement_applies_to_browser_cookie_transport(self) -> None:
+        from auth_test_support import set_fixture_tenant_status
         from auth.service import TenantAuthService
 
         service = TenantAuthService.for_contract_fixture()
         client, _ = self._app(service)
         login = client.post("/auth/browser/login", json=LOGIN)
         access = login.cookies["access_token"]
-        service.set_tenant_status("suspended")
+        set_fixture_tenant_status(service, "suspended")
         r = client.get("/stores", headers={"cookie": f"access_token={access}"})
         self.assertEqual(403, r.status_code, r.text)
 
