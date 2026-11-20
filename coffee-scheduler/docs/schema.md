@@ -77,8 +77,9 @@ A partitioned table's primary key **must include the partition key**, so those P
 - **Tier C exclusions** — `calibration_log`, `rule_eval_log`, `audit_log`, and `auth_login_attempts` are
   append-only/immutable; `transactions`, `weather_hourly`, and `weather_daily` are immutable ingested source
   data and are re-ingested rather than edited; `weather_codes` is a global reference; and
-  `auth_refresh_tokens`, `auth_revoked_tokens`, `auth_password_reset_tokens`, `auth_mfa_recovery_codes`, and
-  `saas_admins` are security-token/admin infrastructure with their own expiry/consumption hygiene. None gets
+  `auth_refresh_tokens`, `auth_revoked_tokens`, `auth_password_reset_tokens`, `auth_mfa_recovery_codes`,
+  `onboarding_verification_tokens`, and `saas_admins` are security-token/admin infrastructure with their own
+  expiry/consumption hygiene. None gets
   a soft-delete marker.
 - **F69 carve-out** — the audited GDPR erasure path is the only hard-delete exception: it may erase
   `employee_pii` after the retention process or purge a whole tenant, including backup purge. It is not an
@@ -154,9 +155,22 @@ Source: SaaS plan (new). | PK `id UUID`.
 | jurisdiction | TEXT NOT NULL DEFAULT 'NY-STATE+NYC' | drives rule-engine lookup |
 | timezone | TEXT NOT NULL DEFAULT 'America/New_York' | IANA tz |
 | created_at | TIMESTAMPTZ NOT NULL DEFAULT now() | |
+| trial_ends_at | TIMESTAMPTZ NULL | CS-062; trial suspension deadline |
+| provisioned_at | TIMESTAMPTZ NULL | CS-062 idempotent provisioning marker |
 | settings | JSONB NOT NULL DEFAULT '{}' | non-secret config only |
 
 Seed row: `maven-demo` (`active`, `pro`, `NY-STATE+NYC`).
+
+### 3.1a CS-062 onboarding support
+
+`tenant_users.email_verified_at TIMESTAMPTZ NULL` is the reusable verified-action gate: owners can
+authenticate before verification, but provisioning (and the future solver `/schedule` surface) requires it.
+`onboarding_verification_tokens` is tenant-scoped, RLS-enabled token infrastructure with a composite
+`(tenant_id,user_id)` FK, a unique peppered `token_digest`, expiry, consumption timestamp, and creation
+timestamp; raw verification secrets are never stored. `labor_rule_templates` is deliberately global/no-RLS
+(like `weather_codes`), keyed by `(jurisdiction, rule_id, effective_from)`. Migration `0016` snapshots the
+reviewed Maven `US-FED`/`NY-STATE`/`NYC` rules under the verified tenant jurisdiction `NY-STATE+NYC`.
+Provisioning refuses a jurisdiction that has no template; it never falls back to NY rules.
 
 ### 3.2 `employer_config`
 Source: `coffee_shop_labor_rules.xlsx!Employer_Config`. | PK `(tenant_id, employer_id)`.

@@ -152,6 +152,16 @@ class PooledAuthRepository(AuthRepository):
     def record_audit(self, entry: AuditEntry) -> int:
         return self._call("record_audit", entry)
 
+    # CS-062 shares the dedicated auth_svc connection pool.  The called operations
+    # are SECURITY DEFINER functions, not direct tenant/tenant_user table DML.
+    def onboarding_signup(self, *args): return self._call("onboarding_signup", *args)
+    def onboarding_issue_verification(self, *args): return self._call("onboarding_issue_verification", *args)
+    def onboarding_verify_email(self, *args): return self._call("onboarding_verify_email", *args)
+    def onboarding_email_verified(self, *args): return self._call("onboarding_email_verified", *args)
+    def onboarding_tenant_jurisdiction(self, *args): return self._call("onboarding_tenant_jurisdiction", *args)
+    def onboarding_suspend_expired_trials(self, *args): return self._call("onboarding_suspend_expired_trials", *args)
+    def onboarding_provision(self, *args): return self._call("onboarding_provision", *args)
+
 
 def _auth_pool(dsn: str) -> Any:
     # PgBouncer transaction pooling-safe (prepare_threshold=None); autocommit because every auth

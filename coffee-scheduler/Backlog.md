@@ -872,12 +872,14 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 - **Cross-refs:** PLAN §15.3–15.4; architecture §14.3–14.4.
 
 ### CS-062 — Tenant onboarding
-- **Feature:** [F62](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** Blocked (on CS-061, CS-070)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Feature:** [F62](./FEATURES.md) · **Priority:** P0 · **Size:** M · **Status:** ✅ Done (2026-11-19) — migration `0016`: atomic signup (tenant+owner, reserved-slug denylist reused from CS-070, duplicate→409 mapping both `UniqueViolation` and `P0001`), token-stub email verification + `require_email_verified` gate, 14-day trial (`onboarding_signup`), nightly `onboarding_suspend_expired_trials`, idempotent jurisdiction-gated `onboarding_provision` (refuses an unverified jurisdiction, never NY-defaults), and the **trial-status fix** (`auth_access_state` widened to `active+trial`). Verified 9/9 CS-062 + existing suites green. **Independent review (Claude):** found + fixed BUG-058 (template seed was ETL-order-dependent → empty on a clean deploy) with `scripts/seed_rule_templates.py` + documented bootstrap order; excluded Codex's unrequested CI scope-creep (`.github/`, `ruff.toml`, `scripts/ci/`, a `pytest` requirement that violates the no-pytest rule).
+- **Developer:** Codex (dev+tests) / Claude (review) · **Started:** 2026-11-19 · **Duration:** ~3d (actual)
 - **Detailed specifications:**
   - Signup creates tenant + owner in one transaction; slug format + **reserved-slug denylist** validated; duplicate → 409 (F62.AC1).
   - Email verification gates solver use; 14-day trial + nightly suspension job (F62.AC2–AC3).
-  - First-run wizard (store, employee, hours, plan); **idempotent** provisioning seeding jurisdiction rules + default standards (F62.AC4); a jurisdiction with no verified rule set is **refused**, not NY-defaulted.
+  - Delivered backend signup/verify/trial/provision flow in migration `0016`, API routes, auth_svc-only
+    SECURITY DEFINER ports, an idempotent suspension script, and verified NY templates. The first-run wizard,
+    real email, full F19 library, billing exemption, solver, and `tenant_secrets` remain deliberately deferred.
 - **Cross-refs:** F10/F19 (jurisdiction rule templates); architecture §4 + §14.13.
 
 ### CS-063 — Per-tenant configuration
@@ -2454,7 +2456,7 @@ closing regression evidence.
 | CS-061a | F61 | P0 | M | ✅ Done |
 | CS-061b | F61 | P0 | S | ✅ Done |
 | CS-061c | F61 | P1 | M | ✅ Done — `0012` invitations + append-only audit_log; BUG-041..044 filed |
-| CS-062 | F62 | P0 | M | Blocked |
+| CS-062 | F62 | P0 | M | ✅ Done — backend onboarding; wizard/email/billing deferred |
 | CS-063 | F63 | P1 | M | Blocked |
 | CS-064 | F64 | P1 | L | Blocked (umbrella) |
 | CS-064a | F64 | P1 | M | Blocked |
@@ -2619,3 +2621,24 @@ closing regression evidence.
   the routing docs); emit a startup warning (or fail closed) if routing is enabled in production with no trusted
   CIDR; add a test asserting the warning/behavior.
 - **Risk if unfixed:** a production deploy believes BUG-045 is fixed while the per-IP throttle is still collapsed.
+
+### BUG-058 — F62/CS-062: `labor_rule_templates` seed is bootstrap-order-dependent (empty on a clean deploy)
+- **Feature:** [F62](./FEATURES.md) (CS-062) · **Priority:** P2 · **Size:** S · **Pattern:** D3 (migration/ETL order dependency)
+- **Status:** ✅ Fixed in review (2026-11-19) — idempotent post-ETL seed step + documented bootstrap order · **Type:** Order-dependency / provisioning-correctness defect · **Found:** 2026-11-19 (Claude review of CS-062, exposed by shared-DB corruption)
+- **Root cause:** migration `0016` seeds `labor_rule_templates` with `INSERT … SELECT FROM` maven-demo's
+  `labor_rules`, but on a standard bootstrap `alembic upgrade head` runs the whole chain (including `0016`)
+  **before** the ETL (`scripts/etl_excel_to_postgres.py`) loads `labor_rules`. So on a clean deploy the template
+  is seeded **empty**, and `onboarding_provision` then refuses every tenant ("jurisdiction has no verified rule
+  set") — provisioning (F62.AC4) is silently unmet. It only worked in the dev DB because `labor_rules` were
+  already ETL-loaded when `0016` was first applied.
+- **Reproduction (verified 2026-11-19):** with maven-demo's `labor_rules` absent, re-applying `0016` left
+  `labor_rule_templates` at **0 rows** → `test_cs062 …provision…` failed with `RaiseException: jurisdiction has
+  no verified rule set`. Re-running the ETL then the new seed step restored a 31-rule NY template and the suite
+  passed 9/9.
+- **Fix applied in review:** added `scripts/seed_rule_templates.py` — idempotent `INSERT … SELECT … ON CONFLICT
+  (jurisdiction, rule_id, effective_from) DO NOTHING`, run **after** the ETL — and documented the bootstrap
+  order **migrate → ETL → seed_rule_templates**. `0016` keeps its best-effort snapshot (a harmless no-op when
+  `labor_rules` are absent); `onboarding_provision` already fails safe (refuses) on an empty template.
+- **Follow-up:** a fully self-contained template (literal seed independent of ETL, or an ETL-integrated template
+  load) would remove the ordering requirement entirely.
+- **Risk if unfixed:** a real new tenant is provisioned with **zero** labor rules on a clean deploy.

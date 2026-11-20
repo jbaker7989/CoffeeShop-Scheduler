@@ -26,7 +26,7 @@ TIER_C = [
     "calibration_log", "rule_eval_log", "audit_log", "auth_login_attempts",
     "transactions", "weather_hourly", "weather_daily", "weather_codes",
     "auth_refresh_tokens", "auth_revoked_tokens", "auth_password_reset_tokens",
-    "auth_mfa_recovery_codes", "saas_admins",
+    "auth_mfa_recovery_codes", "onboarding_verification_tokens", "saas_admins",
 ]
 TIER_A_SET = frozenset(TIER_A)
 

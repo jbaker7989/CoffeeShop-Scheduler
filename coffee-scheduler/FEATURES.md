@@ -522,7 +522,10 @@ Convert the single-tenant deployment into a multi-tenant SaaS serving SMB coffee
   - **Cross-refs:** PLAN §3 + §15.2–15.4; architecture §3 + §14.2–14.4.
 
 ### F62. Tenant onboarding
-- **Status:** Not started · **Size:** M · **Priority:** P0
+- **Status:** ✅ Done (2026-11-19) — CS-062 adds atomic signup/owner creation, digest-only verification URLs,
+  usable 14-day trial authorization + idempotent suspension job, verified-owner provisioning, and a global
+  reviewed NY rule-template registry. Provisioning is idempotent and rejects unverified jurisdictions rather
+  than defaulting to NY. Wizard UI, real email, billing exemption, solver, and full F19 remain deferred. · **Size:** M · **Priority:** P0
 - **Description:** Signup endpoint (creates tenant + owner in one transaction); email verification (blocks solver until verified); 14-day trial period with nightly suspension job; first-run wizard (add first store, add first employee, set hours, pick plan); provisioning transaction that seeds jurisdiction-specific `labor_rules` and default `labor_standards`. Idempotent provisioning so re-running on a populated tenant is a no-op.
 - **Expected outcome:** A new SMB owner can sign up, verify email, complete the wizard, and have a working tenant in under 10 minutes.
 - **Acceptance criteria:**

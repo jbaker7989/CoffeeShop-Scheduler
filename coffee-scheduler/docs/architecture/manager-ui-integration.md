@@ -11,6 +11,19 @@ revoked the earlier INSERT/SELECT grant), and a `BEFORE UPDATE/DELETE` trigger (
 immutable regardless of grants. `impersonated_by` and the SaaS-admin actor type are schema support
 reserved for CS-064b; this slice does not implement impersonation.
 
+## Tenant signup, verification, trial, and provisioning (CS-062)
+
+`POST /signup` is public and validates the same reserved-slug policy as the routing edge before one
+owner-run database function atomically creates the `trial` tenant and its owner. It returns the normal
+access/refresh pair plus a one-time development `verify_url`; only the peppered token digest is stored.
+`POST /verify-email` consumes that token uniformly (unknown, expired, or consumed tokens fail alike).
+Owners may resend at `POST /onboarding/resend-verification`. `POST /onboarding/provision` is owner-only and
+uses the reusable `require_email_verified` hook; future solver `/schedule` endpoints must use that same gate.
+Provisioning is idempotent and copies only a reviewed jurisdiction template. Trials authorize like active
+tenants until `scripts/suspend_expired_trials.py`, running with the `auth_svc` principal, marks expired trials
+`suspended`; the billing exemption is deliberately deferred to CS-065. The first-run wizard and real email are
+also outside this backend slice.
+
 The contract every manager-facing screen (CS-031–035) and the P0 auth/routing tier build on. Established by
 CS-030.
 

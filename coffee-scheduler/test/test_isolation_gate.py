@@ -49,9 +49,9 @@ except Exception:  # pragma: no cover
 # `tenants` is the tenant-root owner-bypass exception (0004: slug resolution). The only tenant_id
 # owner-bypass exceptions are these CS-061a credential tables: anonymous login/refresh must reach their
 # owner-run SECURITY DEFINER functions before a trusted tenant context exists. `weather_codes` is global.
-AUTH_OWNER_BYPASS_TABLES = {"tenant_users", "auth_refresh_tokens", "auth_revoked_tokens", "auth_password_reset_tokens", "auth_mfa_recovery_codes", "auth_login_attempts", "tenant_invitations", "audit_log"}
+AUTH_OWNER_BYPASS_TABLES = {"tenant_users", "auth_refresh_tokens", "auth_revoked_tokens", "auth_password_reset_tokens", "auth_mfa_recovery_codes", "auth_login_attempts", "tenant_invitations", "audit_log", "onboarding_verification_tokens"}
 AUTH_SERVICE_ROLE = "auth_svc"
-AUTH_FUNCTION_PREFIX = "auth_"
+AUTH_FUNCTION_PREFIXES = ("auth_%", "onboarding_%")
 TENANT_TABLES = [
     "taxonomy_meta", "stores", "store_hours", "school_calendars", "school_calendar_days",
     "holidays", "employer_config", "stations", "fixed_tasks", "coverage_rules", "shift_rules",
@@ -61,6 +61,7 @@ TENANT_TABLES = [
     "weather_hourly", "weather_daily", "employee_pii", "langgraph_checkpoints",
     "tenant_users", "auth_refresh_tokens", "auth_revoked_tokens", "auth_password_reset_tokens",
     "auth_mfa_recovery_codes", "auth_login_attempts", "tenant_invitations", "audit_log",
+    "onboarding_verification_tokens",
 ]
 PARTITION_PARENTS = ("rule_eval_log", "transactions", "weather_hourly")
 PROBE_TABLE = "stores"  # a plain domain table that owns maven-demo rows
@@ -248,9 +249,9 @@ class CoverageGate(unittest.TestCase):
                 "FROM pg_proc p "
                 "JOIN pg_namespace n ON n.oid = p.pronamespace "
                 "LEFT JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) acl ON true "
-                "WHERE n.nspname = 'public' AND p.proname LIKE %s "
+                "WHERE n.nspname = 'public' AND p.proname LIKE ANY(%s) "
                 "GROUP BY p.oid ORDER BY 1",
-                (f"{AUTH_FUNCTION_PREFIX}%",),
+                (list(AUTH_FUNCTION_PREFIXES),),
             ).fetchall()
             self.assertTrue(functions, "expected CS-061a auth_* SECURITY DEFINER functions")
             for function, owner, execute_grantees in functions:

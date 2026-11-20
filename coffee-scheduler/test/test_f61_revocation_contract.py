@@ -51,11 +51,16 @@ class F61RevocationStatusRecheckTests(unittest.TestCase):
     def test_suspended_tenant_refused_per_request(self) -> None:
         from auth.service import TenantAuthService, TenantSuspendedError
 
-        for status in ("suspended", "churned", "trial"):
+        for status in ("suspended", "churned"):
             service = TenantAuthService.for_contract_fixture(tenant_status=status)
             token = service.login_json(**LOGIN).access_token
             with self.assertRaises(TenantSuspendedError, msg=status):
                 service.authorize_access_request(token)
+
+        # CS-062: a usable trial is deliberately not a suspension state.  It remains
+        # subject to the same per-request canonical membership/revocation checks.
+        trial = TenantAuthService.for_contract_fixture(tenant_status="trial")
+        self.assertEqual(FIXTURE_TENANT, trial.authorize_access_request(trial.login_json(**LOGIN).access_token).tenant_id)
 
     # spec: F61.ac3 — a token minted while the tenant was active is rejected on the NEXT
     # request after suspension, well inside the access-token TTL (not deferred to expiry).

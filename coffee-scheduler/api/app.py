@@ -27,9 +27,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from auth.api import create_auth_router, BrowserCookieConfig, _set_browser_cookies
 from auth.service import AuthenticationError, InvitationError, InvitationPermissionError, Principal, TenantAuthService, TenantSuspendedError
 from auth.ratelimit import LoginAttemptKey, LoginRateLimiter, AccountLockedError
+from auth.repository import OnboardingConflictError
 
 from .auth_gateway import ACCESS_COOKIE_NAME, build_auth_service_from_env, extract_access_credential
 from .routing import TenantResolver, TenantRoutingConfig, TenantRoutingMiddleware
+from .onboarding import (
+    EmailNotVerifiedError,
+    InvalidSignupError,
+    OnboardingError,
+    OnboardingService,
+    ProvisioningError,
+    VerificationError,
+)
 
 
 BROWSER_REFRESH_COOKIE = "refresh_token"
@@ -45,12 +54,28 @@ class InvitationAcceptRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
     display_name: str | None = Field(default=None, max_length=255)
 
+
+class SignupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug: str = Field(min_length=1, max_length=63)
+    name: str = Field(min_length=1, max_length=255)
+    jurisdiction: str = Field(min_length=1, max_length=128)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
+    timezone: str = Field(default="America/New_York", min_length=1, max_length=128)
+
+
+class VerifyEmailRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=4096)
+
 def create_app(
     auth_service: TenantAuthService,
     *,
     fetch_stores: Callable[[str], list[dict]] | None = None,
     routing_config: TenantRoutingConfig | None = None,
     tenant_lookup: Callable[[str], str | None] | None = None,
+    onboarding_service: OnboardingService | None = None,
 ) -> FastAPI:
     """Build the gateway around a CS-061a ``auth_service``.
 
@@ -71,6 +96,7 @@ def create_app(
             config=routing_config,
         )
     invitation_limiter = LoginRateLimiter()
+    onboarding = onboarding_service or OnboardingService(auth_service)
 
     # The four CS-061a auth routes + /.well-known/jwks.json. This is the single owner of
     # /auth/login. BrowserCookieConfig remains Secure even in local development: TLS is a
@@ -101,6 +127,57 @@ def create_app(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
             return principal
         return dependency
+
+    def require_email_verified(principal: Principal = Depends(current_principal)) -> Principal:
+        """Reusable F62.AC2 gate for future solver/schedule routes as well as provision."""
+        if not onboarding.is_email_verified(principal):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="email not verified")
+        return principal
+
+    @app.post("/signup", status_code=status.HTTP_201_CREATED)
+    def signup(body: SignupRequest) -> dict[str, Any]:
+        try:
+            issued = onboarding.signup(
+                slug=body.slug, name=body.name, jurisdiction=body.jurisdiction,
+                email=body.email, password=body.password, timezone_name=body.timezone,
+            )
+        except InvalidSignupError as exc:
+            # Reserved and malformed labels are rejected before any DB operation.
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        except OnboardingConflictError:
+            raise HTTPException(status_code=409, detail="slug unavailable") from None
+        return {
+            "tenant_id": issued.tenant_id, "user_id": issued.user_id,
+            "access_token": issued.access_token, "refresh_token": issued.refresh_token,
+            "token_type": "bearer", "expires_in": issued.expires_in,
+            "verify_url": issued.verify_url,
+        }
+
+    @app.post("/verify-email")
+    def verify_email(body: VerifyEmailRequest) -> dict[str, bool]:
+        try:
+            onboarding.verify_email(body.token)
+        except VerificationError:
+            raise HTTPException(status_code=422, detail="verification failed") from None
+        return {"ok": True}
+
+    @app.post("/onboarding/resend-verification")
+    def resend_verification(principal: Principal = Depends(require_role("owner"))) -> dict[str, str]:
+        try:
+            return {"verify_url": onboarding.resend_verification(principal)}
+        except OnboardingError:
+            raise HTTPException(status_code=403, detail="Forbidden") from None
+
+    @app.post("/onboarding/provision")
+    def provision(principal: Principal = Depends(require_email_verified)) -> dict[str, bool]:
+        if principal.role != "owner":
+            raise HTTPException(status_code=403, detail="Forbidden")
+        try:
+            return {"provisioned": onboarding.provision(principal)}
+        except EmailNotVerifiedError:
+            raise HTTPException(status_code=403, detail="email not verified") from None
+        except ProvisioningError:
+            raise HTTPException(status_code=422, detail="jurisdiction has no verified rule set") from None
 
     @app.post("/invitations")
     def create_invitation(

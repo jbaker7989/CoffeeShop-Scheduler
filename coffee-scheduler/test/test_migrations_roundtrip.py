@@ -81,7 +81,9 @@ class MigrationRoundTripTests(unittest.TestCase):
         self.alembic("upgrade", "head")
         self.assertEqual("daterange", self.coverage_rules_validity_type())
 
-        self.alembic("downgrade", "-1")
+        # `validity` is added by 0002, so the round-trip must downgrade past it. `-1` only
+        # reaches 0015 at head 0016, which leaves the column in place.
+        self.alembic("downgrade", "0001")
         self.assertIsNone(self.coverage_rules_validity_type())
 
         self.alembic("upgrade", "head")

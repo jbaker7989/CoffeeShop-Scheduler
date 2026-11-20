@@ -44,9 +44,18 @@ import abc
 import enum
 import threading
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import uuid
 
 from psycopg.rows import dict_row
+
+
+class OnboardingConflictError(ValueError):
+    """Race-safe onboarding conflict returned by a database constraint/function."""
+
+
+class OnboardingProvisionError(ValueError):
+    """The selected jurisdiction cannot be provisioned from verified templates."""
 
 
 def _utcnow() -> datetime:
@@ -273,6 +282,9 @@ class InMemoryAuthRepository(AuthRepository):
         self._mfa: dict[tuple[str, str], dict] = {}
         self._invitations: dict[str, InvitationRecord] = {}
         self._audit: list[AuditEntry] = []
+        self._onboarding_verified: set[tuple[str, str]] = set()
+        self._onboarding_tenants: dict[str, dict] = {}
+        self._onboarding_tokens: dict[str, tuple[str, str, datetime, bool]] = {}
 
     # ----- fixture helpers -----
     def add_user(self, user: TenantUserRecord) -> None:
@@ -284,7 +296,7 @@ class InMemoryAuthRepository(AuthRepository):
         if member is None: return None
         with self._hardening_lock:
             cutoff=self._session_cutoffs.get((tenant_id,user_id))
-            return {"role":member.role,"is_active":member.is_active,"tenant_active":self._tenant_status.get(tenant_id)=="active","revoked":jti in self._revoked_jtis or (cutoff is not None and issued_at < cutoff)}
+            return {"role":member.role,"is_active":member.is_active,"tenant_active":self._tenant_status.get(tenant_id) in ("active", "trial"),"revoked":jti in self._revoked_jtis or (cutoff is not None and issued_at < cutoff)}
     def revoke_user_sessions(self, tenant_id: str, user_id: str, when: datetime) -> None:
         with self._hardening_lock:
             self._session_cutoffs[(tenant_id,user_id)]=when
@@ -446,6 +458,62 @@ class InMemoryAuthRepository(AuthRepository):
     def record_audit(self, entry: AuditEntry) -> int:
         with self._hardening_lock:
             self._audit.append(entry); return len(self._audit)
+
+    # CS-062 test implementation of the same owner-run onboarding function seam.
+    def onboarding_signup(self, slug: str, name: str, jurisdiction: str, timezone_name: str,
+                          email: str, password_hash: str, trial_days: int, when: datetime) -> tuple[str, str]:
+        with self._hardening_lock:
+            if any(value["slug"].lower() == slug.lower() for value in self._onboarding_tenants.values()):
+                raise OnboardingConflictError("duplicate tenant slug")
+            tenant_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
+            self._onboarding_tenants[tenant_id] = {"slug": slug, "name": name, "jurisdiction": jurisdiction,
+                "timezone": timezone_name, "trial_ends_at": when + timedelta(days=trial_days), "provisioned_at": None}
+            self.add_user(TenantUserRecord(user_id, tenant_id, slug, email, password_hash, "owner", True))
+            self._tenant_status[tenant_id] = "trial"
+            return tenant_id, user_id
+
+    def onboarding_issue_verification(self, tenant_id: str, user_id: str, digest: str, expires_at: datetime) -> None:
+        with self._hardening_lock:
+            for key, (tid, uid, expiry, consumed) in list(self._onboarding_tokens.items()):
+                if tid == tenant_id and uid == user_id and not consumed:
+                    self._onboarding_tokens[key] = (tid, uid, expiry, True)
+            self._onboarding_tokens[digest] = (tenant_id, user_id, expires_at, False)
+
+    def onboarding_verify_email(self, digest: str, when: datetime) -> tuple[str, str] | None:
+        with self._hardening_lock:
+            value = self._onboarding_tokens.get(digest)
+            if value is None or value[3] or value[2] <= when:
+                return None
+            tenant_id, user_id, expiry, _ = value
+            self._onboarding_tokens[digest] = (tenant_id, user_id, expiry, True)
+            self._onboarding_verified.add((tenant_id, user_id))
+            return tenant_id, user_id
+
+    def onboarding_email_verified(self, tenant_id: str, user_id: str) -> bool:
+        return (tenant_id, user_id) in self._onboarding_verified
+
+    def onboarding_tenant_jurisdiction(self, tenant_id: str) -> str | None:
+        value = self._onboarding_tenants.get(tenant_id)
+        return None if value is None else value["jurisdiction"]
+
+    def onboarding_suspend_expired_trials(self, when: datetime) -> int:
+        with self._hardening_lock:
+            count = 0
+            for tenant_id, value in self._onboarding_tenants.items():
+                if self._tenant_status.get(tenant_id) == "trial" and value["trial_ends_at"] <= when:
+                    self._tenant_status[tenant_id] = "suspended"
+                    count += 1
+            return count
+
+    def onboarding_provision(self, tenant_id: str, jurisdiction: str, when: datetime) -> bool:
+        with self._hardening_lock:
+            value = self._onboarding_tenants.get(tenant_id)
+            if value is None or jurisdiction != "NY-STATE+NYC":
+                raise OnboardingProvisionError("jurisdiction has no verified rule set")
+            if value["provisioned_at"] is not None:
+                return False
+            value["provisioned_at"] = when
+            return True
     @property
     def audit_entries(self): return tuple(self._audit)
 
@@ -689,6 +757,62 @@ class DatabaseAuthRepository(AuthRepository):
         with self.conn.cursor() as cur:
             cur.execute("SELECT auth_record_audit(%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::inet,%s)",(entry.tenant_id,entry.actor_id,entry.actor_type,entry.action,entry.target_type,entry.target_id,entry.impersonated_by,json.dumps(entry.before) if entry.before is not None else None,json.dumps(entry.after) if entry.after is not None else None,entry.ip,entry.user_agent)); result=cur.fetchone()[0]
         self.conn.commit(); return int(result)
+
+    @staticmethod
+    def _onboarding_exception(exc: Exception, error_type: type[ValueError]) -> None:
+        # PostgreSQL's PL/pgSQL RAISE is psycopg RaiseException / SQLSTATE P0001;
+        # a concurrent unique collision is UniqueViolation.  Both are typed outcomes.
+        if exc.__class__.__name__ in {"UniqueViolation", "RaiseException"}:
+            raise error_type("onboarding operation unavailable") from exc
+
+    def onboarding_signup(self, slug: str, name: str, jurisdiction: str, timezone_name: str,
+                          email: str, password_hash: str, trial_days: int, when: datetime) -> tuple[str, str]:
+        try:
+            with self.conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT * FROM onboarding_signup(%s,%s,%s,%s,%s,%s,%s,%s)",
+                            (slug, name, jurisdiction, timezone_name, email, password_hash, trial_days, when))
+                row = cur.fetchone()
+        except Exception as exc:
+            self._onboarding_exception(exc, OnboardingConflictError)
+            raise
+        self.conn.commit()
+        return str(row["tenant_id"]), str(row["user_id"])
+
+    def onboarding_issue_verification(self, tenant_id: str, user_id: str, digest: str, expires_at: datetime) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT onboarding_issue_verification(%s,%s,%s,%s)", (tenant_id, user_id, digest, expires_at))
+        self.conn.commit()
+
+    def onboarding_verify_email(self, digest: str, when: datetime) -> tuple[str, str] | None:
+        with self.conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM onboarding_verify_email(%s,%s)", (digest, when)); row = cur.fetchone()
+        self.conn.commit()
+        return None if row is None else (str(row["tenant_id"]), str(row["user_id"]))
+
+    def onboarding_email_verified(self, tenant_id: str, user_id: str) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT onboarding_email_verified(%s,%s)", (tenant_id, user_id)); return bool(cur.fetchone()[0])
+
+    def onboarding_tenant_jurisdiction(self, tenant_id: str) -> str | None:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT onboarding_tenant_jurisdiction(%s)", (tenant_id,)); row = cur.fetchone()
+        return None if row is None else row[0]
+
+    def onboarding_suspend_expired_trials(self, when: datetime) -> int:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT onboarding_suspend_expired_trials(%s)", (when,)); result = int(cur.fetchone()[0])
+        self.conn.commit()
+        return result
+
+    def onboarding_provision(self, tenant_id: str, jurisdiction: str, when: datetime) -> bool:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT onboarding_provision(%s,%s,%s)", (tenant_id, jurisdiction, when)); row = cur.fetchone()
+        except Exception as exc:
+            self._onboarding_exception(exc, OnboardingProvisionError)
+            raise
+        self.conn.commit()
+        return bool(row[0])
 
     @staticmethod
     def _to_record(row: dict) -> RefreshTokenRecord:
