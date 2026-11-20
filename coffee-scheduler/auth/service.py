@@ -167,7 +167,15 @@ class TenantAuthService:
     def login_json(self, *, tenant_slug: str, email: str, password: str, client_ip: str = "0.0.0.0", mfa_code: str | None = None, now: datetime | None = None) -> IssuedTokens:
         """JSON/bearer login: verify active credentials, issue an access + refresh pair."""
         user_hint = self._repo.get_tenant_user_by_email(tenant_slug, email)
-        key = LoginAttemptKey(tenant_id=user_hint.tenant_id if user_hint else tenant_slug, email=email, ip=client_ip)
+        # The durable throttle functions take a UUID tenant bucket.  A missing
+        # slug has no canonical tenant id, but still needs a stable, per-slug
+        # bucket so it fails like a bad password rather than leaking an invalid
+        # UUID/database error (or bypassing throttling altogether).  This value
+        # is only a rate-limit key; it is never used for authentication or authz.
+        throttle_tenant_id = user_hint.tenant_id if user_hint else str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"coffee-scheduler:unknown-login:{tenant_slug.lower()}")
+        )
+        key = LoginAttemptKey(tenant_id=throttle_tenant_id, email=email, ip=client_ip)
         if self._repo.login_locked(key.tenant_id,key.email,key.ip,now or self._now(),self._throttle_max_failures,self._throttle_window_seconds):
             from .ratelimit import AccountLockedError; raise AccountLockedError(_GENERIC_AUTH_FAILURE)
         try:

@@ -937,7 +937,7 @@ Postgres data plane (F42–F47); until that lands they are **Blocked**.
 - **Cross-refs:** PLAN §15.5; architecture §14.5.
 
 ### CS-068 — Multi-tenant isolation test suite (GATE)
-- **Feature:** [F68](./FEATURES.md) · **Priority:** P0 (gate) · **Size:** M · **Status:** ◑ **CS-068a (DB gate) ✅ Done** (`test/test_isolation_gate.py`, 11 tests) — the DB-level isolation regression gate is live and green; **CS-068b (HTTP/auth) Blocked** on CS-061 + CS-070.
+- **Feature:** [F68](./FEATURES.md) · **Priority:** P0 (gate) · **Size:** M · **Status:** ✅ **CS-068a (DB gate)** and **CS-068b (HTTP/auth gate)** done — `test/test_isolation_gate.py` remains the DB regression gate and `test/test_cs068b_http_isolation.py` self-seeds two rollback-only tenants to prove the HTTP/auth boundary (401/403/404 discipline, JWT claim attacks, route binding, suspension, rotation/replay, cache/PII scrub, and the F68 spec-tag meta-test). The impersonation flow and `/billing` suspension exemption remain explicitly deferred. **The gate found + fixed two real gaps (Claude review confirmed):** (1) unknown-tenant login passed the slug *string* as a UUID throttle key → DB error/leak; now a deterministic `uuid5` throttle bucket → generic 401 while still throttling; (2) added `no-store`/`Vary: Host` response middleware + a tenant-scoped `GET /invitations/{id}` that 404s a foreign id (no existence disclosure).
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Detailed specifications:**
   - Cross-tenant read/insert/update/delete per table denied under RLS; owner-connection denied (proves `FORCE`); `WITH CHECK` write rejection; 401/403/404 behaviour (F68.AC1–AC2).

@@ -103,6 +103,24 @@ def create_app(
     # deployment prerequisite, not a switch that may weaken bearer-cookie transport.
     app.include_router(create_auth_router(auth_service))
 
+    @app.middleware("http")
+    async def prevent_tenant_response_caching(request: Request, call_next):
+        """Never let an intermediary replay an identity or tenant-scoped response.
+
+        The routing middleware already puts these headers on responses it terminates
+        before endpoint dispatch.  This covers normal endpoint and HTTPException
+        responses as well, including the same-origin deployment where routing is off.
+        """
+        response = await call_next(request)
+        response.headers.setdefault("Cache-Control", "no-store")
+        if routing_config is not None:
+            vary = response.headers.get("Vary")
+            if vary is None:
+                response.headers["Vary"] = "Host"
+            elif "host" not in {value.strip().lower() for value in vary.split(",")}:
+                response.headers["Vary"] = f"{vary}, Host"
+        return response
+
     def current_principal(request: Request) -> Principal:
         # Tenant/user/role are established only from the reconciled access-token claims.
         token = extract_access_credential(request)
@@ -216,6 +234,25 @@ def create_app(
             }
             for invitation in auth_service.list_invitations(principal)
         ]
+
+    @app.get("/invitations/{invitation_id}")
+    def get_invitation(
+        invitation_id: str,
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> dict[str, Any]:
+        # The repository list is already scoped by the reconciled principal's tenant.
+        # Treat a foreign identifier exactly like an absent one: a 404 reveals neither
+        # the row nor its existence to another tenant.
+        for invitation in auth_service.list_invitations(principal):
+            if invitation.id == invitation_id:
+                return {
+                    "id": invitation.id,
+                    "email": invitation.email,
+                    "role": invitation.role,
+                    "status": invitation.status,
+                    "expires_at": invitation.expires_at,
+                }
+        raise HTTPException(status_code=404, detail="Not found")
 
     @app.delete("/invitations/{invitation_id}")
     def revoke_invitation(
