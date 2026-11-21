@@ -1,0 +1,38 @@
+{
+  "contract_version": "forecast-output-v1",
+  "taxonomy_version": "TAX-2023H1-v1",
+  "model_version": "demand-forecast-2026-01",
+  "generated_at": "2026-01-05T08:00:00+00:00",
+  "records": [
+    {
+      "location_id": 5,
+      "product_category": "Coffee",
+      "forecast_hour": "2026-01-05T09:00:00-05:00",
+      "p70": "42.37",
+      "lower": "35.00",
+      "upper": "50.00",
+      "model_version": "demand-forecast-2026-01",
+      "taxonomy_version": "TAX-2023H1-v1"
+    },
+    {
+      "location_id": 8,
+      "product_category": "Tea",
+      "forecast_hour": "2026-01-05T10:00:00-05:00",
+      "p70": "12.50",
+      "lower": "8.00",
+      "upper": "16.00",
+      "model_version": "demand-forecast-2026-01",
+      "taxonomy_version": "TAX-2023H1-v1"
+    },
+    {
+      "location_id": 3,
+      "product_category": "Bakery",
+      "forecast_hour": "2026-01-05T07:00:00-05:00",
+      "p70": "18.00",
+      "lower": "12.00",
+      "upper": "22.00",
+      "model_version": "demand-forecast-2026-01",
+      "taxonomy_version": "TAX-2023H1-v1"
+    }
+  ]
+}

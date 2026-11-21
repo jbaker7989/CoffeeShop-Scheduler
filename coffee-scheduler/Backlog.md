@@ -177,8 +177,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-012 — Demand Forecast output contract
 - **Feature:** [F8](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** In design
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Status:** ✅ Done (2026-11-21) — `contracts/forecast.py` typed contract + fail-closed validators (F8.ac1–ac6), version-stamped JSON envelope/schema + golden example, and migration `0017` hardening the `forecasts` table (NOT NULL + interval CHECK + taxonomy/throughput FKs + soft-delete-aware live-key unique). 10/10 `test_forecast_contract.py` pass (incl. a DB-gated constraint test) and migration `0017` round-trips. Codex (dev) / Claude (plan, review, validate). Note: the `forecasts` table already existed from migration `0001`; CS-012 adds the typed interface + enforcement. Consumers: CS-016a (solver input) and CS-017 (category names via taxonomy version).
+- **Developer:** Codex (dev) + Claude (plan/review/validate) · **Started:** 2026-11-21 · **Duration:** ~0.5d (actual)
 - **Description:** Define the forecast interface so model choice is decoupled from consumers.
 - **Detailed specifications:**
   - Schema: prediction by product category (per CS-009 taxonomy version), per hour, per store, with P70 point estimate and interval bounds.
@@ -2382,7 +2382,7 @@ closing regression evidence.
 | CS-009 | F29 | P1 | XS | ✅ Done |
 | CS-010 | F6 | P1 | M | Partial |
 | CS-011 | F7 | P1 | M | Scaffolded |
-| CS-012 | F8 | P1 | S | In design |
+| CS-012 | F8 | P1 | S | ✅ Done |
 | CS-013 | F10 | P1 | L | ✅ Done — `compliance/engine.py`; 27 tests pass (claims_legal_accuracy gated on CS-021) |
 | CS-013a | F10 | P1 | S | ✅ Done — append-only `rule_eval_log` write path |
 | CS-013b | F10 | P1 | S | ✅ Done — half-open waiver expiry on shift date |
