@@ -1,0 +1,23 @@
+# Accepted traceability debt. This is a ratchet: entries only come out.
+# The gate fails on any dangling tag or uncovered Done AC that is NOT listed here.
+# Remove a line when its test or its AC definition lands.
+
+# --- dangling tags: test cites an AC that neither FEATURES.md nor docs/sdd-*.md numbers ---
+F42.ac1   # test_platform_config.py — Alembic+psycopg in requirements. F42 has no numbered ACs.
+F42.ac2   # test_platform_config.py — .env.example URL split. F42 has no numbered ACs.
+F5.ac4    # test_weather_adjustment.py — BUG-004 dominant-effect rule. F5 numbers only AC1-AC3.
+
+# --- uncovered Done ACs ---
+F61.ac5   # FEATURES.md marks F61 Done; no test cites ac5.
+F68.ac4   # FEATURES.md marks F68 Done; no test cites ac4.
+F70.ac1   # CS-070 tenant routing; FEATURES.md marks F70 Done, no test cites ac1.
+F70.ac2   # CS-070 tenant routing; no test cites ac2.
+F70.ac3   # CS-070 tenant routing; no test cites ac3.
+
+# --- F62 marked Done in FEATURES.md; tests exist but carry no `spec:` tags ---
+# test_cs062_onboarding.py / _trial_access.py / _deployment_contract.py assert these ACs
+# without tagging them. Remove these lines once the tags are added.
+F62.ac1
+F62.ac2
+F62.ac3
+F62.ac4
