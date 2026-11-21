@@ -61,7 +61,7 @@ TENANT_TABLES = [
     "weather_hourly", "weather_daily", "employee_pii", "langgraph_checkpoints",
     "tenant_users", "auth_refresh_tokens", "auth_revoked_tokens", "auth_password_reset_tokens",
     "auth_mfa_recovery_codes", "auth_login_attempts", "tenant_invitations", "audit_log",
-    "onboarding_verification_tokens",
+    "onboarding_verification_tokens", "feature_sets", "forecast_features",
 ]
 PARTITION_PARENTS = ("rule_eval_log", "transactions", "weather_hourly")
 PROBE_TABLE = "stores"  # a plain domain table that owns maven-demo rows

@@ -242,8 +242,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-014a — Feature engineering & training dataset
 - **Feature:** [F9](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Blocked (on CS-001, CS-009)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Status:** ✅ Done (2026-11-21) — `agents/demand_forecast/feature_build.py` builds a versioned, RLS-scoped `forecast_features` table (+ `feature_sets` registry; migration `0019`) from canonical Postgres: one 0-filled row per open store-hour × taxonomy category over Jan–Jun 2023, with calendar (holiday/school/dow), weather (temp/precip/rain/snow/bucket), and lag/rolling features, plus honest `low_history` per-cell masks and `has_basket_id`/`has_evening_history`/`has_annual_seasonality` provenance flags (all false). All derivation is pure-Python (unit-testable offline); SQL only loads inputs and persists. 17/17 `test_cs014a_feature_build.py` pass (10 offline unit + 7 DB-gated, rollback-only) covering F9.ac1–ac7 (`docs/sdd-cs014a.md`); migration `0019` round-trips. Claude (plan/dev/test). Unblocks CS-014b (now its only remaining dep besides CS-012, both done).
+- **Developer:** Claude (plan + dev + test) · **Started:** 2026-11-21 · **Duration:** ~0.5d (actual)
 - **Description:** Assemble the model-ready dataset from sales × weather × calendar.
 - **Detailed specifications:**
   - Join `Hourly_Sales_Weather` (CS-001) with the category taxonomy (CS-009) and the school/holiday calendars (CS-004/CS-007).
