@@ -81,8 +81,10 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 ## Phase 1 — Core engine (deterministic)
 
 ### F9. Demand forecast model
-- **Status:** Blocked (on F1, F5, F8) · **Size:** L · **Priority:** P1
+- **Status:** In progress (CS-014a complete 2026-11-21 — the feature dataset; model = CS-014b, backtest = CS-014c) · **Size:** L · **Priority:** P1
 - **Description:** Choose, train and validate a statistical/ML forecast model on 6 months of 2023 sales joined with weather. Must handle the data limits openly: no annual seasonality (6 months), no basket ID, no evening sales history. Produce per-category hourly forecasts with intervals per F8; define a validation/backtest approach.
+- **Acceptance criteria:** the umbrella F9 criteria are defined per sub-story in the SDDs (`docs/sdd-cs014a.md` owns the feature-dataset criteria `F9.ac1–ac7`); they are listed there rather than inline because F9 is delivered across CS-014a/b/c.
+- **CS-014a (feature dataset, done):** `agents/demand_forecast/feature_build.py` builds a versioned, RLS-scoped `forecast_features` table (+ `feature_sets` registry, migration `0019`) from canonical Postgres — one 0-filled row per open store-hour × taxonomy category over Jan–Jun 2023, with calendar/weather/rolling features and honest `has_basket_id`/`has_evening_history`/`has_annual_seasonality` masks. Criteria `F9.ac1–ac7` in `docs/sdd-cs014a.md`.
 - **Expected outcome:** A forecaster that drives staffing need per hour with honest uncertainty — the demand input to the solver.
 
 ### F10. Labor-compliance rule engine
