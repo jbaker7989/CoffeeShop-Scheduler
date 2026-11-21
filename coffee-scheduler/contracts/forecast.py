@@ -114,19 +114,18 @@ def validate_record(
 
     if not _is_aware(r.forecast_hour):
         raise TimezoneError(f"Forecast hour is not timezone-aware {r.forecast_hour!r}")
-    if (
-        r.forecast_hour.minute != 0
-        or r.forecast_hour.second != 0
-        or r.forecast_hour.microsecond != 0
-    ):
-        raise TimezoneError(f"Forecast hour is not an exact hour {r.forecast_hour!r}")
+    local = r.forecast_hour.astimezone(ZoneInfo(CANONICAL_TZ))
+    if local.minute != 0 or local.second != 0 or local.microsecond != 0:
+        raise TimezoneError(
+            f"Forecast hour is not an exact business-timezone hour {r.forecast_hour!r} "
+            f"(local {local.isoformat()})"
+        )
 
     if r.location_id not in allowed_locations:
         raise StoreHoursError(f"Unknown store location {r.location_id!r}")
     window = store_hours.get(r.location_id)
     if window is None:
         raise StoreHoursError(f"Store has no open window {r.location_id!r}")
-    local = r.forecast_hour.astimezone(ZoneInfo(CANONICAL_TZ))
     if local.weekday() not in window.open_weekdays:
         raise StoreHoursError(f"Store is closed for forecast hour {local!r}")
     if not window.open_hour <= local.hour < window.close_hour:
@@ -247,9 +246,13 @@ def missing_keys(
 
 
 def load_vocabulary(conn, *, taxonomy_version: str = PINNED_TAXONOMY_VERSION) -> frozenset[str]:
-    """Load the approved category vocabulary from its throughput-standards anchor."""
-    del taxonomy_version
-    rows = conn.execute("SELECT DISTINCT product_category FROM throughput_standards").fetchall()
+    """Load the pinned taxonomy's real product categories (excludes the register-overhead row)."""
+    rows = conn.execute(
+        "SELECT DISTINCT product_category FROM product_taxonomy WHERE taxonomy_version = %s",
+        (taxonomy_version,),
+    ).fetchall()
+    if not rows:
+        raise VersionMismatchError(f"no taxonomy vocabulary for version {taxonomy_version!r}")
     return frozenset(row[0] for row in rows)
 
 

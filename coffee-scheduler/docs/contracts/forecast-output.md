@@ -12,8 +12,8 @@
 | `generated_at` | ISO-8601 datetime | Time this envelope was generated; must carry an offset. |
 | `records` | array | Forecast records. |
 | `location_id` | integer | Store identifier. |
-| `product_category` | string | Category from the pinned taxonomy vocabulary. |
-| `forecast_hour` | ISO-8601 datetime | A timezone-aware exact clock hour. |
+| `product_category` | string | Category from the pinned taxonomy's real product categories. |
+| `forecast_hour` | ISO-8601 datetime | A timezone-aware exact clock hour in the `America/New_York` business timezone. |
 | `p70` | decimal string | P70 demand estimate in items. |
 | `lower` | decimal string | Lower bound in items. |
 | `upper` | decimal string | Upper bound in items. |
@@ -22,15 +22,17 @@
 
 Each interval must satisfy `0 <= lower <= p70 <= upper`. Records are unique by `(location_id, product_category, forecast_hour)`. Store open windows are half-open: an hour at opening is included and an hour at closing is excluded.
 
+`forecast_hour` is evaluated in the `America/New_York` business timezone. A timestamp that lands on the hour only in another offset is rejected; it must be an exact clock hour after conversion to the business timezone.
+
 Closed hours are omitted; they are never emitted with null forecast values. Holidays are forecast normally unless the store is closed for that holiday, in which case the closed hours are omitted.
 
 ## Versioning
 
-`contract_version` describes the envelope and record shape. Bump it for incompatible contract shape or semantics changes. `taxonomy_version` identifies the F29 category vocabulary; bump it whenever the category taxonomy changes. `model_version` identifies the model release; bump it when the producing model, its parameters, or training/release artifact changes.
+`contract_version` describes the envelope and record shape. Bump it for incompatible contract shape or semantics changes. `taxonomy_version` identifies the F29 category vocabulary; bump it whenever the category taxonomy changes. The approved vocabulary is loaded from `product_taxonomy` for that pinned `taxonomy_version` and contains only real product categories; the `(per transaction overhead)` register row is excluded. `model_version` identifies the model release; bump it when the producing model, its parameters, or training/release artifact changes.
 
 ## Database mapping
 
-Each record maps to `forecasts.tenant_id`, `location_id`, `product_category`, `forecast_hour`, `p70`, `lower`, `upper`, `model_version`, and `taxonomy_version`. Migration `0017_cs012_forecast_contract` makes the eight record columns non-null, adds the interval check, adds tenant-scoped foreign keys for taxonomy version and product category, and creates the unique live-row index on `(tenant_id, location_id, product_category, forecast_hour, model_version)`.
+Each record maps to `forecasts.tenant_id`, `location_id`, `product_category`, `forecast_hour`, `p70`, `lower`, `upper`, `model_version`, and `taxonomy_version`. Migration `0017_cs012_forecast_contract` makes the eight record columns non-null, adds the interval check, adds tenant-scoped foreign keys for taxonomy version and product category, and creates the unique live-row index on `(tenant_id, location_id, product_category, forecast_hour, model_version)`. Migration `0018_cs012_forecast_category_guard` additionally excludes the `(per transaction overhead)` register row at the database.
 
 ## JSON envelope example
 

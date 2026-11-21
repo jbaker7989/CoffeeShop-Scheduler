@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 from dataclasses import fields
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -28,6 +28,7 @@ from contracts.forecast import (  # noqa: E402
     VersionMismatchError,
     from_json,
     from_row,
+    load_vocabulary,
     missing_keys,
     record_from_dict,
     record_to_dict,
@@ -172,7 +173,7 @@ class ForecastContractTests(unittest.TestCase):
                     store_hours=STORE_HOURS,
                 )
 
-    # spec: F8.ac4 — Forecast hours are timezone-aware exact clock hours, normalized to New York for validation.
+    # spec: F8.ac4 — Forecast hours are exact business-timezone clock hours, normalized to New York for validation.
     def test_ac4_timezone_requires_aware_exact_hours_and_normalizes_utc(self):
         validate_record(
             valid_record(forecast_hour=datetime(2026, 1, 5, 14, tzinfo=UTC)),
@@ -183,6 +184,7 @@ class ForecastContractTests(unittest.TestCase):
         for forecast_hour in (
             datetime(2026, 1, 5, 9),
             datetime(2026, 1, 5, 9, 1, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 1, 5, 20, tzinfo=timezone(timedelta(hours=5, minutes=30))),
         ):
             with self.assertRaises(TimezoneError):
                 validate_record(
@@ -270,6 +272,16 @@ class ForecastContractTests(unittest.TestCase):
 
 @unittest.skipIf(_SKIP, _SKIP or "")
 class ForecastDatabaseConstraintTests(unittest.TestCase):
+    # spec: F8.ac1 — The pinned taxonomy vocabulary contains only real product categories.
+    def test_load_vocabulary_excludes_register_overhead(self):
+        from data_access.session import tenant_session
+
+        with tenant_session(DSN, role="app_ro", tenant_id=TENANT_ID) as conn:
+            vocabulary = load_vocabulary(conn)
+
+        self.assertEqual(vocabulary, CATEGORIES)
+        self.assertNotIn("(per transaction overhead)", vocabulary)
+
     # spec: F8.ac1 — Database constraints reject invalid intervals, vocabulary/version FKs, and duplicate live keys.
     def test_database_constraints_reject_invalid_forecasts(self):
         from data_access.repository import Repository
@@ -294,6 +306,8 @@ class ForecastDatabaseConstraintTests(unittest.TestCase):
                 forecasts.insert(**row_at(11, product_category="Unknown category"))
             with self.assertRaises(ForeignKeyViolation), conn.transaction():
                 forecasts.insert(**row_at(12, taxonomy_version="TAX-unknown"))
+            with self.assertRaises(CheckViolation), conn.transaction():
+                forecasts.insert(**row_at(13, product_category="(per transaction overhead)"))
             # Re-insert the hour-9 row: identical live logical key → unique violation.
             with self.assertRaises(UniqueViolation), conn.transaction():
                 forecasts.insert(**row_at(9))
