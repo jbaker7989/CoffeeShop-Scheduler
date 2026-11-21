@@ -146,6 +146,7 @@ jobs:
         run: |
           python -m pip install -r requirements.txt
           python -m pip install -r otel/requirements.txt
+          python -m pip install pytest==9.2.0
       - name: Apply migrations
         working-directory: coffee-scheduler/db
         env:
@@ -186,7 +187,9 @@ jobs:
           cache: pip
           cache-dependency-path: coffee-scheduler/requirements.txt
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest==9.2.0
       - name: Run the destructive migration tests
         # No seed data: these tests only prove the schema survives upgrade → downgrade → upgrade.
         run: python -m pytest test/test_migrations_roundtrip.py -q
