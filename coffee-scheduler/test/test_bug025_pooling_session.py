@@ -11,7 +11,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
 if str(SCHEDULER_ROOT) not in sys.path:
     sys.path.insert(0, str(SCHEDULER_ROOT))
@@ -22,6 +21,7 @@ TENANT = "00000000-0000-0000-0000-000000000001"
 
 try:
     import psycopg
+
     from data_access.session import open_session_context
 except ImportError:  # pragma: no cover
     psycopg = None
