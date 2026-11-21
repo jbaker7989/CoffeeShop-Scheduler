@@ -146,7 +146,7 @@ jobs:
         run: |
           python -m pip install -r requirements.txt
           python -m pip install -r otel/requirements.txt
-          python -m pip install pytest==9.2.0
+          python -m pip install pytest==9.2.0 PyYAML==6.0.3
       - name: Apply migrations
         working-directory: coffee-scheduler/db
         env:
@@ -156,6 +156,10 @@ jobs:
         # Several suites (rules admin, isolation gate, soft delete) assert against the
         # Maven Roasters seed rows, so the ETL must run before them.
         run: python ../scripts/etl_excel_to_postgres.py --database-url "$DATABASE_URL" --tenant-slug maven-demo
+      - name: Seed rule templates
+        # BUG-058: the onboarding LiveDatabaseTests provision from labor_rule_templates,
+        # which is backfilled from the seeded verified NY rule set — must run after the ETL.
+        run: python scripts/seed_rule_templates.py --database-url "$DATABASE_URL"
       - name: Run the suite
         # test_migrations_roundtrip.py is excluded: it downgrades to base and wipes the
         # database, so it runs in its own job against a disposable Postgres.
