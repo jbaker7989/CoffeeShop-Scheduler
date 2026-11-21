@@ -177,8 +177,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-012 — Demand Forecast output contract
 - **Feature:** [F8](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** In design
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Status:** ✅ Done (2026-11-21) — `contracts/forecast.py` typed contract + fail-closed validators (F8.ac1–ac6), version-stamped JSON envelope/schema + golden example, and migration `0017` hardening the `forecasts` table (NOT NULL + interval CHECK + taxonomy/throughput FKs + soft-delete-aware live-key unique). 10/10 `test_forecast_contract.py` pass (incl. a DB-gated constraint test) and migration `0017` round-trips. Codex (dev) / Claude (plan, review, validate). Note: the `forecasts` table already existed from migration `0001`; CS-012 adds the typed interface + enforcement. Consumers: CS-016a (solver input) and CS-017 (category names via taxonomy version).
+- **Developer:** Codex (dev) + Claude (plan/review/validate) · **Started:** 2026-11-21 · **Duration:** ~0.5d (actual)
 - **Description:** Define the forecast interface so model choice is decoupled from consumers.
 - **Detailed specifications:**
   - Schema: prediction by product category (per CS-009 taxonomy version), per hour, per store, with P70 point estimate and interval bounds.
@@ -2382,7 +2382,7 @@ closing regression evidence.
 | CS-009 | F29 | P1 | XS | ✅ Done |
 | CS-010 | F6 | P1 | M | Partial |
 | CS-011 | F7 | P1 | M | Scaffolded |
-| CS-012 | F8 | P1 | S | In design |
+| CS-012 | F8 | P1 | S | ✅ Done |
 | CS-013 | F10 | P1 | L | ✅ Done — `compliance/engine.py`; 27 tests pass (claims_legal_accuracy gated on CS-021) |
 | CS-013a | F10 | P1 | S | ✅ Done — append-only `rule_eval_log` write path |
 | CS-013b | F10 | P1 | S | ✅ Done — half-open waiver expiry on shift date |
@@ -2642,3 +2642,60 @@ closing regression evidence.
 - **Follow-up:** a fully self-contained template (literal seed independent of ETL, or an ETL-integrated template
   load) would remove the ordering requirement entirely.
 - **Risk if unfixed:** a real new tenant is provisioned with **zero** labor rules on a clean deploy.
+- **Follow-up done (2026-11-21, CS-012 branch):** the CI `tests` job now runs `scripts/seed_rule_templates.py` after the ETL, implementing the documented `migrate → ETL → seed_rule_templates` order so the onboarding LiveDatabaseTests pass in CI.
+
+### BUG-059 — F8/CS-012: forecast exact-hour validation uses the record's own timezone, not the business timezone
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P1 · **Size:** XS · **Status:** ✅ Fixed (2026-11-21) — `validate_record` now runs the exact-hour check on the `America/New_York`-local time; regression `spec: F8.ac4` covers the `+05:30`→`09:30` case · **Type:** Correctness (validation bypass) · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Description:** `validate_record` (F8.ac4) checks `forecast_hour.minute/second/microsecond == 0` against the value's *own* tzinfo, then separately converts to `America/New_York` only for the store-hours check. A timestamp that is on the hour in a half-hour-offset zone is half-past the hour in the business timezone, so a sub-hourly business-time forecast is accepted. This lets demand land on a grid the solver (CS-016a) and hourly throughput join (`throughput_standards`) do not expect.
+- **Reproduction (verified):** `2026-01-05T20:00:00+05:30` has `minute == 0` in its own zone but is `09:30` `America/New_York`; `validate_record(...)` **accepts** it for store 5 (open 06–21) even though it is half past the hour.
+- **Story:** As a forecast consumer, I want a forecast hour to be an exact clock hour *in the business timezone*, so every record maps to exactly one hourly staffing slot regardless of the producer's timezone representation.
+- **Acceptance criteria:**
+  - F8.ac4 computes the exact-hour check on the `CANONICAL_TZ`-local time (`forecast_hour.astimezone(ZoneInfo(CANONICAL_TZ))`): `minute == second == microsecond == 0` there, else `TimezoneError`.
+  - A record on the hour only in a non-whole-hour offset zone (e.g. `+05:30`) that resolves to `HH:30` business-time is rejected.
+  - Existing whole-hour UTC and `America/New_York` inputs still pass; a regression test tagged `spec: F8.ac4` covers the `+05:30` case.
+
+### BUG-060 — F8/CS-012: forecast vocabulary admits the `(per transaction overhead)` pseudo-category and does not pin the taxonomy version
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P1 · **Size:** S · **Status:** ✅ Fixed (2026-11-21) — `load_vocabulary` now reads `product_taxonomy` for the pinned `taxonomy_version` (9 real categories, fail-closed on unknown version); migration `0018` adds a CHECK excluding `(per transaction overhead)`. DB-gated regressions cover the vocabulary and the CHECK · **Type:** Data-integrity / spec gap · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Description:** `load_vocabulary` returns `SELECT DISTINCT product_category FROM throughput_standards` and `del`s its `taxonomy_version` argument, so (1) it includes the non-product row `(per transaction overhead)` as a valid category and (2) it does not actually pin the vocabulary to a taxonomy version — the very decoupling CS-012 exists to provide. Migration `0017`'s FK `forecasts(tenant_id, product_category) → throughput_standards` has the same blind spot: a forecast for `(per transaction overhead)` passes both the Python validator and the DB FK.
+- **Reproduction (verified):** `throughput_standards` for maven-demo contains 10 rows — the 9 product categories plus `(per transaction overhead)`; `load_vocabulary(conn)` returns all 10, so `validate_set` accepts a forecast whose `product_category == "(per transaction overhead)"`.
+- **Story:** As a forecast consumer, I want the forecast vocabulary to be exactly the pinned taxonomy's real product categories, so a forecast can never be emitted or stored for a register-overhead pseudo-row or a stale taxonomy version.
+- **Acceptance criteria:**
+  - `load_vocabulary` sources the category set from `product_taxonomy` for the given `taxonomy_version` (the pinned `TAX-2023H1-v1` by default), returning exactly the 9 product categories; it honours (does not discard) `taxonomy_version` and fails closed when the version is unknown.
+  - The register-overhead row is excluded from the forecast category domain; `validate_set` rejects a record whose category is `(per transaction overhead)`.
+  - The DB forecast→category domain is pinned to real categories (e.g. FK to a product-category/taxonomy table rather than `throughput_standards`, or an exclusion of the overhead row), so the database cannot store an overhead forecast; covered by a `spec: F8.ac1` regression test (Python and DB-gated).
+
+### BUG-061 — F8/CS-012: `load_store_hours` keeps only the first weekday's window and ignores non-zero open-time minutes
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Correctness (latent) · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Description:** `load_store_hours` builds one `StoreOpenWindow` per store via `grouped.setdefault(location_id, (open_time.hour, close_hour, set()))`, so the open/close hours come from whichever weekday row is read first and all other rows only contribute their weekday to `open_weekdays`. A store with different hours by day (e.g. shorter Sundays) is validated against a single day's window. Separately, the close time is rounded up for a non-zero minute (20:30 → 21) but the open time is floored to its hour, so a `06:30` open would wrongly admit a `06:00` pre-open forecast. Latent today because the seeded three stores share uniform, on-the-hour open times.
+- **Story:** As a forecast validator, I want each store's open window to reflect its actual per-weekday open and close times, so a forecast is accepted only within the hours that store is genuinely open on that day.
+- **Acceptance criteria:**
+  - Store hours are modelled per `(location_id, weekday)` (not one window per store), and F8.ac5 validates a record against the window for that record's local weekday.
+  - Open-time minutes are handled consistently with close-time minutes (an `HH:30` open excludes the `HH:00` slot), documented in `docs/contracts/forecast-output.md`.
+  - A regression test tagged `spec: F8.ac5` covers a store with differing weekday hours and a non-zero open-minute boundary.
+
+### BUG-062 — F8/CS-012: migration `0017` forecast hardening assumes an empty `forecasts` table
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Operational safety · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Description:** `0017` applies `SET NOT NULL`, a CHECK, two FKs and a unique index directly to `forecasts`. This is safe now because no producer writes forecasts yet, but once CS-014/F9 (or a loaded environment) has rows, the migration will either fail outright (a null, an out-of-range interval, an unknown category/version, or a duplicate live key) or lock the table while validating. There is no pre-check, backfill, or `NOT VALID … VALIDATE CONSTRAINT` staging.
+- **Story:** As an operator migrating a populated database, I want the forecast-hardening migration to apply without a long lock or a hard failure on existing data, so enabling the contract does not require downtime or manual cleanup.
+- **Acceptance criteria:**
+  - A documented pre-migration validation query (or migration step) reports rows that would violate each new constraint before they are enforced.
+  - The constraints are added with a non-blocking strategy where applicable (e.g. `ADD CONSTRAINT … NOT VALID` then `VALIDATE CONSTRAINT`, `CREATE UNIQUE INDEX CONCURRENTLY`), or the migration documents why an exclusive lock is acceptable.
+  - The runbook states the expected behaviour when pre-existing rows violate the contract (fail-fast vs. quarantine), cross-referenced from `docs/contracts/forecast-output.md`.
+
+### BUG-063 — CI: `check_test_first.py` is a no-op under the `coffee-scheduler/` repo layout
+- **Area:** CI gate (`test/SKILL.md` job 2) · **Priority:** P2 · **Size:** XS · **Status:** 🐞 Open · **Type:** CI integrity (silent pass) · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Description:** `scripts/ci/check_test_first.py` compares `git log … --name-only` paths (which are repo-root-relative, e.g. `coffee-scheduler/contracts/forecast.py`) against `PRODUCTION_PREFIXES` that omit the `coffee-scheduler/` segment (`"contracts/"`, `"db/"`, …). No path ever matches, so the guard reports "no production files added; nothing to order" for every PR and never enforces test-first. Observed on this PR, which added `contracts/` and `db/migrations/` yet the guard saw no production files.
+- **Story:** As a reviewer, I want the test-first guard to actually detect production files in this repo's `coffee-scheduler/` layout, so a PR that lands implementation before its tests is caught.
+- **Acceptance criteria:**
+  - The guard normalises paths (strips the leading `coffee-scheduler/`) or anchors prefixes to the real tree so `contracts/`, `db/`, `api/`, etc. match.
+  - A self-test proves a commit adding production code before its test fails the guard, and a correctly ordered pair passes.
+  - The existing excluded prefixes (`test/`, `scripts/ci/`, `docs/`, `db/migrations/versions/`) keep their current meaning after normalisation.
+
+### BUG-064 — CI: test/runtime dependencies (`pytest`, `PyYAML`, `httpx`) are undeclared and only patched inline in CI
+- **Feature:** [F6](./FEATURES.md) (test tooling) · **Priority:** P2 · **Size:** XS · **Status:** ◑ Mitigated (inline in CI) · **Type:** Dependency hygiene · **Found:** 2026-11-21 (first real CI run, CS-012)
+- **Description:** The suite needs `pytest` (runner), `PyYAML` (`test_cs038_otel_collector.py`) and `httpx` (Starlette/FastAPI `TestClient`), none of which are in `requirements.txt` or `otel/requirements.txt`. The first real CI run failed three times in a row as each surfaced; they were patched by inline `pip install` lines in the `tests`/`migration-roundtrip` jobs. Local runs only passed because those packages happened to be present globally. The inline pins can drift from local environments.
+- **Story:** As a contributor, I want the project's test dependencies declared and pinned in one managed file, so local and CI environments install the same versions and a new test dependency is added in one obvious place.
+- **Acceptance criteria:**
+  - Add `coffee-scheduler/requirements-dev.txt` pinning at least `pytest`, `PyYAML`, `httpx` (and audit for `psycopg-pool`), installed by both Postgres CI jobs in place of the inline pins.
+  - `AGENTS.md` documents installing dev requirements before running the suite.
+  - A clean environment (only `requirements.txt` + `requirements-dev.txt`) collects and runs the full suite without `ModuleNotFoundError`.

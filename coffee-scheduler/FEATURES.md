@@ -65,8 +65,15 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Expected outcome:** Every runtime boundary has a versioned, authenticated contract; one agent built in a second framework proves interoperability; the Payroll/HCM question is settled (runtime agent or n8n-only).
 
 ### F8. Demand Forecast output contract
-- **Status:** In design · **Size:** S · **Priority:** P1
+- **Status:** ✅ Done (2026-11-21) · **Size:** S · **Priority:** P1
 - **Description:** Define the forecast output schema: prediction by product category, per hour, per store, with prediction intervals (P70 and bounds). This is the interface the solver and explanation layer consume regardless of the underlying model. Category vocabulary is owned by **F29** — the contract must reference the versioned taxonomy, not invent its own.
+- **Acceptance criteria:**
+  - **F8.ac1** — Every forecast record's `product_category` is a member of the pinned taxonomy vocabulary; an unknown category is rejected and an empty vocabulary fails closed.
+  - **F8.ac2** — A forecast set pins one `contract_version`, `taxonomy_version` and `model_version`; a record disagreeing with the set is rejected.
+  - **F8.ac3** — Prediction interval holds `0 <= lower <= p70 <= upper`; missing or non-finite values are rejected.
+  - **F8.ac4** — `forecast_hour` is timezone-aware on an exact clock hour; naive or sub-hourly values are rejected.
+  - **F8.ac5** — `location_id` is a known store and the hour falls inside that store's open window on an open day; closed hours are omitted, never emitted as null.
+  - **F8.ac6** — A forecast set holds at most one record per `(location_id, product_category, forecast_hour)`.
 - **Expected outcome:** A stable contract that decouples model choice from downstream consumers and pins the category taxonomy.
 
 ---

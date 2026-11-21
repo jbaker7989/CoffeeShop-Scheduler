@@ -1,0 +1,23 @@
+# Lint config for the Coffee Shop Scheduler Python surface.
+# The CI gate lints only the files a change touches (a ratchet), so this config is tuned
+# for "new code must be clean" rather than "the whole tree is clean today".
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+    "B008",  # FastAPI Depends() in defaults is idiomatic
+]
+
+[lint.per-file-ignores]
+# Tests legitimately use long lines, many asserts and local imports.
+"test/*.py" = ["E402", "SIM117"]

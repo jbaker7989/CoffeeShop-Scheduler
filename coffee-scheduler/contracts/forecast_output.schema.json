@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coffeeshop.example/contracts/forecast-output-v1.schema.json",
+  "title": "Forecast Output Contract",
+  "version": "forecast-output-v1",
+  "type": "object",
+  "required": ["contract_version", "taxonomy_version", "model_version", "generated_at", "records"],
+  "properties": {
+    "contract_version": {"const": "forecast-output-v1"},
+    "taxonomy_version": {"type": "string", "minLength": 1},
+    "model_version": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["location_id", "product_category", "forecast_hour", "p70", "lower", "upper", "model_version", "taxonomy_version"],
+        "properties": {
+          "location_id": {"type": "integer"},
+          "product_category": {"type": "string"},
+          "forecast_hour": {"type": "string", "format": "date-time"},
+          "p70": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"},
+          "lower": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"},
+          "upper": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"},
+          "model_version": {"type": "string"},
+          "taxonomy_version": {"type": "string"}
+        }
+      }
+    }
+  }
+}
