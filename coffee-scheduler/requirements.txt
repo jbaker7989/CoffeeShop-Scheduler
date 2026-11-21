@@ -7,6 +7,8 @@ openpyxl==3.1.5
 requests==2.34.2
 psycopg[binary]==3.3.9
 alembic==1.20.1
+# CS-014b/F9: deterministic numpy-only demand forecasting.
+numpy==2.4.6
 # CS-061a (F61): Argon2id password hashing for tenant auth credentials.
 argon2-cffi==25.1.0
 # CS-061a (F61): FastAPI auth routing + RS256 access-token signing/verification.
