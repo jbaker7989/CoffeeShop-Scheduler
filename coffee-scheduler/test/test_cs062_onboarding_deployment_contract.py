@@ -23,7 +23,9 @@ class OnboardingDeploymentContractTests(unittest.TestCase):
             parsed = ast.parse(path.read_text(encoding="utf-8"))
             pairs = {node.targets[0].id: ast.literal_eval(node.value) for node in parsed.body if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in {"revision", "down_revision"}}
             if "revision" in pairs: revisions[pairs["revision"]] = pairs.get("down_revision")
-        self.assertEqual(["0016"], [revision for revision in revisions if revision not in revisions.values()])
+        # Linearity invariant: exactly one head (not pinned to a revision number, so a
+        # later migration such as 0017 extending the chain does not falsely fail this).
+        self.assertEqual(1, len([revision for revision in revisions if revision not in revisions.values()]))
         source = migration.read_text(encoding="utf-8")
         for fragment in (
             "CREATE TABLE onboarding_verification_tokens", "CREATE TABLE labor_rule_templates",
