@@ -253,8 +253,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-014b — Model selection & training
 - **Feature:** [F9](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Blocked (on CS-014a, CS-012)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Status:** ✅ Done (2026-11-21) — CS-014b adds deterministic NumPy-only empirical-quantile and linear-quantile-regression training, validation pinball selection, and a versioned tenant-scoped model registry in migration `0020`. The selected model is bound to its feature version, emits contract-valid interval forecasts, and is covered by F9.ac8–ac13 unit and rollback-only database tests.
+- **Developer:** Codex (dev) + Claude (plan/review/validate) · **Started:** 2026-11-21 · **Duration:** ~0.5d (actual)
 - **Description:** Choose and train the statistical/ML forecaster that emits per-category hourly demand with intervals.
 - **Detailed specifications:**
   - Evaluate ≥2 candidate approaches (e.g. gradient-boosted quantile regression vs. a classical time-series baseline).
@@ -2389,7 +2389,7 @@ closing regression evidence.
 | CS-013c | F10/F26 | P1 | XS | ✅ Done — coverage↔law fail-closed reconciliation (VERIFIED-gate stays with CS-021/022) |
 | CS-014 | F9 | P1 | L | Blocked (umbrella) |
 | CS-014a | F9 | P1 | M | Blocked |
-| CS-014b | F9 | P1 | M | Blocked |
+| CS-014b | F9 | P1 | M | ✅ Done (2026-11-21) |
 | CS-014c | F9 | P1 | S | Blocked |
 | CS-015 | F12 | P1 | M | Not started |
 | CS-016 | F11 | P1 | L | Blocked (umbrella) |
