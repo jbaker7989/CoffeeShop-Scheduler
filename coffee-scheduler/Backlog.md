@@ -265,13 +265,17 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-014c — Backtest & validation
 - **Feature:** [F9](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Blocked (on CS-014b, CS-008)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Status:** Planned (on CS-014b, CS-008; both complete) · **Plan:** [`docs/plans/CS-014c-backtest-validation.md`](./docs/plans/CS-014c-backtest-validation.md) · **SDD:** [`docs/sdd-cs014c.md`](./docs/sdd-cs014c.md)
+- **Developer:** Claude (implementation + tests) · Codex (independent test execution/review) · **Started:** 2026-11-22 · **Duration:** ~1d (est.)
 - **Description:** Prove the forecaster meets the acceptance band before the solver consumes it.
 - **Detailed specifications:**
-  - Backtest on the CS-008 window (e.g. last 4 weeks of the sales window).
-  - Report MAPE per category-hour against the ≤±10% acceptance band; record interval coverage vs. nominal (P70).
-  - Fail the story if the band isn't met; log results alongside the model version.
+  - Use the final 28 inclusive dates of the registered feature source window (currently 2023-06-03 through 2023-06-30), independent of wall-clock date. Treat each prediction as rolling-origin one-step-ahead: earlier actual hours may feed lag features; the target row's actual is scoring-only.
+  - Require model training and model-selection validation windows to end before the holdout begins and require exact model/feature/taxonomy version binding.
+  - Compare the full expected open store × category × hour key set against actuals and predictions; missing, duplicate, extra, malformed, or non-finite records fail closed.
+  - Report MAPE for every store/category/clock-hour group using only nonzero actuals in the denominator. Include total, nonzero, and zero-actual counts; a group with no nonzero actuals is unscorable and fails the overall gate rather than disappearing.
+  - Gate each scored store/category/clock-hour group's MAPE at ≤10%; an overall average cannot hide a failing group. Record P70 empirical hit rate (target 70%) and P10–P90 interval coverage (nominal 80%) separately, including all rows in both coverage denominators.
+  - Write a schema-versioned JSON report tied to model version, feature version, taxonomy version, train/selection/holdout windows, forecast contract version, metric definitions, counts, per-group metrics, and gate outcome. Output must be atomic and never replace evidence for a different model version silently.
+  - If any group misses the 10% band or is unscorable, preserve the honest failing report and return a failing gate; do not mark the forecaster ready for CS-016. Passing code tests alone does not waive a failing real-data result.
 
 ### CS-015 — LangGraph state & schedule-generation graph
 - **Feature:** [F12](./FEATURES.md) · **Priority:** P1 · **Size:** M
