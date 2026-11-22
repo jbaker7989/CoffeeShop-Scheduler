@@ -1682,7 +1682,7 @@ closing regression evidence.
 
 ### BUG-022 — F60: RLS policy cast is not fail-closed for empty/invalid tenant context
 - **Feature:** [F60](./FEATURES.md) (CS-060) · **Priority:** P2 · **Size:** XS · **Pattern:** D2
-- **Status:** ✅ Fixed (migration `0006` `app_current_tenant()` STABLE helper + policy swap on every table; `data_access/session.py` UUID edge guard; F60.AC2 corrected to the function form; verified by `test_bug022_failclosed.py` + the isolation gate — empty/malformed context yields 0 rows, never a cast 500) · **Type:** Defect (spec bug + unhandled edge; impl partially fixed)
+- **Status:** ✅ Fixed (migration `0006` `app_current_tenant()` STABLE helper + policy swap on every table; `data_access/session.py` UUID edge guard; F60.AC2 corrected to the function form; verified by `test_bug022_failclosed.py` + the isolation gate — empty/malformed context yields 0 rows, never a cast 500; and **catalog-driven** `test_bug022_catalog_failclosed.py` proves it across **all 42** `tenant_isolation` tables — 29 app_rw-readable return 0 rows on a malformed/empty/injection context, 0 cast errors, 13 grant-restricted from app_rw use the same `app_current_tenant()` helper — so a future table that reverts to the throwing inline form is caught, not just the hand-named ones) · **Type:** Defect (spec bug + unhandled edge; resolved and drift-guarded)
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** Two related gaps around the policy expression:
   1. **Spec bug:** F60.AC2 specifies the filter as `current_setting('app.tenant_id', true)::UUID`. With the
@@ -1741,7 +1741,7 @@ closing regression evidence.
 
 ### BUG-025 — F60: per-request tenant context is lost on an autocommit connection; role not pinned under pooling
 - **Feature:** [F60](./FEATURES.md) (CS-060c) · **Priority:** P2 · **Size:** XS · **Pattern:** D2
-- **Status:** 🐞 Open · **Type:** Defect (session-context gap) · relates to [[BUG-013]], [[BUG-017]]
+- **Status:** ✅ Fixed (verified 2026-11-21) — `data_access/session.py::open_session_context` **refuses an autocommit connection** (`SessionContextError`), and issues transaction-local `SET LOCAL ROLE <role>` + parameterized `set_config('app.tenant_id', …, true)` together inside an explicit transaction; the non-local `SET ROLE` leak is closed with [[BUG-013]] (`compliance/engine.py`, `rules_admin.py` now use `SET LOCAL ROLE`). Autocommit refusal is covered by `test_data_access.py` F45.ac7; the **transaction-locality / no-leak-across-pooled-clients** property is now guarded by `test_bug025_pooling_session.py` (role and tenant GUC both reset at commit; verified end-to-end through PgBouncer 6432). · relates to [[BUG-013]], [[BUG-017]]
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** CS-060c sets tenant context with `SET LOCAL app.tenant_id`, which only persists inside an
   explicit transaction. On an **autocommit** connection the setting evaporates before the next statement →
@@ -2512,10 +2512,10 @@ closing regression evidence.
 | BUG-019 | F34 | P2 | XS | 🐞 Open — `test_rules_admin.py` missing `unittest.main()`; runs 0 tests as a script |
 | BUG-020 | F60 | P1 | S | ✅ Fixed (`0004`) — tenants ENABLE RLS + self-policy; app roles see only own tenant; 4 tests |
 | BUG-021 | F60 | P2 | S | 🐞 Open — default partitions lack RLS/FORCE (latent; mitigated only by grant absence) |
-| BUG-022 | F60 | P2 | XS | 🐞 Open — RLS policy cast not fail-closed for empty/invalid tenant context (AC2 spec bug) |
+| BUG-022 | F60 | P2 | XS | ✅ Fixed — `app_current_tenant()` fail-closed; catalog-driven test proves 0 rows (not a cast 500) across all 42 tenant_isolation tables |
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
 | BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
-| BUG-025 | F60 | P2 | XS | 🐞 Open — tenant context lost on autocommit conn; role not pinned under pooling |
+| BUG-025 | F60 | P2 | XS | ✅ Fixed — autocommit refused + transaction-local role/tenant (no pool leak); `test_bug025_pooling_session.py` |
 | BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
 | BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
 | BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |
