@@ -115,6 +115,7 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 
 ### F11. CP-SAT schedule solver
 - **Status:** Blocked (on F2, F4, F9, F10) · **Size:** L · **Priority:** P1
+- **CS-016a (input adapters, done):** Typed, read-only solver input assembly and cross-validation are specified in [docs/sdd-cs016a.md](docs/sdd-cs016a.md) (F11.ac1–ac7).
 - **Description:** OR-Tools CP-SAT model emitting a legal, cost-aware weekly schedule. Hard constraints: legality and coverage. Soft objectives: labour % target, 85% utilisation, overtime budget, cost targets. Respects stations per store (LM/HK 4 stations/6 staff, Astoria 3/4) and fixed tasks. **The solver's input tables must be enumerated explicitly in the implementation so nothing is implicit:**
   - Forecast output (F8 / F9)
   - Roster (F2)
