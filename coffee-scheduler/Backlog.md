@@ -298,7 +298,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-016a — Input assembly & data adapters
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Blocked (on CS-002, CS-005, CS-014)
+- **Status:** ✅ Done (2026-11-22) — Read-only, RLS-scoped adapters now assemble stores, rules, targets, throughput, roster calendars, and contract-valid forecast demand into one immutable `SolverInputs` boundary. Referential, category-throughput, school-calendar, hours, soft-delete, and tenant checks fail closed with typed table/key errors; offline and rollback-gated tests cover the adapter boundary.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Load and validate every enumerated solver input into typed model structures — nothing implicit.
 - **Detailed specifications:**
