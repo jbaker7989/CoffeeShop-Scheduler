@@ -1,0 +1,37 @@
+# Production observability overlay — TLS-terminating OTel Collector (BUG-055 / F38).
+#
+# The developer stack (docker-compose.observability.yml) stays local-development mode:
+# plaintext receivers published on 127.0.0.1 only. This overlay is the SEPARATE
+# production deployment — it loads the TLS/mTLS collector-config.prod.yaml and mounts
+# real certificate material from a host directory the operator provides. It never reads
+# the developer file and commits no certificates or keys.
+#
+# Deploy (the operator supplies the secret directory and file paths out of band):
+#   export OTEL_TLS_SECRET_DIR=/run/secrets/otel-collector   # mounted read-only below
+#   export OTEL_RECEIVER_TLS_CERT_FILE=/etc/otel/tls/server.crt
+#   export OTEL_RECEIVER_TLS_KEY_FILE=/etc/otel/tls/server.key
+#   export OTEL_RECEIVER_TLS_CLIENT_CA_FILE=/etc/otel/tls/client-ca.crt   # set to require mTLS
+#   docker compose -f docker-compose.observability.prod.yml up -d
+#
+# Unlike the developer overlay, production publishes the OTLP ports for remote agents;
+# the TLS termination in collector-config.prod.yaml is what makes that safe, so there
+# is no 127.0.0.1 host restriction here. Health (13133) stays loopback-only.
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    container_name: coffeeshop-otel-collector-prod
+    command: ["--config=/etc/otelcol-contrib/collector-config.yaml"]
+    environment:
+      # TLS file paths inside the container; the operator mounts the files at these paths.
+      - OTEL_RECEIVER_TLS_CERT_FILE
+      - OTEL_RECEIVER_TLS_KEY_FILE
+      - OTEL_RECEIVER_TLS_CLIENT_CA_FILE
+    volumes:
+      - ./coffee-scheduler/otel/collector-config.prod.yaml:/etc/otelcol-contrib/collector-config.yaml:ro
+      # Real certificate material is mounted read-only from an operator-provided directory.
+      # ${OTEL_TLS_SECRET_DIR} is set in the deployment environment; nothing is committed here.
+      - ${OTEL_TLS_SECRET_DIR}:/etc/otel/tls:ro
+    ports:
+      - "4317:4317"            # OTLP/gRPC (TLS) — reachable by remote agents
+      - "4318:4318"            # OTLP/HTTP (TLS) — reachable by remote agents
+      - "127.0.0.1:13133:13133"  # health_check stays host-loopback-only
