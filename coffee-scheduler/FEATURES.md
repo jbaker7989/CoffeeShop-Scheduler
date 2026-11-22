@@ -86,6 +86,7 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Acceptance criteria:** the umbrella F9 criteria are defined per sub-story in the SDDs (`docs/sdd-cs014a.md` owns the feature-dataset criteria `F9.ac1–ac7`); they are listed there rather than inline because F9 is delivered across CS-014a/b/c.
 - **CS-014a (feature dataset, done):** `agents/demand_forecast/feature_build.py` builds a versioned, RLS-scoped `forecast_features` table (+ `feature_sets` registry, migration `0019`) from canonical Postgres — one 0-filled row per open store-hour × taxonomy category over Jan–Jun 2023, with calendar/weather/rolling features and honest `has_basket_id`/`has_evening_history`/`has_annual_seasonality` masks. Criteria `F9.ac1–ac7` in `docs/sdd-cs014a.md`.
 - **CS-014b (model, done):** `agents/demand_forecast/model.py` trains deterministic empirical-quantile and linear-quantile candidates, selects by validation pinball loss, persists the selected versioned artifact, and emits contract-valid interval forecasts. Criteria `F9.ac8–ac13` in `docs/sdd-cs014b.md`.
+- **CS-014b reopen (acceptance metric):** adds a count-shrinkage candidate (`F9.ac21–ac22`) and the finding that the `≤10%` per-group MAPE gate is a metric mismatch for small-count demand; the memo `docs/decisions/CS-014b-acceptance-metric.md` recommends a WAPE plus pinball plus coverage gate for CS-014c to ratify.
 - **Expected outcome:** A forecaster that drives staffing need per hour with honest uncertainty — the demand input to the solver.
 
 ### F10. Labor-compliance rule engine
