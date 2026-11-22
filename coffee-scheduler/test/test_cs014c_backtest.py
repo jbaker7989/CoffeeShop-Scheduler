@@ -41,6 +41,7 @@ from agents.demand_forecast.backtest import (  # noqa: E402
     evaluate_gate,
     group_metrics,
     report_path,
+    resolve_official_holdout,
     run_backtest,
     validate_holdout_window,
     write_report_atomic,
@@ -152,6 +153,24 @@ class HoldoutWindowTests(unittest.TestCase):
         # A malformed (reversed) source window is rejected before any containment comparison.
         with self.assertRaises(BacktestError):
             validate_holdout_window(HOLDOUT_H1, (date(2023, 6, 30), date(2023, 1, 1)))
+
+    # spec: F9.ac14
+    def test_ac14_official_gate_uses_only_final_28(self):
+        # The official F5 gate window is always the final 28 source dates.
+        self.assertEqual(resolve_official_holdout(SOURCE_WINDOW_H1), HOLDOUT_H1)
+        self.assertEqual(resolve_official_holdout(SOURCE_WINDOW_H1, HOLDOUT_H1), HOLDOUT_H1)
+        # A well-formed but non-final 28-day window inside the source cannot stand in for the official gate.
+        with self.assertRaises(BacktestError):
+            resolve_official_holdout(SOURCE_WINDOW_H1, (date(2023, 6, 2), date(2023, 6, 29)))
+
+    # spec: F9.ac14
+    def test_ac14_cli_has_no_holdout_override(self):
+        # The CLI must not expose a holdout override that could cherry-pick an easier window.
+        from agents.demand_forecast import backtest as bt
+
+        with self.assertRaises(SystemExit):
+            bt.main(["--model-version", "m", "--feature-version", "f",
+                     "--holdout-start", "2023-06-02", "--holdout-end", "2023-06-29"])
 
 
 class LeakageTests(unittest.TestCase):
@@ -355,6 +374,31 @@ class GateTests(unittest.TestCase):
         outcome = evaluate_gate(metrics)
         self.assertFalse(outcome.passed)
         self.assertIn((5, "Tea", 9), outcome.unscorable_groups)
+
+    # spec: F9.ac19
+    def test_ac19_mape_limit_cannot_be_weakened(self):
+        # A group at 50% MAPE fails the locked F5 ≤10% band.
+        metrics = group_metrics([_scored(3, "Coffee", 3, 8, actual=100, lower=1, p70=150, upper=200)])
+        self.assertFalse(evaluate_gate(metrics).passed)
+        # No caller-supplied threshold may relax the gate — the override does not exist.
+        with self.assertRaises(TypeError):
+            evaluate_gate(metrics, mape_limit=1000.0)
+        # The report always records the authoritative fixed 10% limit, and build_report accepts no override.
+        report = build_report(
+            run_id="r", generated_at=datetime(2026, 11, 21, tzinfo=UTC), model=_eligible_model(),
+            holdout_window=HOLDOUT_H1, group_metrics=metrics,
+            coverage=coverage_metrics([_scored(3, "Coffee", 3, 8, actual=100, lower=1, p70=150, upper=200)]),
+            gate=evaluate_gate(metrics),
+        )
+        self.assertEqual(report["mape"]["limit"], 10.0)
+        self.assertFalse(report["gate"]["passed"])
+        with self.assertRaises(TypeError):
+            build_report(
+                run_id="r", generated_at=datetime(2026, 11, 21, tzinfo=UTC), model=_eligible_model(),
+                holdout_window=HOLDOUT_H1, group_metrics=metrics,
+                coverage=coverage_metrics([_scored(3, "Coffee", 3, 8, actual=100, lower=1, p70=150, upper=200)]),
+                gate=evaluate_gate(metrics), mape_limit=1000.0,
+            )
 
 
 class ReportTests(unittest.TestCase):
