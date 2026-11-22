@@ -149,6 +149,9 @@ class HoldoutWindowTests(unittest.TestCase):
         # Reversed override.
         with self.assertRaises(BacktestError):
             validate_holdout_window((date(2023, 6, 30), date(2023, 6, 3)), SOURCE_WINDOW_H1)
+        # A malformed (reversed) source window is rejected before any containment comparison.
+        with self.assertRaises(BacktestError):
+            validate_holdout_window(HOLDOUT_H1, (date(2023, 6, 30), date(2023, 1, 1)))
 
 
 class LeakageTests(unittest.TestCase):
@@ -185,6 +188,11 @@ class LeakageTests(unittest.TestCase):
         # Selection-validation that starts on/before the training window end overlaps training.
         with self.assertRaises(BacktestError):
             assert_model_eligible(_eligible_model(validation_window_start=date(2023, 5, 20)), **kw)
+        # datetime bounds (datetime subclasses date) are rejected, not compared against a date holdout.
+        with self.assertRaises(BacktestError):
+            assert_model_eligible(_eligible_model(train_window_end=datetime(2023, 5, 20, tzinfo=TZ)), **kw)
+        with self.assertRaises(BacktestError):
+            assert_model_eligible(_eligible_model(validation_window_end=datetime(2023, 6, 2, tzinfo=TZ)), **kw)
 
 
 class KeyAlignmentTests(unittest.TestCase):
