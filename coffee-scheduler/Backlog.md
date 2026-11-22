@@ -265,7 +265,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-014c — Backtest & validation
 - **Feature:** [F9](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Implementation complete (test-first, F9.ac14–ac20) — pending real-data backtest gate + full CI. `agents/demand_forecast/backtest.py` is in place and its 14 offline unit contracts pass with Ruff clean; the rollback-only PostgreSQL integration test and the actual ≤10% real-data gate must still be run on a seeded migrated database (Codex owns that execution). Do not treat the forecaster as ready for CS-016 until that gate passes. · **Plan:** [`docs/plans/CS-014c-backtest-validation.md`](./docs/plans/CS-014c-backtest-validation.md) · **SDD:** [`docs/sdd-cs014c.md`](./docs/sdd-cs014c.md)
+- **Status:** Implementation validated; acceptance gate failed (2026-11-21). F9.ac14–ac20 tests pass (18 focused, including rollback-only PostgreSQL); full CI-equivalent suite passes (358 passed, 16 skipped, 53 subtests); migration round-trip passes (3); Ruff/spec/review checks pass. The seeded PostgreSQL backtest of `cs014c-realdata-2023h1-v1` reports 0/396 store/category/clock-hour groups within the ≤10% MAPE band (371 failing, 25 unscorable); MAPE ranges 13.0%–228.76% (median 71.5%). P70 hit rate is 75.98%; P10–P90 coverage is 78.42%. Report: [`reports/forecast_backtests/backtest-cs014c-realdata-2023h1-v1.json`](./reports/forecast_backtests/backtest-cs014c-realdata-2023h1-v1.json). Keep CS-014c blocked and do not use the model in CS-016 until the accuracy gate passes. · **Plan:** [`docs/plans/CS-014c-backtest-validation.md`](./docs/plans/CS-014c-backtest-validation.md) · **SDD:** [`docs/sdd-cs014c.md`](./docs/sdd-cs014c.md)
 - **Developer:** Claude (implementation + tests) · Codex (independent test execution/review) · **Started:** 2026-11-22 · **Duration:** ~1d (est.)
 - **Description:** Prove the forecaster meets the acceptance band before the solver consumes it. Implemented as `agents/demand_forecast/backtest.py` (pure helpers + DB orchestration + CLI) reusing `feature_build`, `model.train`/`predict`, the tenant data-access session, and `contracts.forecast`; no model-algorithm, contract, or migration changes.
 - **Detailed specifications:**
@@ -2395,7 +2395,7 @@ closing regression evidence.
 | CS-014 | F9 | P1 | L | Blocked (umbrella) |
 | CS-014a | F9 | P1 | M | Blocked |
 | CS-014b | F9 | P1 | M | ✅ Done (2026-11-21) |
-| CS-014c | F9 | P1 | S | 🔧 Impl complete — pending real-data gate + CI |
+| CS-014c | F9 | P1 | S | Blocked — MAPE gate failed on real-data holdout |
 | CS-015 | F12 | P1 | M | Not started |
 | CS-016 | F11 | P1 | L | Blocked (umbrella) |
 | CS-016a | F11 | P1 | M | Blocked |
