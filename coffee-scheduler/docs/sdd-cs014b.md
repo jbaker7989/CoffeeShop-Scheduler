@@ -17,3 +17,15 @@ persists to the `forecasts` table hardened by migration `0017`.
 | **F9.ac11** | Training reads only the 6-month window features and uses no annual-seasonality term. | `test_ac11_training_window_is_six_months` (unit) · `test_ac11_db_model_records_train_window` (db) |
 | **F9.ac12** | A predicted `ForecastSet` uses only the pinned taxonomy vocabulary and open store-hours and persists to the `forecasts` table under the `0017` constraints. | `test_ac12_db_forecasts_persist_under_constraints` (db) |
 | **F9.ac13** | With a fixed seed, retraining a version reproduces identical params, and `load_model` → `predict` reproduces identical predictions. | `test_ac13_serialize_round_trip` (unit) · `test_ac13_db_training_is_deterministic` (db) |
+
+## CS-014b reopen — forecaster-improvement slice (2026-11-22)
+
+Reopened after the CS-014c backtest failed the F5 accuracy gate (0/396 groups within ≤10% MAPE,
+median 71.5%). Adds a third, count-shrinkage candidate and records the honest finding that the
+≤10% per-group MAPE gate is a metric mismatch for small-count data — see
+`docs/decisions/CS-014b-acceptance-metric.md`.
+
+| AC | Assertion | Test |
+|----|-----------|------|
+| **F9.ac21** | A count-shrinkage empirical candidate pulls a noisy small-sample group's quantiles decisively toward the better-supported backup (the raw empirical model does not). | `test_ac21_shrinkage_pulls_small_group_toward_backup` (unit) |
+| **F9.ac22** | `shrunk_empirical_quantile` is a registered approach that serializes round-trip exactly, predicts deterministically, and yields a sorted non-negative contract triple. | `test_ac22_shrunk_candidate_registered_and_round_trips` (unit) |
