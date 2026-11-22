@@ -42,9 +42,9 @@ from agents.demand_forecast.backtest import (  # noqa: E402
     group_metrics,
     report_path,
     run_backtest,
+    validate_holdout_window,
     write_report_atomic,
 )
-
 from agents.demand_forecast.feature_build import FEATURE_VERSION, build_feature_set  # noqa: E402
 from contracts.forecast import (  # noqa: E402
     CANONICAL_TZ,
@@ -124,6 +124,31 @@ class HoldoutWindowTests(unittest.TestCase):
         # A single day.
         with self.assertRaises(BacktestError):
             derive_holdout_window((date(2023, 6, 30), date(2023, 6, 30)))
+        # Non-positive holdout length is nonsensical and fails loud.
+        with self.assertRaises(BacktestError):
+            derive_holdout_window(SOURCE_WINDOW_H1, holdout_days=0)
+        with self.assertRaises(BacktestError):
+            derive_holdout_window(SOURCE_WINDOW_H1, holdout_days=-5)
+        # datetime subclasses date; a datetime carries a time/tz the date-keyed window must not accept.
+        with self.assertRaises(BacktestError):
+            derive_holdout_window((datetime(2023, 1, 1, tzinfo=TZ), datetime(2023, 6, 30, tzinfo=TZ)))
+
+    # spec: F9.ac14
+    def test_ac14_explicit_holdout_must_be_28_within_source(self):
+        # An explicit override must be exactly 28 inclusive dates and lie inside the source window.
+        self.assertEqual(validate_holdout_window(HOLDOUT_H1, SOURCE_WINDOW_H1), HOLDOUT_H1)
+        # Wrong length (27 inclusive dates).
+        with self.assertRaises(BacktestError):
+            validate_holdout_window((date(2023, 6, 4), date(2023, 6, 30)), SOURCE_WINDOW_H1)
+        # 28 days but running past the registered source end (silent future window).
+        with self.assertRaises(BacktestError):
+            validate_holdout_window((date(2023, 7, 4), date(2023, 7, 31)), SOURCE_WINDOW_H1)
+        # 28 days but starting before the registered source start.
+        with self.assertRaises(BacktestError):
+            validate_holdout_window((date(2022, 12, 4), date(2022, 12, 31)), SOURCE_WINDOW_H1)
+        # Reversed override.
+        with self.assertRaises(BacktestError):
+            validate_holdout_window((date(2023, 6, 30), date(2023, 6, 3)), SOURCE_WINDOW_H1)
 
 
 class LeakageTests(unittest.TestCase):
@@ -147,6 +172,19 @@ class LeakageTests(unittest.TestCase):
         # Taxonomy-version mismatch.
         with self.assertRaises(BacktestError):
             assert_model_eligible(_eligible_model(taxonomy_version="TAX-OTHER"), **kw)
+        # Reversed training window.
+        with self.assertRaises(BacktestError):
+            assert_model_eligible(
+                _eligible_model(train_window_start=date(2023, 5, 20), train_window_end=date(2023, 1, 1)), **kw
+            )
+        # Reversed selection-validation window.
+        with self.assertRaises(BacktestError):
+            assert_model_eligible(
+                _eligible_model(validation_window_start=date(2023, 6, 2), validation_window_end=date(2023, 5, 21)), **kw
+            )
+        # Selection-validation that starts on/before the training window end overlaps training.
+        with self.assertRaises(BacktestError):
+            assert_model_eligible(_eligible_model(validation_window_start=date(2023, 5, 20)), **kw)
 
 
 class KeyAlignmentTests(unittest.TestCase):
@@ -204,6 +242,9 @@ class KeyAlignmentTests(unittest.TestCase):
         # Non-finite actual fails closed.
         with self.assertRaises(BacktestError):
             align_scoring_rows(expected, {expected[0]: float("nan"), expected[1]: 0.0}, fs)
+        # Negative actual fails closed rather than being silently excluded from the MAPE denominator.
+        with self.assertRaises(BacktestError):
+            align_scoring_rows(expected, {expected[0]: -1.0, expected[1]: 0.0}, fs)
         # Non-finite forecast value (NaN p70) fails closed.
         nan_forecast = _forecast_set([
             _record(3, "Coffee", _hour(3, 8), 1, Decimal("NaN"), 15), fs.records[1],
@@ -243,6 +284,12 @@ class MapeAndGroupTests(unittest.TestCase):
         self.assertFalse(group.scorable)
         # An unscorable group reports no MAPE; it must not be coerced to 0.0 to force a pass.
         self.assertIsNone(group.mape)
+
+    # spec: F9.ac17
+    def test_ac17_negative_actual_rejected(self):
+        # A negative actual is invalid demand; it must fail loud, not be dropped from the denominator.
+        with self.assertRaises(BacktestError):
+            group_metrics([_scored(3, "Coffee", 3, 8, actual=-1, lower=0, p70=1, upper=2)])
 
 
 class CoverageTests(unittest.TestCase):
@@ -394,6 +441,21 @@ class ReportTests(unittest.TestCase):
                 with self.assertRaises(BacktestError):
                     report_path(out, unsafe)
 
+    # spec: F9.ac20
+    def test_ac20_output_dir_created_or_fails(self):
+        report = self._report()
+        with TemporaryDirectory() as tmp:
+            # A not-yet-existing nested output directory is created rather than crashing.
+            nested = Path(tmp) / "reports" / "cs014c"
+            written = write_report_atomic(nested, report, model_version="m-cs014c")
+            self.assertTrue(written.exists())
+            self.assertEqual(written.parent, nested)
+            # A destination whose parent is a regular file fails with a specific BacktestError.
+            a_file = Path(tmp) / "afile"
+            a_file.write_text("x")
+            with self.assertRaises(BacktestError):
+                write_report_atomic(a_file, report, model_version="m-cs014c")
+
 
 _SKIP = None
 try:
@@ -422,7 +484,6 @@ class BacktestDatabaseTests(unittest.TestCase):
     # spec: F9.ac20
     def test_db_backtest_gate_is_honest(self):
         from agents.demand_forecast.backtest import load_source_window
-
         from agents.demand_forecast.model import train
         from data_access.session import open_session_context
 
