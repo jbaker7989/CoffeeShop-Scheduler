@@ -25,6 +25,7 @@ sys.path.insert(0, str(SCHEDULER_ROOT))
 
 # Imported from the module under construction; absence is the documented test-first red.
 from agents.demand_forecast.backtest import (  # noqa: E402
+    BACKTEST_PROTOCOL,
     DEFAULT_HOLDOUT_DAYS,
     INTERVAL_NOMINAL,
     MAPE_LIMIT,
@@ -84,6 +85,7 @@ def _eligible_model(**overrides) -> dict:
     model = {
         "model_version": "m-cs014c", "feature_version": FEATURE_VERSION,
         "taxonomy_version": PINNED_TAXONOMY_VERSION, "contract_version": CONTRACT_VERSION,
+        "approach": "empirical_quantile",
         "train_window_start": date(2023, 1, 1), "train_window_end": date(2023, 5, 20),
         "validation_window_start": date(2023, 5, 21), "validation_window_end": date(2023, 6, 2),
     }
@@ -180,9 +182,34 @@ class KeyAlignmentTests(unittest.TestCase):
         # Duplicate expected key fails closed rather than scoring twice.
         with self.assertRaises(BacktestError):
             align_scoring_rows([expected[0], expected[0], expected[1]], actuals, fs)
+        # Duplicate forecast record for one key fails closed (contract uniqueness, not last-wins).
+        dup_forecast = _forecast_set([fs.records[0], fs.records[0], fs.records[1]])
+        with self.assertRaises(BacktestError):
+            align_scoring_rows(expected, actuals, dup_forecast)
+        # Extra actual key beyond the expected/forecast key set fails closed.
+        extra_actual = {**actuals, (9, "Latte", _hour(3, 11)): 4.0}
+        with self.assertRaises(BacktestError):
+            align_scoring_rows(expected, extra_actual, fs)
+        # Invalid interval (crossed lower > p70 > upper) fails closed rather than scoring a bad row.
+        bad_interval = _forecast_set([_record(3, "Coffee", _hour(3, 8), 15, 9, 1), fs.records[1]])
+        with self.assertRaises(BacktestError):
+            align_scoring_rows(expected, actuals, bad_interval)
+        # Record whose model/taxonomy version disagrees with the envelope fails closed.
+        mismatched = ForecastSet(
+            CONTRACT_VERSION, PINNED_TAXONOMY_VERSION, "m-cs014c", datetime.now(UTC),
+            (_record(3, "Coffee", _hour(3, 8), 1, 9, 15, tax="TAX-OTHER"), fs.records[1]),
+        )
+        with self.assertRaises(BacktestError):
+            align_scoring_rows(expected, actuals, mismatched)
         # Non-finite actual fails closed.
         with self.assertRaises(BacktestError):
             align_scoring_rows(expected, {expected[0]: float("nan"), expected[1]: 0.0}, fs)
+        # Non-finite forecast value (NaN p70) fails closed.
+        nan_forecast = _forecast_set([
+            _record(3, "Coffee", _hour(3, 8), 1, Decimal("NaN"), 15), fs.records[1],
+        ])
+        with self.assertRaises(BacktestError):
+            align_scoring_rows(expected, actuals, nan_forecast)
 
 
 class MapeAndGroupTests(unittest.TestCase):
@@ -302,6 +329,10 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report["feature_version"], FEATURE_VERSION)
         self.assertEqual(report["taxonomy_version"], PINNED_TAXONOMY_VERSION)
         self.assertEqual(report["contract_version"], CONTRACT_VERSION)
+        # Model approach and the rolling-origin protocol name are both recorded (distinct identities).
+        self.assertEqual(report["approach"], "empirical_quantile")
+        self.assertEqual(report["protocol"], BACKTEST_PROTOCOL)
+        self.assertTrue(BACKTEST_PROTOCOL)
         # Train / validation / holdout identity is recorded.
         windows = report["windows"]
         self.assertEqual(windows["train_start"], "2023-01-01")
@@ -347,6 +378,17 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(json.loads(written.read_text())["model_version"], "m-cs014c")
             # Atomic write leaves no temporary sibling behind on success.
             self.assertEqual(sorted(p.name for p in out.iterdir()), sorted([written.name, other_path.name]))
+            # Re-writing the same version in place is allowed (idempotent replace of the matching report).
+            rewritten = write_report_atomic(out, report, model_version="m-cs014c")
+            self.assertEqual(rewritten, written)
+            # Refuse to clobber a destination whose on-disk report embeds a DIFFERENT model_version:
+            # a stray/foreign report at the version-scoped path must not be silently overwritten.
+            foreign = dict(report, model_version="m-stale")
+            written.write_text(json.dumps(foreign))
+            with self.assertRaises(BacktestError):
+                write_report_atomic(out, report, model_version="m-cs014c")
+            # The refusal left the foreign file intact (no partial/truncated evidence).
+            self.assertEqual(json.loads(written.read_text())["model_version"], "m-stale")
             # Unsafe model versions are rejected before any path is derived (no traversal / separators / blanks).
             for unsafe in ("../evil", "a/b", "..", "", "   ", "with\x00null"):
                 with self.assertRaises(BacktestError):
