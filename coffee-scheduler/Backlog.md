@@ -265,9 +265,9 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-014c — Backtest & validation
 - **Feature:** [F9](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Planned (on CS-014b, CS-008; both complete) · **Plan:** [`docs/plans/CS-014c-backtest-validation.md`](./docs/plans/CS-014c-backtest-validation.md) · **SDD:** [`docs/sdd-cs014c.md`](./docs/sdd-cs014c.md)
+- **Status:** Implementation complete (test-first, F9.ac14–ac20) — pending real-data backtest gate + full CI. `agents/demand_forecast/backtest.py` is in place and its 14 offline unit contracts pass with Ruff clean; the rollback-only PostgreSQL integration test and the actual ≤10% real-data gate must still be run on a seeded migrated database (Codex owns that execution). Do not treat the forecaster as ready for CS-016 until that gate passes. · **Plan:** [`docs/plans/CS-014c-backtest-validation.md`](./docs/plans/CS-014c-backtest-validation.md) · **SDD:** [`docs/sdd-cs014c.md`](./docs/sdd-cs014c.md)
 - **Developer:** Claude (implementation + tests) · Codex (independent test execution/review) · **Started:** 2026-11-22 · **Duration:** ~1d (est.)
-- **Description:** Prove the forecaster meets the acceptance band before the solver consumes it.
+- **Description:** Prove the forecaster meets the acceptance band before the solver consumes it. Implemented as `agents/demand_forecast/backtest.py` (pure helpers + DB orchestration + CLI) reusing `feature_build`, `model.train`/`predict`, the tenant data-access session, and `contracts.forecast`; no model-algorithm, contract, or migration changes.
 - **Detailed specifications:**
   - Use the final 28 inclusive dates of the registered feature source window (currently 2023-06-03 through 2023-06-30), independent of wall-clock date. Treat each prediction as rolling-origin one-step-ahead: earlier actual hours may feed lag features; the target row's actual is scoring-only.
   - Require model training and model-selection validation windows to end before the holdout begins and require exact model/feature/taxonomy version binding.
@@ -2395,7 +2395,7 @@ closing regression evidence.
 | CS-014 | F9 | P1 | L | Blocked (umbrella) |
 | CS-014a | F9 | P1 | M | Blocked |
 | CS-014b | F9 | P1 | M | ✅ Done (2026-11-21) |
-| CS-014c | F9 | P1 | S | Blocked |
+| CS-014c | F9 | P1 | S | 🔧 Impl complete — pending real-data gate + CI |
 | CS-015 | F12 | P1 | M | Not started |
 | CS-016 | F11 | P1 | L | Blocked (umbrella) |
 | CS-016a | F11 | P1 | M | Blocked |
