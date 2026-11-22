@@ -44,6 +44,46 @@ docker run --rm --entrypoint /otelcol-contrib \
 python3 -m unittest coffee-scheduler/test/test_cs038_otel_collector.py
 ```
 
+## Transport security & trust boundary (BUG-055)
+The developer stack is **local-development mode**: the Collector's OTLP receivers are
+plaintext and unauthenticated, so `docker-compose.observability.yml` publishes `4317`,
+`4318` and `13133` on **`127.0.0.1` only**. The in-container receivers still bind
+`0.0.0.0`, so other Compose services reach `otel-collector:4317/4318` over the compose
+network — but the host never exposes this plaintext Collector to the LAN.
+
+For a **remote** Collector, deploy the production config and overlay instead:
+- `collector-config.prod.yaml` — OTLP receivers terminate **TLS** (`cert_file`+`key_file`);
+  plaintext is never selected. **mTLS** (client authentication) turns on **only** when a
+  client CA is configured.
+- `docker-compose.observability.prod.yml` — loads the prod config and mounts the real
+  certificate material read-only from an operator-provided directory.
+
+Receiver TLS file paths come from the environment (no secrets are committed):
+
+| Variable | Purpose |
+|----------|---------|
+| `OTEL_RECEIVER_TLS_CERT_FILE` | server certificate (PEM) — required |
+| `OTEL_RECEIVER_TLS_KEY_FILE` | server private key (PEM) — required |
+| `OTEL_RECEIVER_TLS_CLIENT_CA_FILE` | client CA bundle (PEM) — set **only** to require mTLS |
+
+```sh
+export OTEL_TLS_SECRET_DIR=/run/secrets/otel-collector        # host dir with the PEMs
+export OTEL_RECEIVER_TLS_CERT_FILE=/etc/otel/tls/server.crt
+export OTEL_RECEIVER_TLS_KEY_FILE=/etc/otel/tls/server.key
+export OTEL_RECEIVER_TLS_CLIENT_CA_FILE=/etc/otel/tls/client-ca.crt   # omit to disable mTLS
+docker compose -f docker-compose.observability.prod.yml up -d
+```
+Rotate by replacing the mounted secrets and restarting the Collector. Validate the prod
+config without secrets (the pinned image resolves the env paths; it does not read the files):
+```sh
+OTEL_RECEIVER_TLS_CERT_FILE=/tls/server.crt OTEL_RECEIVER_TLS_KEY_FILE=/tls/server.key \
+OTEL_RECEIVER_TLS_CLIENT_CA_FILE=/tls/client-ca.crt \
+docker run --rm --entrypoint /otelcol-contrib \
+  -e OTEL_RECEIVER_TLS_CERT_FILE -e OTEL_RECEIVER_TLS_KEY_FILE -e OTEL_RECEIVER_TLS_CLIENT_CA_FILE \
+  -v "$PWD/coffee-scheduler/otel/collector-config.prod.yaml:/cfg.yaml:ro" \
+  otel/opentelemetry-collector-contrib:0.164.0 validate --config /cfg.yaml
+```
+
 ## Production wiring (F39)
 Deploy Tempo/Mimir/Loki (CS-039) next to this Collector; the exporter endpoints
 (`tempo:4317`, `mimir:9009`, `loki:3100`) already point at their service names. No Collector
@@ -96,6 +136,31 @@ telemetry attributes (ties F68 AC4) — the demo stamps only a `tenant_id` uuid.
 | `forecast.quantile_p70` | histogram | 1 | — |
 | `a2a.server.duration_ms` | histogram | ms | `peer.service` |
 | `a2a.calls` | counter | 1 | `peer.service`, `status` |
+
+## Transport security (BUG-055)
+`init_telemetry` classifies the OTLP endpoint before building any exporter:
+- **Plaintext (`insecure=True`) only for an explicit loopback target** — `localhost`
+  (case-insensitive), `127.0.0.0/8`, or `::1`/`[::1]`. A hostname that merely *resolves*
+  to loopback is **not** treated as loopback (DNS is a time-varying trust decision), so it
+  takes the remote path below.
+- **Any non-loopback endpoint requires TLS.** Both exporters are built with `insecure=False`
+  and gRPC channel credentials from a readable CA bundle. A missing/unreadable/empty CA, a
+  malformed endpoint (URL scheme, userinfo, path, missing/out-of-range port, unbracketed
+  IPv6), or half an mTLS pair raises `TelemetryConfigError` **before** either exporter is
+  constructed — no silent plaintext fallback, and `OTEL_EXPORTER_OTLP_INSECURE` cannot flip a
+  remote target back to plaintext.
+- The resolved transport is part of the init identity: re-initializing with a changed
+  endpoint or TLS mode raises rather than reusing providers from another trust boundary.
+
+| Variable | Purpose |
+|----------|---------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `host:port` (default `localhost:4317`) |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE` | CA bundle (PEM) — **required** for a remote endpoint |
+| `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` | client cert (PEM) — mTLS, set with the key |
+| `OTEL_EXPORTER_OTLP_CLIENT_KEY` | client key (PEM) — mTLS, set with the cert |
+
+Errors never include certificate contents, a private-key path, or endpoint credentials.
+No certificates or keys are committed anywhere in this repo.
 
 ## Sampling & propagation
 Head sampler = `ParentBased(AlwaysOn)` (keep every head span so the Collector's tail sampler —

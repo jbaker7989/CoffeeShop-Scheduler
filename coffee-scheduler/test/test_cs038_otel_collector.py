@@ -15,7 +15,6 @@ they never touch a developer's data-plane ``docker compose up`` stack.
 """
 import datetime
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -31,6 +30,28 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "coffee-scheduler" / "otel" / "collector-config.yaml"
 COMPOSE_PATH = ROOT / "docker-compose.observability.yml"
+# BUG-055: the separate production TLS/mTLS Collector configuration + overlay.
+PROD_CONFIG_PATH = ROOT / "coffee-scheduler" / "otel" / "collector-config.prod.yaml"
+PROD_COMPOSE_PATH = ROOT / "docker-compose.observability.prod.yml"
+# PEM markers that must never appear committed in config/compose (no committed secrets).
+PEM_MARKERS = ("BEGIN CERTIFICATE", "BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY", "BEGIN EC PRIVATE KEY")
+
+
+def _server_tls_mode(tls_block: object) -> str:
+    """Classify an OTLP receiver ``tls`` block: 'disabled' | 'tls' | 'mtls'.
+
+    Raises ``ValueError`` for an incomplete server pair (cert without key or key
+    without cert) — the fail-closed case BUG-055 AC13 requires the config to avoid.
+    """
+    if not tls_block:
+        return "disabled"
+    cert = tls_block.get("cert_file")
+    key = tls_block.get("key_file")
+    if bool(cert) != bool(key):
+        raise ValueError("server TLS requires both cert_file and key_file")
+    if not cert:
+        return "disabled"
+    return "mtls" if tls_block.get("client_ca_file") else "tls"
 
 # The pin under test. Exact (non-latest) contrib tag, released 2026-10-27 — AC9 asserts
 # it is at least two weeks old against this known release date (no network required).
@@ -178,10 +199,109 @@ class CollectorComposeStaticTests(unittest.TestCase):
         age_days = (datetime.date.today() - PINNED_RELEASE_DATE).days
         self.assertGreaterEqual(age_days, 14, f"pinned tag only {age_days} days old (<2 weeks)")
 
-    # spec: F38.ac1 — the Compose service publishes the OTLP ports it binds.
+    # spec: F38.ac1 — the Compose service publishes the three OTLP/health ports it binds.
+    # BUG-055 added a host-IP prefix, so match on the CONTAINER port (last colon field).
     def test_compose_publishes_otlp_and_health_ports(self) -> None:
-        published = {str(p).split(":")[0] for p in self.service["ports"]}
+        published = {str(p).rsplit(":", 1)[-1] for p in self.service["ports"]}
         self.assertTrue({"4317", "4318", "13133"}.issubset(published), self.service["ports"])
+
+    # spec: F38.ac12 — every published development host port binds 127.0.0.1 only, so the
+    # plaintext, unauthenticated dev Collector is never exposed to the LAN (BUG-055).
+    def test_development_host_ports_are_loopback_only(self) -> None:
+        expected = {
+            "127.0.0.1:4317:4317",
+            "127.0.0.1:4318:4318",
+            "127.0.0.1:13133:13133",
+        }
+        published = {str(p) for p in self.service["ports"]}
+        self.assertEqual(expected, published, self.service["ports"])
+
+    # spec: F38.ac12 — the in-container receivers stay on 0.0.0.0 so other Compose
+    # services can reach otel-collector:4317/4318 over the compose network.
+    def test_container_receivers_stay_on_all_interfaces(self) -> None:
+        otlp = _load_config()["receivers"]["otlp"]["protocols"]
+        self.assertEqual("0.0.0.0:4317", _endpoint_host_port(otlp["grpc"]["endpoint"]))
+        self.assertEqual("0.0.0.0:4318", _endpoint_host_port(otlp["http"]["endpoint"]))
+
+
+class ProductionCollectorConfigTests(unittest.TestCase):
+    """AC13 (BUG-055): the production config terminates TLS and commits no secrets."""
+
+    def setUp(self) -> None:
+        with PROD_CONFIG_PATH.open() as handle:
+            self.config = yaml.safe_load(handle)
+        self.prod_text = PROD_CONFIG_PATH.read_text()
+        self.protocols = self.config["receivers"]["otlp"]["protocols"]
+
+    # spec: F38.ac13 — the server TLS classifier fails closed on an incomplete pair,
+    # and reports plain TLS vs. mTLS by whether a client CA is configured.
+    def test_server_tls_mode_classifier_is_fail_closed(self) -> None:
+        self.assertEqual("disabled", _server_tls_mode(None))
+        self.assertEqual("tls", _server_tls_mode({"cert_file": "c", "key_file": "k"}))
+        self.assertEqual(
+            "mtls",
+            _server_tls_mode({"cert_file": "c", "key_file": "k", "client_ca_file": "ca"}),
+        )
+        with self.assertRaises(ValueError):
+            _server_tls_mode({"cert_file": "c"})  # key missing → rejected
+        with self.assertRaises(ValueError):
+            _server_tls_mode({"key_file": "k"})  # cert missing → rejected
+
+    # spec: F38.ac13 — both receivers terminate TLS (cert_file + key_file configured).
+    def test_both_receivers_terminate_tls(self) -> None:
+        for proto in ("grpc", "http"):
+            tls = self.protocols[proto].get("tls")
+            self.assertIsNotNone(tls, f"{proto} receiver has no tls block")
+            self.assertTrue(tls.get("cert_file"), f"{proto} tls missing cert_file")
+            self.assertTrue(tls.get("key_file"), f"{proto} tls missing key_file")
+
+    # spec: F38.ac13 — plaintext is never selected on a production receiver.
+    def test_production_receivers_do_not_select_plaintext(self) -> None:
+        for proto in ("grpc", "http"):
+            tls = self.protocols[proto].get("tls", {})
+            self.assertNotEqual(True, tls.get("insecure"), f"{proto} selects plaintext")
+            # And the mode is a real TLS mode, not disabled.
+            self.assertIn(_server_tls_mode(tls), ("tls", "mtls"))
+
+    # spec: F38.ac13 — client authentication (mTLS) is enabled only when a client CA
+    # is explicitly configured; this production config opts in via env substitution.
+    def test_client_auth_enabled_only_with_client_ca(self) -> None:
+        for proto in ("grpc", "http"):
+            tls = self.protocols[proto]["tls"]
+            self.assertEqual("mtls", _server_tls_mode(tls))
+            self.assertTrue(tls.get("client_ca_file"))
+        # Dropping the client CA must downgrade to plain TLS (not stay mTLS) — proves
+        # the opt-in semantics rather than an unconditional client-auth requirement.
+        no_ca = {k: v for k, v in self.protocols["grpc"]["tls"].items() if k != "client_ca_file"}
+        self.assertEqual("tls", _server_tls_mode(no_ca))
+
+    # spec: F38.ac13 — no certificate or private-key material is committed; TLS file
+    # locations are env placeholders / mounted paths, not inline PEM blobs.
+    def test_production_config_commits_no_secret_material(self) -> None:
+        for marker in PEM_MARKERS:
+            self.assertNotIn(marker, self.prod_text, f"committed PEM material: {marker}")
+        for proto in ("grpc", "http"):
+            tls = self.protocols[proto]["tls"]
+            for field in ("cert_file", "key_file", "client_ca_file"):
+                value = str(tls[field])
+                self.assertTrue(
+                    value.startswith("${env:") or value.startswith("/"),
+                    f"{proto}.{field} must be an env placeholder or mounted path, got {value!r}",
+                )
+
+    # spec: F38.ac13 — the production overlay is separate from the dev stack, mounts a
+    # secret dir from the environment, and commits no PEM material.
+    def test_production_compose_overlay_is_separate_and_secretless(self) -> None:
+        with PROD_COMPOSE_PATH.open() as handle:
+            compose = yaml.safe_load(handle)
+        overlay_text = PROD_COMPOSE_PATH.read_text()
+        for marker in PEM_MARKERS:
+            self.assertNotIn(marker, overlay_text)
+        service = compose["services"][COLLECTOR_SERVICE]
+        mounts = " ".join(service["volumes"])
+        # Loads the production TLS config, not the developer plaintext one.
+        self.assertIn("collector-config.prod.yaml", mounts)
+        self.assertNotIn("collector-config.yaml:/etc", mounts.replace("prod.yaml", "prod-yaml"))
 
 
 def _docker_available() -> bool:
@@ -223,6 +343,45 @@ class CollectorDockerTests(unittest.TestCase):
                 "validate", "--config", "/cfg.yaml", check=False,
             )
             self.assertNotEqual(0, rejected.returncode, "invalid config unexpectedly validated")
+
+    # spec: F38.ac13 — the pinned image accepts the production TLS config (TLS paths
+    # supplied via env) and rejects a deliberately incomplete TLS pair (cert, no key).
+    def test_validate_accepts_prod_tls_config_and_rejects_incomplete(self) -> None:
+        complete = self._run(
+            "docker", "run", "--rm", "--entrypoint", "/otelcol-contrib",
+            "-e", "OTEL_RECEIVER_TLS_CERT_FILE=/tls/server.crt",
+            "-e", "OTEL_RECEIVER_TLS_KEY_FILE=/tls/server.key",
+            "-e", "OTEL_RECEIVER_TLS_CLIENT_CA_FILE=/tls/client-ca.crt",
+            "-v", f"{PROD_CONFIG_PATH}:/cfg.yaml:ro", PINNED_IMAGE,
+            "validate", "--config", "/cfg.yaml", check=False,
+        )
+        self.assertEqual(0, complete.returncode, f"prod TLS config rejected:\n{complete.stderr}")
+
+        incomplete = self._run(
+            "docker", "run", "--rm", "--entrypoint", "/otelcol-contrib",
+            "-e", "OTEL_RECEIVER_TLS_CERT_FILE=/tls/server.crt",
+            "-e", "OTEL_RECEIVER_TLS_KEY_FILE=",  # key omitted → server TLS incomplete
+            "-e", "OTEL_RECEIVER_TLS_CLIENT_CA_FILE=",
+            "-v", f"{PROD_CONFIG_PATH}:/cfg.yaml:ro", PINNED_IMAGE,
+            "validate", "--config", "/cfg.yaml", check=False,
+        )
+        self.assertNotEqual(0, incomplete.returncode, "incomplete server TLS unexpectedly validated")
+
+    # spec: F38.ac13 — mTLS is genuinely optional: the pinned image validates the prod
+    # config with server cert+key and NO OTEL_RECEIVER_TLS_CLIENT_CA_FILE provided.
+    def test_prod_tls_validates_without_client_ca_so_mtls_is_optional(self) -> None:
+        no_client_ca = self._run(
+            "docker", "run", "--rm", "--entrypoint", "/otelcol-contrib",
+            "-e", "OTEL_RECEIVER_TLS_CERT_FILE=/tls/server.crt",
+            "-e", "OTEL_RECEIVER_TLS_KEY_FILE=/tls/server.key",
+            # OTEL_RECEIVER_TLS_CLIENT_CA_FILE intentionally NOT passed → no mTLS.
+            "-v", f"{PROD_CONFIG_PATH}:/cfg.yaml:ro", PINNED_IMAGE,
+            "validate", "--config", "/cfg.yaml", check=False,
+        )
+        self.assertEqual(
+            0, no_client_ca.returncode,
+            f"prod TLS config without a client CA should validate (mTLS optional):\n{no_client_ca.stderr}",
+        )
 
     # spec: F38.ac11 — an OTLP error trace is ingested and retained via the debug exporter.
     def test_isolated_collector_ingests_and_retains_error_trace(self) -> None:

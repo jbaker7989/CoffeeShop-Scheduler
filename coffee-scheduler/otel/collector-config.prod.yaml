@@ -1,0 +1,134 @@
+# Production OTel Collector configuration — TLS/mTLS receiver overlay (BUG-055 / F38).
+#
+# This is the PRODUCTION counterpart of collector-config.yaml. It is identical except
+# that the OTLP receivers terminate TLS, so a remote agent's encrypted OTLP stream
+# (otel/telemetry.py with OTEL_EXPORTER_OTLP_CERTIFICATE set) is accepted and plaintext
+# is NOT. It is never loaded by the local developer Compose stack; deploy it with
+# docker-compose.observability.prod.yml (or your orchestrator) and mount the real
+# certificate material at the paths named by the environment variables below.
+#
+# No certificate or private key is committed here. TLS file paths come from the
+# deployment environment via ${env:...}; the operator mounts them as secrets:
+#   OTEL_RECEIVER_TLS_CERT_FILE        server certificate (PEM)    — required
+#   OTEL_RECEIVER_TLS_KEY_FILE         server private key (PEM)    — required
+#   OTEL_RECEIVER_TLS_CLIENT_CA_FILE   client CA bundle (PEM)      — set only to require mTLS
+#
+# Client authentication (mTLS) is enabled ONLY when a client CA is configured; the
+# receivers never fall back to plaintext. Rotate material by replacing the mounted
+# secrets and restarting the Collector. See otel/README.md "Production wiring".
+
+receivers:
+  otlp:
+    protocols:
+      # TLS terminates here; agents connect with insecure=False (otel/telemetry.py).
+      # client_ca_file turns on mutual TLS when the operator supplies a client CA.
+      grpc:
+        endpoint: 0.0.0.0:4317
+        tls:
+          cert_file: ${env:OTEL_RECEIVER_TLS_CERT_FILE}
+          key_file: ${env:OTEL_RECEIVER_TLS_KEY_FILE}
+          client_ca_file: ${env:OTEL_RECEIVER_TLS_CLIENT_CA_FILE}
+      http:
+        endpoint: 0.0.0.0:4318
+        tls:
+          cert_file: ${env:OTEL_RECEIVER_TLS_CERT_FILE}
+          key_file: ${env:OTEL_RECEIVER_TLS_KEY_FILE}
+          client_ca_file: ${env:OTEL_RECEIVER_TLS_CLIENT_CA_FILE}
+
+processors:
+  # First in every pipeline: apply back-pressure before any buffering processor.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  # service.name / service.version are set by each agent SDK (insert = keep the SDK value,
+  # only fill a fallback when absent); deployment.environment is owned by the Collector.
+  resource:
+    attributes:
+      - key: service.name
+        value: coffee-scheduler
+        action: insert
+      - key: service.version
+        value: 0.0.0
+        action: insert
+      - key: deployment.environment
+        value: production
+        action: upsert
+
+  # Decision needs whole traces, so this runs BEFORE batch: keep 100% of error traces,
+  # sample the remaining traces at 10%.
+  tail_sampling:
+    decision_wait: 5s
+    num_traces: 50000
+    expected_new_traces_per_sec: 10
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: sample-rest
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+  # Last: only sampled spans are batched out.
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  # Always on — the local verification path; keep it in production for incident triage.
+  debug:
+    verbosity: detailed
+
+  # Tempo (traces). retry_on_failure keeps an absent Tempo non-fatal.
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+
+  # Mimir (metrics) via Prometheus remote-write.
+  prometheusremotewrite/mimir:
+    endpoint: http://mimir:9009/api/v1/push
+    retry_on_failure:
+      enabled: true
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # Loki (logs). Loki ingests OTLP natively on /otlp.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+
+extensions:
+  # Health endpoint for the orchestrator/host to probe.
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, tail_sampling, batch]
+      exporters: [debug, otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, prometheusremotewrite/mimir]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, otlphttp/loki]
+  telemetry:
+    logs:
+      level: info

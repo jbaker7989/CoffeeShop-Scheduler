@@ -16,9 +16,13 @@ services:
     volumes:
       - ./coffee-scheduler/otel/collector-config.yaml:/etc/otelcol-contrib/collector-config.yaml:ro
     ports:
-      - "4317:4317"    # OTLP/gRPC
-      - "4318:4318"    # OTLP/HTTP
-      - "13133:13133"  # health_check extension
+      # BUG-055: publish on 127.0.0.1 only. The receivers still bind 0.0.0.0 INSIDE the
+      # container (collector-config.yaml), so other Compose services reach them at
+      # otel-collector:4317/4318; but the HOST never exposes this plaintext, unauthenticated
+      # dev Collector to the LAN. Production TLS publishing is docker-compose.observability.prod.yml.
+      - "127.0.0.1:4317:4317"    # OTLP/gRPC  (loopback-only host publication)
+      - "127.0.0.1:4318:4318"    # OTLP/HTTP  (loopback-only host publication)
+      - "127.0.0.1:13133:13133"  # health_check extension (loopback-only host publication)
     # No healthcheck on purpose. The image is distroless — no sh, no curl, no wget — so a
     # CMD-SHELL/curl probe cannot run inside the container. Health is exposed by the
     # health_check extension on 13133 and probed by the orchestrator/host (k8s httpGet, or
