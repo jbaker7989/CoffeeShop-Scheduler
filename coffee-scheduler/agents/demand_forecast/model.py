@@ -31,7 +31,8 @@ from contracts.forecast import (
 QUANTILES = {"lower": 0.10, "p70": 0.70, "upper": 0.90}
 DEFAULT_VALIDATION_DAYS = 14
 DEFAULT_SEED = 1729
-APPROACHES = ("empirical_quantile", "linear_quantile_regression")
+APPROACHES = ("empirical_quantile", "linear_quantile_regression", "shrunk_empirical_quantile")
+DEFAULT_SHRINKAGE_K = 20.0
 
 _NUMERIC_COLUMNS = (
     "day_of_week", "is_weekend", "is_holiday", "school_in_session", "temperature_2m",
@@ -173,6 +174,52 @@ def predict_empirical(rows, model) -> list[dict]:
     return predictions
 
 
+def _shrink_triple(primary: dict, backup: dict, n: int, k: float) -> dict:
+    """Blend a group's quantiles toward a better-supported backup by count weight ``n/(n+k)``."""
+    weight = n / (n + k)
+    return {name: weight * float(primary[name]) + (1.0 - weight) * float(backup[name]) for name in QUANTILES}
+
+
+def fit_shrunk_empirical_quantiles(rows, *, k: float = DEFAULT_SHRINKAGE_K) -> dict:
+    """Fit grouped quantiles with count-based shrinkage toward coarser and global estimates.
+
+    Small, noisy ``(loc, cat, hour, day_type)`` groups are pulled toward the better-supported
+    ``(loc, cat, hour)`` and global quantiles, reducing the variance of sparse groups while
+    keeping the fit deterministic and NumPy-only. It is selected only when it beats the other
+    candidates on validation pinball; on the seeded 2023-H1 data it does not (see
+    ``docs/decisions/CS-014b-acceptance-metric.md``).
+    """
+    if not np.isfinite(k) or k < 0.0:
+        raise ModelError("shrinkage k must be a finite non-negative number")
+    grouped: dict[tuple, list[float]] = {}
+    coarse: dict[tuple, list[float]] = {}
+    all_items: list[float] = []
+    for row in rows:
+        full_key = (_value(row, "location_id"), _value(row, "product_category"), _value(row, "obs_hour"), _day_type(row))
+        item = _number(_value(row, "items"))
+        grouped.setdefault(full_key, []).append(item)
+        coarse.setdefault(full_key[:3], []).append(item)
+        all_items.append(item)
+    if not all_items:
+        raise ModelError("cannot fit shrunk empirical quantiles from no rows")
+    return {"groups": {key: {"q": _triple(values), "n": len(values)} for key, values in grouped.items()},
+            "coarse": {key: {"q": _triple(values), "n": len(values)} for key, values in coarse.items()},
+            "global": _triple(all_items), "k": float(k)}
+
+
+def predict_shrunk_empirical(rows, model) -> list[dict]:
+    """Predict with two-level count shrinkage: full group toward ``(loc,cat,hour)`` toward global."""
+    k = float(model["k"])
+    predictions = []
+    for row in rows:
+        key = (_value(row, "location_id"), _value(row, "product_category"), _value(row, "obs_hour"), _day_type(row))
+        coarse = model["coarse"].get(key[:3])
+        backup = _shrink_triple(coarse["q"], model["global"], coarse["n"], k) if coarse else dict(model["global"])
+        group = model["groups"].get(key)
+        predictions.append(_shrink_triple(group["q"], backup, group["n"], k) if group else dict(backup))
+    return predictions
+
+
 def enforce_monotone_nonneg(lower, p70, upper) -> tuple[float, float, float]:
     """Repair quantile crossing and negative values for the forecast contract."""
     return tuple(max(0.0, value) for value in sorted((float(lower), float(p70), float(upper))))
@@ -212,11 +259,28 @@ def _unpack_empirical(payload: dict) -> dict:
             "global": payload["global"]}
 
 
+def _pack_shrunk(payload: dict) -> dict:
+    return {"groups": [{"key": list(key), "q": value["q"], "n": value["n"]} for key, value in payload["groups"].items()],
+            "coarse": [{"key": list(key), "q": value["q"], "n": value["n"]} for key, value in payload["coarse"].items()],
+            "global": payload["global"], "k": payload["k"]}
+
+
+def _unpack_shrunk(payload: dict) -> dict:
+    return {"groups": {tuple(entry["key"]): {"q": entry["q"], "n": entry["n"]} for entry in payload["groups"]},
+            "coarse": {tuple(entry["key"]): {"q": entry["q"], "n": entry["n"]} for entry in payload["coarse"]},
+            "global": payload["global"], "k": payload["k"]}
+
+
 def serialize_params(approach, payload) -> dict:
     """Return a JSON-safe, self-identifying stored representation of a candidate payload."""
     if approach not in APPROACHES:
         raise ModelError(f"unknown approach {approach!r}")
-    safe_payload = _pack_empirical(payload) if approach == "empirical_quantile" else _json_safe(payload)
+    if approach == "empirical_quantile":
+        safe_payload = _pack_empirical(payload)
+    elif approach == "shrunk_empirical_quantile":
+        safe_payload = _pack_shrunk(payload)
+    else:
+        safe_payload = _json_safe(payload)
     return {"approach": approach, "payload": safe_payload}
 
 
@@ -228,7 +292,11 @@ def deserialize_params(record) -> dict:
     if not isinstance(params, Mapping) or "approach" not in params or "payload" not in params:
         raise ModelError("invalid model parameters")
     payload = dict(params["payload"])
-    return _unpack_empirical(payload) if params["approach"] == "empirical_quantile" else payload
+    if params["approach"] == "empirical_quantile":
+        return _unpack_empirical(payload)
+    if params["approach"] == "shrunk_empirical_quantile":
+        return _unpack_shrunk(payload)
+    return payload
 
 
 def _current_tenant(conn):
@@ -246,9 +314,10 @@ def _load_features(conn, feature_version: str, window: tuple[date, date]) -> lis
     return [dict(zip(names, row, strict=True)) for row in rows]
 
 
-def _candidate_predictions(train_rows, validation_rows, seed: int):
+def _candidate_predictions(train_rows, validation_rows, seed: int) -> dict[str, tuple[dict, list[dict]]]:
+    """Fit every candidate on ``train_rows`` and return ``{approach: (payload, validation_predictions)}``."""
     empirical = fit_empirical_quantiles(train_rows)
-    empirical_predictions = predict_empirical(validation_rows, empirical)
+    shrunk = fit_shrunk_empirical_quantiles(train_rows)
     X_train, _columns, stats = feature_matrix(train_rows)
     X_validation, _columns, _ = feature_matrix(validation_rows, stats=stats)
     target = np.asarray([_number(row["items"]) for row in train_rows])
@@ -256,7 +325,9 @@ def _candidate_predictions(train_rows, validation_rows, seed: int):
     linear_predictions = [{name: float(predict_linear(X_validation, weights[name])[i]) for name in QUANTILES}
                           for i in range(len(validation_rows))]
     linear = {"weights": {name: value.tolist() for name, value in weights.items()}, "stats": stats}
-    return empirical, empirical_predictions, linear, linear_predictions
+    return {"empirical_quantile": (empirical, predict_empirical(validation_rows, empirical)),
+            "linear_quantile_regression": (linear, linear_predictions),
+            "shrunk_empirical_quantile": (shrunk, predict_shrunk_empirical(validation_rows, shrunk))}
 
 
 def _metrics(rows, predictions) -> dict[str, float]:
@@ -281,12 +352,10 @@ def train(conn, *, model_version, feature_version=FEATURE_VERSION, taxonomy_vers
     validation_rows = [row for row in rows if row["obs_date"] >= validation_start]
     if not train_rows or not validation_rows:
         raise ModelError("feature window does not contain both training and validation rows")
-    empirical, empirical_predictions, linear, linear_predictions = _candidate_predictions(train_rows, validation_rows, seed)
-    candidates = {"empirical_quantile": _metrics(validation_rows, empirical_predictions),
-                  "linear_quantile_regression": _metrics(validation_rows, linear_predictions)}
+    candidate_data = _candidate_predictions(train_rows, validation_rows, seed)
+    candidates = {name: _metrics(validation_rows, predictions) for name, (_payload, predictions) in candidate_data.items()}
     approach = select_model(candidates)
-    payload = empirical if approach == "empirical_quantile" else linear
-    params = serialize_params(approach, payload)
+    params = serialize_params(approach, candidate_data[approach][0])
     conn.execute("DELETE FROM forecast_models WHERE model_version = %s", (model_version,))
     conn.execute(
         """INSERT INTO forecast_models (tenant_id, model_version, feature_version, approach, taxonomy_version, params,
@@ -320,6 +389,8 @@ def load_model(conn, model_version) -> dict:
 def _predict_payload(rows, model: dict) -> list[dict]:
     if model["approach"] == "empirical_quantile":
         return predict_empirical(rows, model["payload"])
+    if model["approach"] == "shrunk_empirical_quantile":
+        return predict_shrunk_empirical(rows, model["payload"])
     X, _columns, _stats = feature_matrix(rows, stats=model["payload"]["stats"])
     return [{name: float(predict_linear(X, model["payload"]["weights"][name])[i]) for name in QUANTILES}
             for i in range(len(rows))]
