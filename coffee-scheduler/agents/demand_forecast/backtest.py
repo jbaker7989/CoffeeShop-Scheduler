@@ -290,9 +290,13 @@ def coverage_metrics(rows: Iterable[ScoredRow]) -> CoverageMetric:
 # --- per-group gate (F9.ac19) --------------------------------------------------
 
 
-def evaluate_gate(metrics: Mapping[tuple[int, str, int], GroupMetric], *, mape_limit: float = MAPE_LIMIT) -> GateOutcome:
-    """Pass only when every group is scorable and within the band; no aggregate can mask a failure."""
-    failing = tuple(sorted(k for k, m in metrics.items() if m.scorable and (m.mape is None or m.mape > mape_limit)))
+def evaluate_gate(metrics: Mapping[tuple[int, str, int], GroupMetric]) -> GateOutcome:
+    """Pass only when every group is scorable and within the band; no aggregate can mask a failure.
+
+    The band is the fixed F5 ``MAPE_LIMIT`` (≤10%) and is deliberately not caller-configurable, so
+    no override can relax the locked acceptance threshold.
+    """
+    failing = tuple(sorted(k for k, m in metrics.items() if m.scorable and (m.mape is None or m.mape > MAPE_LIMIT)))
     unscorable = tuple(sorted(k for k, m in metrics.items() if not m.scorable))
     passed = bool(metrics) and not failing and not unscorable
     return GateOutcome(passed=passed, failing_groups=failing, unscorable_groups=unscorable)
@@ -314,7 +318,6 @@ def build_report(
     group_metrics: Mapping[tuple[int, str, int], GroupMetric],
     coverage: CoverageMetric,
     gate: GateOutcome,
-    mape_limit: float = MAPE_LIMIT,
 ) -> dict:
     """Assemble the schema-versioned, deterministically ordered backtest report."""
     ordered = [group_metrics[key] for key in sorted(group_metrics)]
@@ -344,7 +347,7 @@ def build_report(
             "holdout_start": _iso(holdout_window[0]),
             "holdout_end": _iso(holdout_window[1]),
         },
-        "mape": {"definition": _MAPE_DEFINITION, "limit": mape_limit, "zero_policy": _ZERO_POLICY},
+        "mape": {"definition": _MAPE_DEFINITION, "limit": MAPE_LIMIT, "zero_policy": _ZERO_POLICY},
         "quantiles": {
             "p70_definition": "P70 hit rate is actual <= p70",
             "p70_nominal": P70_NOMINAL,
@@ -365,7 +368,7 @@ def build_report(
         "groups": groups,
         "failing_groups": [list(key) for key in gate.failing_groups],
         "unscorable_groups": [list(key) for key in gate.unscorable_groups],
-        "gate": {"passed": gate.passed, "mape_limit": mape_limit},
+        "gate": {"passed": gate.passed, "mape_limit": MAPE_LIMIT},
     }
 
 
@@ -444,6 +447,26 @@ def _load_actuals_and_keys(conn, feature_version: str, holdout: tuple[date, date
     return expected, actuals
 
 
+def resolve_official_holdout(
+    source_window: tuple[date, date], requested: tuple[date, date] | None = None
+) -> tuple[date, date]:
+    """Return the official F5 gate window — always the final 28 source dates.
+
+    An optional ``requested`` window is accepted only when it is exactly that derived window, so a
+    caller cannot cherry-pick an easier non-final 28-day subset and claim the official gate.
+    """
+    derived = derive_holdout_window(source_window)
+    if requested is None:
+        return derived
+    # Validate well-formedness first (28 inclusive dates within the source), then require the tail.
+    validate_holdout_window(requested, source_window)
+    if tuple(requested) != derived:
+        raise BacktestError(
+            f"official F5 gate uses only the final 28 source dates {derived}; refusing holdout {tuple(requested)}"
+        )
+    return derived
+
+
 def run_backtest(
     conn,
     *,
@@ -451,22 +474,20 @@ def run_backtest(
     model_version: str,
     holdout_window: tuple[date, date] | None = None,
     output_dir: str | os.PathLike[str] | None = None,
-    mape_limit: float = MAPE_LIMIT,
 ) -> dict:
-    """Backtest a persisted model over the holdout and return its honest schema-versioned report.
+    """Backtest a persisted model over the official holdout and return an honest report.
 
-    Fails closed (raises) on an unavailable feature set, an ineligible/leaky or version-mismatched
-    model, or incomplete key coverage. A completed-but-failing evaluation returns a report whose
+    The scored window is always the final 28 source dates (``resolve_official_holdout``); a supplied
+    ``holdout_window`` is accepted only when it equals that derived window, so no caller can obtain a
+    passing gate on an easier window. The ≤10% band is likewise fixed. Fails closed (raises) on an
+    unavailable feature set, an ineligible/leaky or version-mismatched model, a non-official holdout,
+    or incomplete key coverage. A completed-but-failing evaluation returns a report whose
     ``gate.passed`` is ``False`` rather than raising, so the FAIL evidence is preserved.
     """
     from agents.demand_forecast.model import load_model, predict
 
     source_window = load_source_window(conn, feature_version)
-    if holdout_window is None:
-        holdout = derive_holdout_window(source_window)
-    else:
-        # An explicit override is allowed only for controlled runs and must stay within the source window.
-        holdout = validate_holdout_window(holdout_window, source_window)
+    holdout = resolve_official_holdout(source_window, holdout_window)
 
     model = load_model(conn, model_version)
     assert_model_eligible(
@@ -479,19 +500,15 @@ def run_backtest(
 
     metrics = group_metrics(rows)
     coverage = coverage_metrics(rows)
-    gate = evaluate_gate(metrics, mape_limit=mape_limit)
+    gate = evaluate_gate(metrics)
     identity = {**model, "contract_version": CONTRACT_VERSION}
     report = build_report(
         run_id=uuid.uuid4().hex, generated_at=datetime.now(UTC), model=identity, holdout_window=holdout,
-        group_metrics=metrics, coverage=coverage, gate=gate, mape_limit=mape_limit,
+        group_metrics=metrics, coverage=coverage, gate=gate,
     )
     if output_dir is not None:
         write_report_atomic(output_dir, report, model_version=model_version)
     return report
-
-
-def _parse_date(value: str) -> date:
-    return date.fromisoformat(value)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -501,20 +518,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tenant-id", default="00000000-0000-0000-0000-000000000001")
     parser.add_argument("--model-version", required=True)
     parser.add_argument("--feature-version", required=True)
-    parser.add_argument("--holdout-start", type=_parse_date, help="explicit holdout start (controlled tests only)")
-    parser.add_argument("--holdout-end", type=_parse_date, help="explicit holdout end (controlled tests only)")
     parser.add_argument("--output-dir", help="directory for the version-scoped JSON report")
     args = parser.parse_args(argv)
-    if bool(args.holdout_start) != bool(args.holdout_end):
-        parser.error("--holdout-start and --holdout-end must be given together")
-    holdout = (args.holdout_start, args.holdout_end) if args.holdout_start else None
+    # Intentionally no holdout override: the official F5 gate always scores the final 28 source dates.
 
     from data_access.session import tenant_session
 
     with tenant_session(args.database_url, role="app_ro", tenant_id=args.tenant_id) as conn:
         report = run_backtest(
             conn, feature_version=args.feature_version, model_version=args.model_version,
-            holdout_window=holdout, output_dir=args.output_dir,
+            output_dir=args.output_dir,
         )
     passed = report["gate"]["passed"]
     print(json.dumps(report, ensure_ascii=False, indent=2))
