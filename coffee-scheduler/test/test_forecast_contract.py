@@ -313,6 +313,104 @@ class ForecastDatabaseConstraintTests(unittest.TestCase):
                 forecasts.insert(**row_at(9))
             raise psycopg.Rollback
 
+    # spec: F8.ac3 — PostgreSQL rejects non-finite NaN/Infinity interval values (BUG-065).
+    def test_database_rejects_non_finite_interval_values(self):
+        from data_access.repository import Repository
+        from data_access.session import tenant_session
+
+        NAN, INF, NINF = Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")
+        ZERO, ONE = Decimal("0"), Decimal("1")
+
+        base = datetime(2026, 1, 6, 0, tzinfo=ZoneInfo("America/New_York"))
+
+        def row_at(offset, **overrides):
+            # A different calendar window from the sibling test so a stray commit cannot
+            # collide on the live-key unique index; every FK stays valid so only the
+            # finite-value constraint is under test. The DB has no store-hours CHECK, so
+            # any distinct timestamp is fine for exercising the numeric constraints.
+            when = base + timedelta(hours=offset)
+            return to_row(valid_record(forecast_hour=when, **overrides), TENANT_ID)
+
+        with tenant_session(DSN, role="app_rw", tenant_id=TENANT_ID) as conn:
+            forecasts = Repository(conn, "forecasts")
+
+            # (C) The new constraint applies the SAME finite-exclusion sub-predicate to
+            # each of lower/p70/upper. Pin that structurally so the behavioural checks
+            # below are tied to the deployed constraint, then prove the sub-predicate
+            # itself rejects every special and accepts every finite value — deterministic
+            # per-column attribution that does not depend on the 0017 ordering CHECK.
+            constraint_def = conn.execute(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = 'forecasts_interval_finite'"
+            ).fetchone()[0]
+            for column in ("lower", "p70", "upper"):
+                for literal in ("'NaN'::numeric", "'Infinity'::numeric", "'-Infinity'::numeric"):
+                    self.assertIn(f"{column} <> {literal}", constraint_def)
+            for value, finite in ((NAN, False), (INF, False), (NINF, False),
+                                  (ZERO, True), (Decimal("-5"), True), (Decimal("42.37"), True)):
+                accepted = conn.execute(
+                    "SELECT (%s::numeric <> 'NaN'::numeric "
+                    "AND %s::numeric <> 'Infinity'::numeric "
+                    "AND %s::numeric <> '-Infinity'::numeric)",
+                    (value, value, value),
+                ).fetchone()[0]
+                self.assertEqual(accepted, finite, f"finite predicate misjudged {value!r}")
+
+            # (A) Tuples that SATISFY the 0017 ordering CHECK, so only the new
+            # forecasts_interval_finite constraint can reject them. A CheckViolation here
+            # proves the new constraint — not the pre-existing ordering CHECK — rejects
+            # the row, and the constraint name is asserted to remove all ambiguity.
+            ordering_passing = {
+                20: dict(lower=NAN, p70=NAN, upper=NAN),     # all-NaN (satisfies ordered compares)
+                21: dict(lower=ZERO, p70=NAN, upper=NAN),    # (0, NaN, NaN)
+                22: dict(lower=ZERO, p70=ONE, upper=NAN),    # NaN isolated in upper
+                23: dict(lower=ZERO, p70=ONE, upper=INF),    # (0, 1, Infinity)
+                24: dict(upper=INF),                         # +Infinity isolated in upper
+                25: dict(lower=INF, p70=INF, upper=INF),     # +Infinity in lower (ordered tuple)
+                26: dict(lower=ZERO, p70=INF, upper=INF),    # +Infinity in p70 (ordered tuple)
+            }
+            for hour, overrides in ordering_passing.items():
+                with self.assertRaises(CheckViolation) as ctx, conn.transaction():
+                    forecasts.insert(**row_at(hour, **overrides))
+                self.assertEqual(ctx.exception.diag.constraint_name, "forecasts_interval_finite")
+
+            # (B) Specials in positions that ALSO break the 0017 ordering CHECK (every
+            # -Infinity placement, plus NaN/+Infinity where they invert the bounds). These
+            # must still be rejected end-to-end; the DB co-violates both constraints, so
+            # either firing is a correct rejection. Per-column finite attribution for these
+            # is proved deterministically by group (C) above.
+            also_ordering_rejected = {
+                30: dict(lower=NAN),     # NaN in lower (NaN <= p70 is false)
+                31: dict(p70=NAN),       # NaN in p70 (NaN <= upper is false)
+                32: dict(lower=INF),     # +Infinity in lower (Inf <= p70 is false)
+                33: dict(p70=INF),       # +Infinity in p70 (Inf <= upper is false)
+                34: dict(lower=NINF),    # -Infinity in lower
+                35: dict(p70=NINF),      # -Infinity in p70
+                36: dict(upper=NINF),    # -Infinity in upper
+            }
+            for hour, overrides in also_ordering_rejected.items():
+                with self.assertRaises(CheckViolation) as ctx, conn.transaction():
+                    forecasts.insert(**row_at(hour, **overrides))
+                self.assertIn(
+                    ctx.exception.diag.constraint_name,
+                    {"forecasts_interval_finite", "forecasts_interval_valid"},
+                )
+
+            # (D) Finite boundaries remain accepted: equal bounds at zero and an ordinary
+            # ordered decimal interval. force_rollback discards them so the cases stay
+            # isolated and nothing persists.
+            with conn.transaction(force_rollback=True):
+                forecasts.insert(**row_at(40, lower=ZERO, p70=ZERO, upper=ZERO))
+                forecasts.insert(**row_at(41, lower=Decimal("35.00"), p70=Decimal("42.37"), upper=Decimal("50.00")))
+
+            # A negative finite lower is still rejected by the ORDERING constraint, not the
+            # finite one — the finite constraint must not over-reject ordinary negatives.
+            with self.assertRaises(CheckViolation) as ctx, conn.transaction():
+                forecasts.insert(**row_at(42, lower=Decimal("-0.01")))
+            self.assertEqual(ctx.exception.diag.constraint_name, "forecasts_interval_valid")
+
+            raise psycopg.Rollback
+
 
 if __name__ == "__main__":
     unittest.main()
