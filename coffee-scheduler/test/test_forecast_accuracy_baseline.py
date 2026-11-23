@@ -24,6 +24,7 @@ from pathlib import Path
 SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCHEDULER_ROOT))
 
+from agents.demand_forecast.backtest import ScoredRow, coverage_metrics, group_metrics  # noqa: E402
 from agents.demand_forecast.feature_build import (  # noqa: E402
     SOURCE_WINDOW,
     build_feature_set,
@@ -57,11 +58,10 @@ def score(records, actual: dict) -> dict:
     forecast_keys = {
         (r.location_id, r.product_category, r.forecast_hour.date(), r.forecast_hour.hour) for r in records
     }
+    scored: list[ScoredRow] = []
     err_sum = act_sum = 0.0
     predicted: list[float] = []
     actuals: list[float] = []
-    hits = covered = 0
-    groups: dict[tuple, list[tuple[float, float]]] = {}
     for record in records:
         key = (record.location_id, record.product_category, record.forecast_hour.date(), record.forecast_hour.hour)
         if key not in actual:
@@ -71,26 +71,31 @@ def score(records, actual: dict) -> dict:
         act_sum += observed
         predicted.append(p70)
         actuals.append(observed)
-        hits += 1 if observed <= p70 else 0
-        covered += 1 if float(record.lower) <= observed <= float(record.upper) else 0
-        groups.setdefault((record.location_id, record.product_category, record.forecast_hour.hour), []).append(
-            (p70, observed)
+        scored.append(
+            ScoredRow(
+                location_id=record.location_id,
+                product_category=record.product_category,
+                forecast_hour=record.forecast_hour,
+                actual=observed,
+                p70=p70,
+                lower=float(record.lower),
+                upper=float(record.upper),
+            )
         )
     if not actuals or act_sum <= 0:
         raise AssertionError("holdout produced no scorable rows; the measurement is invalid")
-    group_mapes = []
-    unscorable = 0
-    for pairs in groups.values():
-        positive = [(p, a) for p, a in pairs if a > 0]
-        if positive:
-            group_mapes.append(statistics.mean(100 * abs(p - a) / a for p, a in positive))
-        else:
-            unscorable += 1
+    # Per-group MAPE and the two calibration rates come from CS-014c's evaluator, so this guard
+    # and the official backtest can never drift apart on what those numbers mean. WAPE and
+    # pinball are computed here because backtest.py does not report them.
+    metrics = group_metrics(scored)
+    coverage = coverage_metrics(scored)
+    group_mapes = [m.mape for m in metrics.values() if m.scorable and m.mape is not None]
+    unscorable = sum(1 for m in metrics.values() if not m.scorable)
     return {
         "wape_pct": 100 * err_sum / act_sum,
         "pinball_p70": pinball_loss(actuals, predicted, QUANTILES["p70"]),
-        "p70_hit_rate": hits / len(actuals),
-        "interval_coverage": covered / len(actuals),
+        "p70_hit_rate": coverage.p70_rate,
+        "interval_coverage": coverage.interval_rate,
         "group_mape_median_pct": statistics.median(group_mapes),
         "n_scored": len(actuals),
         "unscorable_groups": unscorable,
