@@ -11,7 +11,9 @@ artifact bound to the exact `feature_version` it trained on. CS-014c (backtest) 
 **Current state (verified).**
 - `forecast_features` (migration 0019) — one 0-filled row per open store-hour × taxonomy
   category over Jan–Jun 2023, with calendar/weather/lag-rolling features and `low_history`
-  masks; `feature_sets` registry carries `feature_version = "forecast-features-v1"`.
+  masks; `feature_sets` registry carried `feature_version = "forecast-features-v1"` when CS-014b
+  was built. The CS-014a accuracy slice later bumped it to `"forecast-features-v2"` (the
+  `low_history` de-leak), so current builds register v2 and models retrain against it.
 - `contracts/forecast.py` — `ForecastRecord`/`ForecastSet`, `validate_set`, `load_vocabulary`,
   `load_store_hours`, and the `forecasts` table hardened by migration 0017 (interval CHECK,
   taxonomy/throughput FKs, soft-delete-aware live-key unique).

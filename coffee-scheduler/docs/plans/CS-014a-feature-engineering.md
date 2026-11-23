@@ -47,10 +47,22 @@ tests directly (no Codex). Land on `cs-014a-feature-engineering`; PR into `main`
   offline — the DB only supplies inputs and persistence.
 - **Honest gap masks** (`feature_sets` flags, all `false`): `has_basket_id` (no reliable basket
   grouping — CS-008), `has_evening_history` (sales thin out before the 21:00 close),
-  `has_annual_seasonality` (6-month window). Per-cell `low_history` flags open hours whose
-  window-total volume is negligible (`< 5%` of the store's busiest hour); `in_trading_hours`
-  is carried through from `weather_hourly`.
-- **Versioned + reproducible.** `FEATURE_VERSION = "forecast-features-v1"`. `feature_sets`
+  `has_annual_seasonality` (6-month window). `low_history` flags store-hours whose volume is
+  negligible (`< 5%` of the store's busiest hour); `in_trading_hours` is carried through from
+  `weather_hourly`.
+- **`low_history` is per store-hour and holdout-blind** (corrected 2026-11-22, F9.ac23). The flag
+  is identical for every category and date at a given `(store, hour)` — it was never per-cell.
+  Because it is derived from `items` (the target) yet consumed as a predictor, its share is summed
+  only over dates strictly **before** the reserved `HOLDOUT_DAYS = 28` tail, so it cannot encode
+  demand from the period a backtest scores. On the seeded 2023-H1 data the scoped and unscoped
+  flags are identical (44 store-hours, 3 flagged in both), so this removes a structural leakage
+  vector at no accuracy cost.
+- **`revenue` is target-derived — never a feature.** It comes from the same
+  `SUM(transaction_qty * unit_price)` query that produces `items`, so selecting it as a model
+  input would be near-perfect leakage. It is persisted for reporting only; F9.ac25 asserts no
+  trainer selects it.
+- **Versioned + reproducible.** `FEATURE_VERSION = "forecast-features-v2"` (bumped when the
+  `low_history` semantics changed, so v1 feature sets are not silently reinterpreted). `feature_sets`
   records version, source window, taxonomy version, row count and provenance flags. A rebuild
   of the same version is idempotent (delete-then-insert within one transaction).
 - **No new dependencies** — stdlib + `psycopg`, reusing `data_access.session`.

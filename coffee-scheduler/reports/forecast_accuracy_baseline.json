@@ -1,0 +1,34 @@
+{
+  "schema_version": "forecast-accuracy-baseline-v1",
+  "recorded_on": "2026-11-22",
+  "story": "CS-014a accuracy guard",
+  "notes": "Measured on the de-leaked forecast-features-v2 dataset with the CS-014c split (fit 2023-01-01..2023-06-02, score the reserved final-28-date holdout 2023-06-03..2023-06-30). Reproduces the CS-014c rolling-origin report exactly on every shared metric (n_scored, n_zero_actual, group_mape_median_pct, p70_hit_rate, interval_coverage, group counts), so this baseline is directly comparable to it. These are a FLOOR to defend, not a target that passes the F5 band: the open per-group MAPE gate is a metric mismatch for small-count demand (see docs/decisions/CS-014b-acceptance-metric.md).",
+  "limitations": [
+    "One-step-ahead, not multi-day-ahead. `items_lag_1h` and `items_roll_7d_same_hour` are built over the whole source window, so a scored holdout row uses actual demand from strictly earlier holdout hours. That is the intended rolling-origin protocol, but it is NOT what a week-ahead deployment does, and only `low_history` was scoped away from the holdout. A change that leans harder on the lag columns can improve this floor while degrading real multi-day-ahead accuracy.",
+    "Single fold. The `low_history` cutoff is derived from this window's tail, so leakage is closed for the final 28-day fold only; an earlier rolling-origin fold would still see its own period.",
+    "Not an F5 pass. These numbers do not meet the <=10% per-group MAPE band, which remains a metric mismatch for small-count demand pending docs/decisions/CS-014b-acceptance-metric.md."
+  ],
+  "feature_version_shape": "forecast-features-v2",
+  "approach": "linear_quantile_regression",
+  "fit_window": ["2023-01-01", "2023-06-02"],
+  "holdout_window": ["2023-06-03", "2023-06-30"],
+  "n_scored": 11088,
+  "n_zero_actual": 5759,
+  "groups": { "total": 396, "scorable": 371, "unscorable": 25 },
+  "nominal": { "p70_hit_rate": 0.70, "interval_coverage": 0.80 },
+  "metrics": {
+    "wape_pct": 54.138,
+    "pinball_p70": 1.02817,
+    "p70_hit_rate": 0.7598,
+    "interval_coverage": 0.7842,
+    "group_mape_median_pct": 71.5
+  },
+  "tolerances": {
+    "wape_pct_abs": 2.0,
+    "pinball_p70_abs": 0.05,
+    "group_mape_median_pct_abs": 3.0,
+    "calibration_drift_abs": 0.05,
+    "min_scored_rows": 10000,
+    "max_unscorable_groups": 25
+  }
+}
