@@ -14,15 +14,19 @@ sys.path.insert(0, str(SCHEDULER_ROOT))
 
 from agents.demand_forecast.feature_build import FEATURE_VERSION, SOURCE_WINDOW, build_feature_set  # noqa: E402
 from agents.demand_forecast.model import (  # noqa: E402
+    APPROACHES,
+    DEFAULT_SHRINKAGE_K,
     ModelError,
     deserialize_params,
     enforce_monotone_nonneg,
     feature_matrix,
     fit_empirical_quantiles,
     fit_linear_quantile_regression,
+    fit_shrunk_empirical_quantiles,
     pinball_loss,
     predict_empirical,
     predict_linear,
+    predict_shrunk_empirical,
     select_model,
     serialize_params,
 )
@@ -89,6 +93,37 @@ class ModelHelperTests(unittest.TestCase):
         np.testing.assert_array_equal(first, second)
         self.assertLess(pinball_loss(y, predict_linear(X, first), 0.7), 1.0)
 
+    # spec: F9.ac21 — count shrinkage pulls a noisy single-sample group toward the better-supported backup.
+    def test_ac21_shrinkage_pulls_small_group_toward_backup(self):
+        # One extreme single-sample group at hour 8; many well-behaved samples at the same (loc,cat,hour).
+        rows = [_row(1000, is_holiday=True)] + [_row(10, is_weekend=False) for _ in range(40)]
+        model = fit_shrunk_empirical_quantiles(rows, k=DEFAULT_SHRINKAGE_K)
+        raw = fit_empirical_quantiles(rows)
+        probe = _row(1000, is_holiday=True)  # hits the n=1 holiday group
+        shrunk_p70 = predict_shrunk_empirical([probe], model)[0]["p70"]
+        raw_p70 = predict_empirical([probe], raw)[0]["p70"]
+        # The raw model echoes the lone 1000; shrinkage must move it decisively toward the ~10 backup.
+        self.assertEqual(raw_p70, 1000.0)
+        self.assertLess(shrunk_p70, 500.0)
+        self.assertGreater(shrunk_p70, 10.0)
+
+    # spec: F9.ac22 — the shrunk candidate is a registered approach that serializes round-trip exactly.
+    def test_ac22_shrunk_candidate_registered_and_round_trips(self):
+        self.assertIn("shrunk_empirical_quantile", APPROACHES)
+        model = fit_shrunk_empirical_quantiles([_row(3), _row(7), _row(9, obs_hour=9)])
+        restored = deserialize_params(serialize_params("shrunk_empirical_quantile", model))
+        self.assertEqual(restored, model)
+        # Deterministic prediction, and the contract repair still yields a sorted, non-negative triple.
+        prediction = predict_shrunk_empirical([_row(5)], model)[0]
+        self.assertEqual(predict_shrunk_empirical([_row(5)], model)[0], prediction)
+        values = enforce_monotone_nonneg(prediction["lower"], prediction["p70"], prediction["upper"])
+        self.assertEqual(values, tuple(sorted(values)))
+        self.assertGreaterEqual(values[0], 0)
+        # A non-finite shrinkage constant must fail closed, never silently produce NaN forecasts.
+        for bad in (float("nan"), float("inf"), -1.0):
+            with self.assertRaises(ModelError):
+                fit_shrunk_empirical_quantiles([_row(3)], k=bad)
+
 
 _SKIP = None
 try:
@@ -125,7 +160,7 @@ class ModelDatabaseTests(unittest.TestCase):
                     summary = train(conn, model_version="test-cs014b", feature_version="test-cs014b")
                     stored = load_model(conn, "test-cs014b")
                     self.assertEqual(stored["feature_version"], "test-cs014b")
-                    self.assertEqual(set(stored["candidates"]), {"empirical_quantile", "linear_quantile_regression"})
+                    self.assertEqual(set(stored["candidates"]), set(APPROACHES))
                     # spec: F9.ac11 — the model records only the six-month 2023 window, train before validation.
                     self.assertEqual(stored["train_window_start"], date(2023, 1, 1))
                     self.assertEqual(stored["validation_window_end"], date(2023, 6, 30))
