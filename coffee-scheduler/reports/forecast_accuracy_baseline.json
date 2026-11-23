@@ -1,0 +1,29 @@
+{
+  "schema_version": "forecast-accuracy-baseline-v1",
+  "recorded_on": "2026-11-22",
+  "story": "CS-014a accuracy guard",
+  "notes": "Measured on the de-leaked forecast-features-v2 dataset with the CS-014c split (fit 2023-01-01..2023-06-02, score the reserved final-28-date holdout 2023-06-03..2023-06-30). Reproduces the CS-014c rolling-origin report exactly on every shared metric (n_scored, n_zero_actual, group_mape_median_pct, p70_hit_rate, interval_coverage, group counts), so this baseline is directly comparable to it. These are a FLOOR to defend, not a target that passes the F5 band: the open per-group MAPE gate is a metric mismatch for small-count demand (see docs/decisions/CS-014b-acceptance-metric.md).",
+  "feature_version_shape": "forecast-features-v2",
+  "approach": "linear_quantile_regression",
+  "fit_window": ["2023-01-01", "2023-06-02"],
+  "holdout_window": ["2023-06-03", "2023-06-30"],
+  "n_scored": 11088,
+  "n_zero_actual": 5759,
+  "groups": { "total": 396, "scorable": 371, "unscorable": 25 },
+  "nominal": { "p70_hit_rate": 0.70, "interval_coverage": 0.80 },
+  "metrics": {
+    "wape_pct": 54.138,
+    "pinball_p70": 1.02817,
+    "p70_hit_rate": 0.7598,
+    "interval_coverage": 0.7842,
+    "group_mape_median_pct": 71.5
+  },
+  "tolerances": {
+    "wape_pct_abs": 2.0,
+    "pinball_p70_abs": 0.05,
+    "group_mape_median_pct_abs": 3.0,
+    "calibration_drift_abs": 0.05,
+    "min_scored_rows": 10000,
+    "max_unscorable_groups": 25
+  }
+}

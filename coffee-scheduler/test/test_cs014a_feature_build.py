@@ -20,13 +20,17 @@ SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCHEDULER_ROOT))
 
 from agents.demand_forecast.feature_build import (  # noqa: E402
+    APPLICABLE_HOLIDAY_JURISDICTIONS,
     FEATURE_VERSION,
+    HOLDOUT_DAYS,
     LOW_HISTORY_SHARE,
     SOURCE_WINDOW,
     build_cell_universe,
     build_feature_set,
     calendar_features,
+    history_cutoff,
     low_history_flag,
+    low_history_map,
     provenance_flags,
     rolling_features,
     weather_features,
@@ -174,8 +178,66 @@ class MaskTests(unittest.TestCase):
         self.assertFalse(low_history_flag(Decimal("0.90")))
 
     def test_constants(self):
-        self.assertEqual(FEATURE_VERSION, "forecast-features-v1")
+        self.assertEqual(FEATURE_VERSION, "forecast-features-v2")
         self.assertEqual(SOURCE_WINDOW, (date(2023, 1, 1), date(2023, 6, 30)))
+
+    # spec: F9.ac23 — low_history is target-derived, so it must ignore the reserved holdout tail.
+    def test_ac23_low_history_ignores_holdout_dates(self):
+        window = (date(2023, 1, 1), date(2023, 3, 1))  # 60 days, so a 28-day tail leaves history
+        cutoff = history_cutoff(window)
+        self.assertEqual(cutoff, date(2023, 2, 2))  # first of the final 28 inclusive dates
+        hours = {5: StoreOpenWindow(open_hour=6, close_hour=8, open_weekdays=frozenset(range(7)))}
+        cells = build_cell_universe(hours, ["Coffee"], window)
+        # Hour 6 is busy only BEFORE the cutoff; hour 7 is busy only INSIDE the holdout tail.
+        sales = {}
+        for location_id, category, day, hour in cells:
+            busy_early = hour == 6 and day < cutoff
+            busy_late = hour == 7 and day >= cutoff
+            if busy_early or busy_late:
+                sales[(location_id, category, day, hour)] = (100, Decimal("500.00"))
+        filled = zero_fill(cells, sales)
+        scoped = low_history_map(cells, filled, cutoff=cutoff)
+        # Pre-holdout history sees only hour 6, so hour 7 is (correctly) the low-history hour.
+        self.assertFalse(scoped[(5, 6)])
+        self.assertTrue(scoped[(5, 7)])
+        # Without a cutoff the holdout spike leaks in and flips hour 7 — the defect being fixed.
+        leaky = low_history_map(cells, filled, cutoff=None)
+        self.assertFalse(leaky[(5, 7)])
+        self.assertNotEqual(scoped[(5, 7)], leaky[(5, 7)])
+
+    # spec: F9.ac23 — a window shorter than the holdout still yields a flag for every store-hour.
+    def test_ac23_low_history_falls_back_on_short_window(self):
+        cells = build_cell_universe(TINY_HOURS, ["Coffee"], TINY_WINDOW)
+        filled = zero_fill(cells, {cells[0]: (50, Decimal("10.00"))})
+        flags = low_history_map(cells, filled, cutoff=history_cutoff(TINY_WINDOW))
+        self.assertEqual({key[0] for key in flags}, {5})
+        self.assertEqual({key[1] for key in flags}, {6, 7})
+        self.assertEqual(HOLDOUT_DAYS, 28)
+
+    # spec: F9.ac24 — the rolling mean truncates to the 7 most recent prior same-hour observations.
+    def test_ac24_rolling_truncates_to_seven_observations(self):
+        # Ten prior same-hour observations: 1..10 on consecutive days at hour 6.
+        rows = [(5, "Coffee", date(2023, 1, day), 6, day) for day in range(1, 11)]
+        rolling = rolling_features(rows)
+        # The 10th row's mean must use only observations 3..9 (the last 7), not all nine priors.
+        tenth = rolling[(5, "Coffee", date(2023, 1, 10), 6)]
+        self.assertEqual(tenth[0], 9)  # lag-1 is the 9th observation
+        self.assertEqual(tenth[1], Decimal(sum(range(3, 10))) / Decimal(7))
+        self.assertNotEqual(tenth[1], Decimal(sum(range(1, 10))) / Decimal(9))
+
+    # spec: F9.ac24 — holiday reads are scoped to the jurisdictions that apply to these stores.
+    def test_ac24_holiday_jurisdictions_are_scoped(self):
+        from agents.demand_forecast.feature_build import _HOLIDAY_SQL
+
+        self.assertIn("jurisdiction", _HOLIDAY_SQL)
+        self.assertEqual(APPLICABLE_HOLIDAY_JURISDICTIONS, ("US-FED", "NY-STATE"))
+
+    # spec: F9.ac25 — `revenue` is derived from the target, so no trainer may select it.
+    def test_ac25_trainer_never_selects_revenue(self):
+        from agents.demand_forecast.model import _FEATURE_SQL
+
+        self.assertNotIn("revenue", _FEATURE_SQL.lower())
+        self.assertIn("items", _FEATURE_SQL.lower())
 
 
 # --- Category 2: DB integration (skip-gated) -----------------------------------

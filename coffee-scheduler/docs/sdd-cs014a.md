@@ -17,3 +17,17 @@ The builder is `agents/demand_forecast/feature_build.py`; the tests are
 | **F9.ac5** | `items_lag_1h` is the prior open hour for the same store+category; `items_roll_7d_same_hour` is the trailing same-hour mean; both are null at series start and never fabricated. | `test_ac5_rolling_and_lag_series_start_null` (unit) · `test_ac5_db_rolling_present` (db) |
 | **F9.ac6** | `has_basket_id`/`has_evening_history`/`has_annual_seasonality` are all false; `low_history` is false for the busiest store-hour and true for at least one late evening hour. | `test_ac6_provenance_flags_all_false` / `test_ac6_low_history_threshold` (unit) · `test_ac6_db_masks` (db) |
 | **F9.ac7** | `feature_sets` records version, source window, taxonomy version and row count; a second build of the same version is idempotent (identical row count, no duplicates) and returns zero rows with no tenant context (RLS fail-closed). | `test_ac7_db_idempotent_and_rls_fail_closed` (db) |
+
+## Accuracy-integrity slice (2026-11-22)
+
+Added after the CS-014c backtest failed the F5 band. CS-014a previously defined no accuracy target
+and no regression guard, so a feature change could silently degrade the forecaster with every gate
+still green. These ACs close the target-leakage and semantics gaps and pin the measured floor.
+The feature version is bumped to `forecast-features-v2` because feature semantics changed.
+
+| AC | Assertion | Test |
+|----|-----------|------|
+| **F9.ac23** | `low_history` is derived from `items` (the target) but consumed as a predictor, so its store-hour share is summed only over dates strictly before the reserved 28-day holdout tail; a holdout-only spike cannot change the flag, and a window shorter than the holdout still yields a flag for every store-hour. | `test_ac23_low_history_ignores_holdout_dates` · `test_ac23_low_history_falls_back_on_short_window` (unit) |
+| **F9.ac24** | `items_roll_7d_same_hour` truncates to the 7 most recent prior same-hour observations (it is not a calendar window and not same-weekday), and holiday reads are scoped to the jurisdictions that apply to these stores. | `test_ac24_rolling_truncates_to_seven_observations` · `test_ac24_holiday_jurisdictions_are_scoped` (unit) |
+| **F9.ac25** | `revenue` is derived from the same source as the target, so no trainer may select it as a feature. | `test_ac25_trainer_never_selects_revenue` (unit) |
+| **F9.ac26** | A committed, schema-versioned accuracy baseline pins the holdout floor (WAPE, pinball@P70, P70 hit rate, interval coverage, median per-group MAPE), and a re-measurement that drifts past the recorded tolerance fails. | `test_ac26_baseline_artifact_is_well_formed` (unit) · `test_ac26_accuracy_does_not_regress_past_tolerance` (db) |
