@@ -313,7 +313,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-016b — Hard constraints (legality + coverage)
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Blocked (on CS-016a, CS-013)
+- **Status:** ✅ Done (2026-11-23) — CP-SAT now encodes pre-computed CS-013 legality, coverage, capacity, shift-rule, and home-location hard constraints behind named assumptions. It reports infeasibility through a readable assumption core, retains legal premium metadata, and is documented with deterministic offline and rollback-gated coverage.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Encode the must-hold constraints in CP-SAT.
 - **Detailed specifications:**
@@ -2752,3 +2752,11 @@ closing regression evidence.
   - `validate_set` also validates field types for directly constructed dataclasses before calling string methods, collection membership, Decimal comparisons, or datetime operations; malformed values never leak raw `AttributeError` or `TypeError`.
   - Regressions cover null/numeric versions, an array category, a non-object record, missing required fields, and a non-array `records` value; canonical valid JSON and database-row round trips remain accepted.
 - **Plan:** [BUG-066 plan](./docs/plans/BUG-066-forecast-payload-types.md).
+
+### BUG-069
+- **Status:** 🐞 Open · **Type:** Cross-story data gap (blocks the F11 solver end to end) · **Found:** 2026-11-23 (Claude verification of CS-016b)
+- **Feature:** [F11](./FEATURES.md) / [F2](./FEATURES.md) · relates to [[CS-002]], [[CS-004]], [[CS-016b]]
+- **Symptom:** `compliance.engine` raises `ComplianceUnavailable: enrolled employee <id> has no school_calendar_days row for <date>` for every minor on any shift inside the demand window, so CS-016 cannot produce a legality-evaluated schedule on the seeded data.
+- **Cause:** all 8 enrolled employees carry `school_calendar_id = 'NYC-DOE-2026-27'`, which spans **2026-09-10 .. 2027-06-28**, while every forecast and transaction is **2023-01-01 .. 2023-06-30**. The two ranges do not overlap, so there is no school-session row for a 2023 shift date and the engine correctly refuses to guess a minor's school status. `NYC-DOE-2022-23` (2023-01-01 .. 2023-06-27) is loaded and does cover the demand window, but no employee references it.
+- **Why it matters:** this is not a code defect — the fail-closed behaviour is right. It is a roster/demand era mismatch that blocks CS-016b/c/d and any demo claiming legal accuracy. The CS-016b database test documents it by asserting the fail-closed error rather than pretending the data aligns.
+- **Options:** (a) point enrolled employees at the calendar covering the scheduling window (`NYC-DOE-2022-23`, plus `NYC-DOE-BASELINE` for 2023-06-28..30) — a CS-002/ETL roster data fix; (b) move the scheduling horizon into 2026-27 and generate forecasts for it, which F9 explicitly cannot support (no annual seasonality, 2023-only history); (c) decide the demo schedules a 2023 period and align the roster accordingly. Option (a) is the smallest honest fix.

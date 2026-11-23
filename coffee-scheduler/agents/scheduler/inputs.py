@@ -64,7 +64,7 @@ class StationInput:
 @dataclass(frozen=True, slots=True)
 class FixedTaskInput:
     task_id: str
-    location_id: int
+    location_id: int | None
     task: str
     role: str
     duration_minutes: int
@@ -236,10 +236,13 @@ def build_stations(rows):
 
 
 def build_fixed_tasks(rows):
+    # `location_id` is NULL for a task that applies to every store (the same convention as
+    # coverage_rules); five of the seven seeded tasks are store-agnostic, so coercing it to int
+    # unconditionally would reject real data.
     return tuple(
         FixedTaskInput(
             str(r["task_id"]),
-            int(r["location_id"]),
+            None if r["location_id"] is None else int(r["location_id"]),
             str(r["task"]),
             str(r["role"]),
             int(r["duration_minutes"]),
@@ -456,7 +459,8 @@ def assemble_solver_inputs(
     categories = load_vocabulary(conn, taxonomy_version=taxonomy_version)
     for table, key, location in (
         [("stations", x.station_id, x.location_id) for x in stations]
-        + [("fixed_tasks", x.task_id, x.location_id) for x in tasks]
+        # A fixed task with no location applies to every store, so it has nothing to resolve.
+        + [("fixed_tasks", x.task_id, x.location_id) for x in tasks if x.location_id is not None]
         + [("cost_targets", x.location_id, x.location_id) for x in costs]
         + [("employees", x.employee_id, x.home_location_id) for x in employees]
     ):
