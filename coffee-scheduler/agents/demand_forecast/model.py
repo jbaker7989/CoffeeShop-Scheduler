@@ -396,12 +396,24 @@ def _predict_payload(rows, model: dict) -> list[dict]:
             for i in range(len(rows))]
 
 
-def predict(conn, model_version, *, target_window, feature_version=None) -> ForecastSet:
-    """Apply a stored model to feature rows and return a fully validated contract envelope."""
+def predict(conn, model_version, *, target_window, feature_version=None, rows=None) -> ForecastSet:
+    """Apply a stored model to feature rows and return a fully validated contract envelope.
+
+    By default the rows come from the training table for `target_window`, which only works for a
+    window that has observed demand. Pass `rows` to score a window that has none — see
+    `agents.demand_forecast.inference.build_inference_rows`, which supplies target-free rows for a
+    future week. The target is never needed here: the design matrix reads calendar, weather and
+    lag/rolling columns only.
+    """
     model = load_model(conn, model_version)
     if feature_version is not None and feature_version != model["feature_version"]:
         raise ModelError("requested feature_version differs from the model's stored feature_version")
-    rows = _load_features(conn, model["feature_version"], target_window)
+    if rows is None:
+        rows = _load_features(conn, model["feature_version"], target_window)
+    else:
+        rows = list(rows)
+        if not rows:
+            raise ModelError("no inference rows supplied; refusing to emit an empty forecast set")
     predictions = _predict_payload(rows, model)
     records = []
     for row, raw in zip(rows, predictions, strict=True):
