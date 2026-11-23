@@ -52,6 +52,8 @@ class SchedulingModel:
     assign: dict[tuple[int, int], cp_model.IntVar]
     assumptions: dict[str, cp_model.IntVar]
     excluded: dict[tuple[int, int], LegalityVerdict]
+    slots: tuple[ShiftSlot, ...]
+    premiums: dict[tuple[int, int], Decimal]
 
 
 def _coverage_value(row: CoverageRuleInput) -> int:
@@ -129,10 +131,13 @@ def build_model(
         for index in range(len(slots))
     }
     excluded: dict[tuple[int, int], LegalityVerdict] = {}
+    premiums: dict[tuple[int, int], Decimal] = {}
     legality = legality or (lambda _employee, _slot: LegalityVerdict(True))
     for employee in employees:
         for index, slot in enumerate(slots):
             verdict = legality(employee, slot)
+            if verdict.allowed and verdict.premiums:
+                premiums[(employee.employee_id, index)] = sum((amount for _rule, amount in verdict.premiums), Decimal())
             if not verdict.allowed or verdict.binding:
                 if not verdict.binding:
                     raise SolverModelError(
@@ -242,7 +247,7 @@ def build_model(
                 model.Add(var == 0).OnlyEnforceIf(assumptions["shift_rules"])
             if slot.location_id != employee.home_location_id and not employee.cross_location_eligible:
                 model.Add(var == 0).OnlyEnforceIf(assumptions["home_location"])
-    return SchedulingModel(model, assign, assumptions, excluded)
+    return SchedulingModel(model, assign, assumptions, excluded, slots, premiums)
 
 
 def _solver() -> cp_model.CpSolver:
