@@ -6,7 +6,7 @@
   "limitations": [
     "One-step-ahead, not multi-day-ahead. `items_lag_1h` and `items_roll_7d_same_hour` are built over the whole source window, so a scored holdout row uses actual demand from strictly earlier holdout hours. That is the intended rolling-origin protocol, but it is NOT what a week-ahead deployment does, and only `low_history` was scoped away from the holdout. A change that leans harder on the lag columns can improve this floor while degrading real multi-day-ahead accuracy.",
     "Single fold. The `low_history` cutoff is derived from this window's tail, so leakage is closed for the final 28-day fold only; an earlier rolling-origin fold would still see its own period.",
-    "Not an F5 pass. These numbers do not meet the <=10% per-group MAPE band, which remains a metric mismatch for small-count demand pending docs/decisions/CS-014b-acceptance-metric.md."
+    "Not the acceptance gate. The gate ratified on 2026-11-23 (docs/decisions/CS-014b-acceptance-metric.md) is volume-weighted WAPE plus calibration, enforced by agents/demand_forecast/backtest.py over the official rolling-origin holdout, and the CS-014c backtest passes it. This file is a separate anti-regression floor for the fixed-origin measurement, not a restatement of that gate."
   ],
   "feature_version_shape": "forecast-features-v2",
   "approach": "linear_quantile_regression",

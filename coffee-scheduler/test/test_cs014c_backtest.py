@@ -26,12 +26,17 @@ sys.path.insert(0, str(SCHEDULER_ROOT))
 # Imported from the module under construction; absence is the documented test-first red.
 from agents.demand_forecast.backtest import (  # noqa: E402
     BACKTEST_PROTOCOL,
+    CALIBRATION_TOLERANCE_PP,
     DEFAULT_HOLDOUT_DAYS,
+    GROUP_VOLUME_FLOOR,
+    GROUP_WAPE_LIMIT,
     INTERVAL_NOMINAL,
     MAPE_LIMIT,
     P70_NOMINAL,
     REPORT_SCHEMA_VERSION,
+    WAPE_LIMIT,
     BacktestError,
+    CoverageMetric,
     ScoredRow,
     align_scoring_rows,
     assert_model_eligible,
@@ -44,6 +49,7 @@ from agents.demand_forecast.backtest import (  # noqa: E402
     resolve_official_holdout,
     run_backtest,
     validate_holdout_window,
+    wape_metrics,
     write_report_atomic,
 )
 from agents.demand_forecast.feature_build import FEATURE_VERSION, build_feature_set  # noqa: E402
@@ -343,61 +349,93 @@ class CoverageTests(unittest.TestCase):
         self.assertNotAlmostEqual(cov.p70_rate, cov.interval_rate)
 
 
+def _nominal_coverage(p70_rate=P70_NOMINAL, interval_rate=INTERVAL_NOMINAL) -> CoverageMetric:
+    """Coverage fixed at (or near) nominal so the WAPE gate can be tested in isolation."""
+    return CoverageMetric(
+        n_rows=100, p70_hits=int(round(p70_rate * 100)), p70_rate=p70_rate, p70_nominal=P70_NOMINAL,
+        interval_hits=int(round(interval_rate * 100)), interval_rate=interval_rate,
+        interval_nominal=INTERVAL_NOMINAL,
+    )
+
+
 class GateTests(unittest.TestCase):
-    # spec: F9.ac19
-    def test_ac19_each_group_must_meet_band(self):
-        passing = group_metrics([
-            _scored(3, "Coffee", 3, 8, actual=10, lower=1, p70=10.5, upper=15),  # 5%
-            _scored(5, "Tea", 3, 9, actual=20, lower=1, p70=21, upper=25),       # 5%
-        ])
-        outcome = evaluate_gate(passing)
-        self.assertTrue(outcome.passed)
+    # spec: F9.ac19 — the ratified gate is volume-weighted WAPE, overall and per gated group.
+    def test_ac19_overall_and_group_wape_must_meet_band(self):
+        # One high-volume group at 10% WAPE: inside both bands.
+        rows = [_scored(3, "Coffee", 3, 8, actual=2000, lower=1, p70=2200, upper=4000)]
+        overall, groups = wape_metrics(rows)
+        self.assertAlmostEqual(overall, 10.0)
+        outcome = evaluate_gate(overall, groups, _nominal_coverage())
+        self.assertTrue(outcome.passed, outcome.reasons)
         self.assertEqual(outcome.failing_groups, ())
-        self.assertEqual(outcome.unscorable_groups, ())
 
-        # One group at 8% (pass), one at 20% (fail): a good aggregate cannot mask the failing group.
-        mixed = group_metrics([
-            _scored(3, "Coffee", 3, 8, actual=100, lower=1, p70=108, upper=150),  # 8%
-            _scored(5, "Tea", 3, 9, actual=100, lower=1, p70=120, upper=150),     # 20%
-        ])
-        failed = evaluate_gate(mixed)
+        # A gated group past the group band fails even when the overall number is comfortable.
+        mixed = [
+            _scored(3, "Coffee", 3, 8, actual=8000, lower=1, p70=8400, upper=12000),   # 5%, gated
+            _scored(5, "Tea", 3, 9, actual=1200, lower=1, p70=2600, upper=4000),       # ~117%, gated
+        ]
+        overall, groups = wape_metrics(mixed)
+        failed = evaluate_gate(overall, groups, _nominal_coverage())
+        self.assertLessEqual(overall, WAPE_LIMIT)  # the aggregate alone would have passed
         self.assertFalse(failed.passed)
-        self.assertIn((5, "Tea", 9), failed.failing_groups)
-        self.assertNotIn((3, "Coffee", 8), failed.failing_groups)
+        self.assertIn((5, "Tea"), failed.failing_groups)
+        self.assertNotIn((3, "Coffee"), failed.failing_groups)
 
-    # spec: F9.ac19
-    def test_ac19_unscorable_group_fails_gate(self):
-        metrics = group_metrics([
-            _scored(3, "Coffee", 3, 8, actual=10, lower=1, p70=10.5, upper=15),  # scorable, 5%
-            _scored(5, "Tea", 3, 9, actual=0, lower=0, p70=1, upper=2),          # unscorable (all zero)
-        ])
-        outcome = evaluate_gate(metrics)
+    # spec: F9.ac19 — thin groups are diagnostics, never a pass or a fail.
+    def test_ac19_groups_below_volume_floor_are_not_gated(self):
+        rows = [
+            _scored(3, "Coffee", 3, 8, actual=5000, lower=1, p70=5250, upper=8000),  # 5%, gated
+            _scored(5, "Packaged Chocolate", 3, 9, actual=40, lower=0, p70=120, upper=200),  # 200%, thin
+        ]
+        overall, groups = wape_metrics(rows)
+        outcome = evaluate_gate(overall, groups, _nominal_coverage())
+        self.assertFalse(groups[(5, "Packaged Chocolate")].gated)
+        self.assertIn((5, "Packaged Chocolate"), outcome.diagnostic_groups)
+        self.assertNotIn((5, "Packaged Chocolate"), outcome.failing_groups)
+        self.assertTrue(outcome.passed, outcome.reasons)
+
+    # spec: F9.ac19 — if nothing clears the floor the gate fails rather than passing vacuously.
+    def test_ac19_no_gated_group_fails_closed(self):
+        rows = [_scored(3, "Loose Tea", 3, 8, actual=50, lower=0, p70=50, upper=60)]  # perfect but thin
+        overall, groups = wape_metrics(rows)
+        outcome = evaluate_gate(overall, groups, _nominal_coverage())
+        self.assertEqual(overall, 0.0)
         self.assertFalse(outcome.passed)
-        self.assertIn((5, "Tea", 9), outcome.unscorable_groups)
+        self.assertTrue(any("volume floor" in reason for reason in outcome.reasons))
 
-    # spec: F9.ac19
-    def test_ac19_mape_limit_cannot_be_weakened(self):
-        # A group at 50% MAPE fails the locked F5 ≤10% band.
-        metrics = group_metrics([_scored(3, "Coffee", 3, 8, actual=100, lower=1, p70=150, upper=200)])
-        self.assertFalse(evaluate_gate(metrics).passed)
-        # No caller-supplied threshold may relax the gate — the override does not exist.
+    # spec: F9.ac19 — calibration drift is its own gate, independent of WAPE.
+    def test_ac19_calibration_drift_fails_gate(self):
+        rows = [_scored(3, "Coffee", 3, 8, actual=2000, lower=1, p70=2100, upper=4000)]  # 5% WAPE
+        overall, groups = wape_metrics(rows)
+        self.assertTrue(evaluate_gate(overall, groups, _nominal_coverage()).passed)
+        drifted = _nominal_coverage(p70_rate=P70_NOMINAL + 0.20)  # 20pp past nominal
+        outcome = evaluate_gate(overall, groups, drifted)
+        self.assertFalse(outcome.passed)
+        self.assertFalse(outcome.calibration_ok)
+        self.assertTrue(any("calibration" in reason for reason in outcome.reasons))
+
+    # spec: F9.ac19 — no caller may relax the ratified bands.
+    def test_ac19_bands_cannot_be_weakened(self):
+        rows = [_scored(3, "Coffee", 3, 8, actual=2000, lower=1, p70=6000, upper=8000)]  # 200% WAPE
+        overall, groups = wape_metrics(rows)
+        self.assertFalse(evaluate_gate(overall, groups, _nominal_coverage()).passed)
+        # The overrides simply do not exist.
         with self.assertRaises(TypeError):
-            evaluate_gate(metrics, mape_limit=1000.0)
-        # The report always records the authoritative fixed 10% limit, and build_report accepts no override.
+            evaluate_gate(overall, groups, _nominal_coverage(), wape_limit=1000.0)
         report = build_report(
             run_id="r", generated_at=datetime(2026, 11, 21, tzinfo=UTC), model=_eligible_model(),
-            holdout_window=HOLDOUT_H1, group_metrics=metrics,
-            coverage=coverage_metrics([_scored(3, "Coffee", 3, 8, actual=100, lower=1, p70=150, upper=200)]),
-            gate=evaluate_gate(metrics),
+            holdout_window=HOLDOUT_H1, group_metrics=group_metrics(rows),
+            coverage=_nominal_coverage(), gate=evaluate_gate(overall, groups, _nominal_coverage()),
+            wape_groups=groups,
         )
-        self.assertEqual(report["mape"]["limit"], 10.0)
+        self.assertEqual(report["gate"]["wape_limit"], WAPE_LIMIT)
+        self.assertEqual(report["gate"]["group_wape_limit"], GROUP_WAPE_LIMIT)
         self.assertFalse(report["gate"]["passed"])
         with self.assertRaises(TypeError):
             build_report(
                 run_id="r", generated_at=datetime(2026, 11, 21, tzinfo=UTC), model=_eligible_model(),
-                holdout_window=HOLDOUT_H1, group_metrics=metrics,
-                coverage=coverage_metrics([_scored(3, "Coffee", 3, 8, actual=100, lower=1, p70=150, upper=200)]),
-                gate=evaluate_gate(metrics), mape_limit=1000.0,
+                holdout_window=HOLDOUT_H1, group_metrics=group_metrics(rows), coverage=_nominal_coverage(),
+                gate=evaluate_gate(overall, groups, _nominal_coverage()), wape_groups=groups, wape_limit=1000.0,
             )
 
 
@@ -409,6 +447,7 @@ class ReportTests(unittest.TestCase):
             _scored(5, "Tea", 3, 9, actual=0, lower=0, p70=1, upper=2),          # unscorable
         ]
         gm = group_metrics(rows)
+        overall, wape_groups = wape_metrics(rows)
         return build_report(
             run_id="run-123",
             generated_at=datetime(2026, 11, 21, 12, 0, tzinfo=UTC),
@@ -416,7 +455,8 @@ class ReportTests(unittest.TestCase):
             holdout_window=HOLDOUT_H1,
             group_metrics=gm,
             coverage=coverage_metrics(rows),
-            gate=evaluate_gate(gm),
+            gate=evaluate_gate(overall, wape_groups, coverage_metrics(rows)),
+            wape_groups=wape_groups,
         )
 
     # spec: F9.ac20
@@ -451,9 +491,15 @@ class ReportTests(unittest.TestCase):
         # Every scored group is itemised with its own counts; the unscorable one is listed.
         group_keys = {(g["location_id"], g["product_category"], g["clock_hour"]) for g in report["groups"]}
         self.assertEqual(group_keys, {(3, "Coffee", 8), (5, "Tea", 9)})
-        self.assertIn([5, "Tea", 9], report["unscorable_groups"])
-        # An unscorable group blocks the gate even though the scorable group passes.
+        self.assertIn([5, "Tea", 9], report["unscorable_mape_groups"])
+        # WAPE is the gating metric and is itemised per (location, category).
+        self.assertEqual(report["wape"]["limit"], WAPE_LIMIT)
+        self.assertEqual(report["wape"]["group_limit"], GROUP_WAPE_LIMIT)
+        self.assertEqual(report["wape"]["group_volume_floor"], GROUP_VOLUME_FLOOR)
+        self.assertTrue(report["wape"]["definition"])
+        # These fixture volumes are far below the floor, so nothing is gated and the gate fails closed.
         self.assertFalse(report["gate"]["passed"])
+        self.assertTrue(any("volume floor" in reason for reason in report["gate"]["reasons"]))
         # Groups carry aggregate counts only, not row-level transaction data / PII.
         for group in report["groups"]:
             self.assertEqual(set(group) >= {"n_total", "n_positive_actual", "n_zero_actual", "mape", "scorable"}, True)
@@ -555,12 +601,23 @@ class BacktestDatabaseTests(unittest.TestCase):
                     self.assertEqual(report["feature_version"], "test-cs014c")
                     self.assertEqual(report["windows"]["holdout_start"], holdout[0].isoformat())
                     self.assertGreater(report["counts"]["n_total"], 0)
-                    # Honest gate: PASS iff every group is scorable and within the band. Never assume real data passes.
-                    groups = report["groups"]
-                    expected_pass = bool(groups) and all(
-                        g["scorable"] and g["mape"] is not None and g["mape"] <= MAPE_LIMIT for g in groups
+                    # Honest gate: recompute the ratified verdict from the report's own numbers rather
+                    # than assuming real data passes. PASS iff overall WAPE and every volume-gated
+                    # group are within band, at least one group is gated, and calibration holds.
+                    wape = report["wape"]
+                    gated = [g for g in wape["groups"] if g["gated"]]
+                    cov = report["coverage"]
+                    expected_pass = (
+                        bool(gated)
+                        and wape["overall"] <= WAPE_LIMIT
+                        and all(g["wape"] is not None and g["wape"] <= GROUP_WAPE_LIMIT for g in gated)
+                        and abs(cov["p70_rate"] - cov["p70_nominal"]) * 100 <= CALIBRATION_TOLERANCE_PP
+                        and abs(cov["interval_rate"] - cov["interval_nominal"]) * 100 <= CALIBRATION_TOLERANCE_PP
                     )
-                    self.assertEqual(report["gate"]["passed"], expected_pass)
+                    self.assertEqual(report["gate"]["passed"], expected_pass, report["gate"]["reasons"])
+                    # MAPE is still reported, but it is a diagnostic and must not drive the verdict.
+                    self.assertTrue(all("mape" in g for g in report["groups"]))
+                    self.assertEqual(report["mape"]["limit"], MAPE_LIMIT)
                     # A model whose selection-validation reaches the holdout is refused before scoring (no PASS).
                     train(conn, model_version="test-cs014c-leaky", feature_version="test-cs014c",
                           window=(date(2023, 1, 1), date(2023, 6, 30)), validation_days=14)

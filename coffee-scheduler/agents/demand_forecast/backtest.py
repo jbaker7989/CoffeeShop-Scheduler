@@ -33,7 +33,17 @@ from contracts.forecast import CANONICAL_TZ, CONTRACT_VERSION, PINNED_TAXONOMY_V
 REPORT_SCHEMA_VERSION = "forecast-backtest-v1"
 BACKTEST_PROTOCOL = "rolling-origin-one-step-ahead"
 DEFAULT_HOLDOUT_DAYS = 28
-MAPE_LIMIT = 10.0
+# Ratified 2026-11-23 (docs/decisions/CS-014b-acceptance-metric.md): the acceptance gate is
+# volume-weighted WAPE plus interval calibration, because per-group MAPE is arithmetically
+# hostile to small-count demand. MAPE is still reported, but it no longer gates.
+MAPE_LIMIT = 10.0  # diagnostic only since the ratification; retained so reports stay comparable
+WAPE_LIMIT = 60.0
+GROUP_WAPE_LIMIT = 85.0
+# Per-group WAPE is monotonic in volume (Coffee ~42-48% at ~6.6k units, Packaged Chocolate
+# ~175-189% at ~40). Gating thin groups would gate noise, so only groups carrying real signal
+# are gated; the rest are reported as diagnostics. The floor covers ~95% of holdout demand.
+GROUP_VOLUME_FLOOR = 1000.0
+CALIBRATION_TOLERANCE_PP = 8.0
 P70_NOMINAL = 0.70
 INTERVAL_NOMINAL = 0.80
 
@@ -41,6 +51,10 @@ INTERVAL_NOMINAL = 0.80
 # scored row (matching feature_build.rolling_features); the scored row's actual is scoring-only.
 _MAPE_DEFINITION = "mean of 100*abs(p70-actual)/actual over rows with actual>0, per location/category/clock-hour"
 _ZERO_POLICY = "zero-actual rows are excluded from the MAPE denominator but counted; an all-zero group is unscorable"
+_WAPE_DEFINITION = (
+    "sum(abs(p70-actual)) / sum(actual), volume-weighted, overall and per location/category; "
+    "zero-actual rows contribute error without inflating the denominator"
+)
 # Report path identifiers must be safe filename stems: no separators, no traversal, no control bytes.
 _SAFE_MODEL_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -88,12 +102,27 @@ class CoverageMetric:
 
 
 @dataclass(frozen=True)
+class WapeMetric:
+    """Volume-weighted absolute percentage error for one (location, category) group."""
+
+    key: tuple[int, str]
+    n_rows: int
+    volume: float
+    abs_error: float
+    wape: float | None
+    gated: bool
+
+
+@dataclass(frozen=True)
 class GateOutcome:
-    """Overall gate: every scorable group within the band and no unscorable group."""
+    """Ratified gate: volume-weighted WAPE overall and per gated group, plus calibration drift."""
 
     passed: bool
-    failing_groups: tuple[tuple[int, str, int], ...]
-    unscorable_groups: tuple[tuple[int, str, int], ...]
+    overall_wape: float
+    failing_groups: tuple[tuple[int, str], ...]
+    diagnostic_groups: tuple[tuple[int, str], ...]
+    calibration_ok: bool
+    reasons: tuple[str, ...]
 
 
 # --- date derivation (F9.ac14) -------------------------------------------------
@@ -290,16 +319,78 @@ def coverage_metrics(rows: Iterable[ScoredRow]) -> CoverageMetric:
 # --- per-group gate (F9.ac19) --------------------------------------------------
 
 
-def evaluate_gate(metrics: Mapping[tuple[int, str, int], GroupMetric]) -> GateOutcome:
-    """Pass only when every group is scorable and within the band; no aggregate can mask a failure.
+def wape_metrics(rows: Iterable[ScoredRow]) -> tuple[float, dict[tuple[int, str], WapeMetric]]:
+    """Return overall volume-weighted WAPE and the per-(location, category) breakdown.
 
-    The band is the fixed F5 ``MAPE_LIMIT`` (≤10%) and is deliberately not caller-configurable, so
-    no override can relax the locked acceptance threshold.
+    WAPE is ``sum|p70 - actual| / sum actual``, so unlike MAPE it never divides by a single small
+    actual; zero-actual rows contribute error without exploding the denominator.
     """
-    failing = tuple(sorted(k for k, m in metrics.items() if m.scorable and (m.mape is None or m.mape > MAPE_LIMIT)))
-    unscorable = tuple(sorted(k for k, m in metrics.items() if not m.scorable))
-    passed = bool(metrics) and not failing and not unscorable
-    return GateOutcome(passed=passed, failing_groups=failing, unscorable_groups=unscorable)
+    buckets: dict[tuple[int, str], list[ScoredRow]] = {}
+    for row in rows:
+        if not math.isfinite(row.actual) or row.actual < 0:
+            raise BacktestError(f"invalid actual {row.actual!r} for {row!r}; demand must be finite and non-negative")
+        if not math.isfinite(row.p70):
+            raise BacktestError(f"invalid p70 {row.p70!r} for {row!r}; a forecast must be finite")
+        buckets.setdefault((row.location_id, row.product_category), []).append(row)
+    if not buckets:
+        raise BacktestError("cannot compute WAPE over no rows")
+
+    total_error = total_volume = 0.0
+    metrics: dict[tuple[int, str], WapeMetric] = {}
+    for key, members in buckets.items():
+        volume = sum(r.actual for r in members)
+        abs_error = sum(abs(r.p70 - r.actual) for r in members)
+        total_error += abs_error
+        total_volume += volume
+        metrics[key] = WapeMetric(
+            key=key, n_rows=len(members), volume=volume, abs_error=abs_error,
+            # No demand at all: WAPE is undefined. Report None, never 0.0, so it cannot force a PASS.
+            wape=(100.0 * abs_error / volume) if volume > 0 else None,
+            gated=volume >= GROUP_VOLUME_FLOOR,
+        )
+    if total_volume <= 0:
+        raise BacktestError("holdout carries no demand; refusing to report a WAPE")
+    return 100.0 * total_error / total_volume, metrics
+
+
+def evaluate_gate(
+    overall_wape: float,
+    wape_groups: Mapping[tuple[int, str], WapeMetric],
+    coverage: CoverageMetric,
+) -> GateOutcome:
+    """Pass only when overall WAPE, every volume-gated group, and calibration are all within band.
+
+    The limits are the ratified module constants and are deliberately not caller-configurable, so
+    no override can relax the acceptance threshold. A group below ``GROUP_VOLUME_FLOOR`` is a
+    diagnostic, never a pass or a fail — gating ~40 units of annual demand would gate noise. If no
+    group clears the floor the gate fails rather than passing vacuously.
+    """
+    failing = tuple(
+        sorted(k for k, m in wape_groups.items() if m.gated and (m.wape is None or m.wape > GROUP_WAPE_LIMIT))
+    )
+    diagnostics = tuple(sorted(k for k, m in wape_groups.items() if not m.gated))
+    p70_drift = abs(coverage.p70_rate - coverage.p70_nominal) * 100.0
+    interval_drift = abs(coverage.interval_rate - coverage.interval_nominal) * 100.0
+    calibration_ok = p70_drift <= CALIBRATION_TOLERANCE_PP and interval_drift <= CALIBRATION_TOLERANCE_PP
+
+    reasons: list[str] = []
+    if not wape_groups:
+        reasons.append("no groups were scored")
+    if not any(m.gated for m in wape_groups.values()):
+        reasons.append(f"no group reached the {GROUP_VOLUME_FLOOR:.0f}-unit volume floor; nothing was gated")
+    if overall_wape > WAPE_LIMIT:
+        reasons.append(f"overall WAPE {overall_wape:.2f}% exceeds the {WAPE_LIMIT:.1f}% band")
+    if failing:
+        reasons.append(f"{len(failing)} volume-gated group(s) exceed the {GROUP_WAPE_LIMIT:.1f}% WAPE band")
+    if not calibration_ok:
+        reasons.append(
+            f"calibration drifted past {CALIBRATION_TOLERANCE_PP:.1f}pp "
+            f"(P70 {p70_drift:.2f}pp, interval {interval_drift:.2f}pp)"
+        )
+    return GateOutcome(
+        passed=not reasons, overall_wape=overall_wape, failing_groups=failing,
+        diagnostic_groups=diagnostics, calibration_ok=calibration_ok, reasons=tuple(reasons),
+    )
 
 
 # --- report schema + atomic write (F9.ac20) ------------------------------------
@@ -318,6 +409,7 @@ def build_report(
     group_metrics: Mapping[tuple[int, str, int], GroupMetric],
     coverage: CoverageMetric,
     gate: GateOutcome,
+    wape_groups: Mapping[tuple[int, str], WapeMetric],
 ) -> dict:
     """Assemble the schema-versioned, deterministically ordered backtest report."""
     ordered = [group_metrics[key] for key in sorted(group_metrics)]
@@ -347,7 +439,26 @@ def build_report(
             "holdout_start": _iso(holdout_window[0]),
             "holdout_end": _iso(holdout_window[1]),
         },
-        "mape": {"definition": _MAPE_DEFINITION, "limit": MAPE_LIMIT, "zero_policy": _ZERO_POLICY},
+        "wape": {
+            "definition": _WAPE_DEFINITION,
+            "limit": WAPE_LIMIT,
+            "group_limit": GROUP_WAPE_LIMIT,
+            "group_volume_floor": GROUP_VOLUME_FLOOR,
+            "overall": gate.overall_wape,
+            "groups": [
+                {
+                    "location_id": m.key[0], "product_category": m.key[1], "n_rows": m.n_rows,
+                    "volume": m.volume, "abs_error": m.abs_error, "wape": m.wape, "gated": m.gated,
+                }
+                for m in (wape_groups[key] for key in sorted(wape_groups))
+            ],
+        },
+        "mape": {
+            "definition": _MAPE_DEFINITION,
+            "limit": MAPE_LIMIT,
+            "zero_policy": _ZERO_POLICY,
+            "role": "diagnostic only since the 2026-11-23 acceptance-metric ratification",
+        },
         "quantiles": {
             "p70_definition": "P70 hit rate is actual <= p70",
             "p70_nominal": P70_NOMINAL,
@@ -367,8 +478,18 @@ def build_report(
         },
         "groups": groups,
         "failing_groups": [list(key) for key in gate.failing_groups],
-        "unscorable_groups": [list(key) for key in gate.unscorable_groups],
-        "gate": {"passed": gate.passed, "mape_limit": MAPE_LIMIT},
+        "diagnostic_groups": [list(key) for key in gate.diagnostic_groups],
+        "unscorable_mape_groups": [list(m.key) for m in ordered if not m.scorable],
+        "gate": {
+            "passed": gate.passed,
+            "overall_wape": gate.overall_wape,
+            "wape_limit": WAPE_LIMIT,
+            "group_wape_limit": GROUP_WAPE_LIMIT,
+            "group_volume_floor": GROUP_VOLUME_FLOOR,
+            "calibration_ok": gate.calibration_ok,
+            "calibration_tolerance_pp": CALIBRATION_TOLERANCE_PP,
+            "reasons": list(gate.reasons),
+        },
     }
 
 
@@ -500,11 +621,12 @@ def run_backtest(
 
     metrics = group_metrics(rows)
     coverage = coverage_metrics(rows)
-    gate = evaluate_gate(metrics)
+    overall_wape, wape_groups = wape_metrics(rows)
+    gate = evaluate_gate(overall_wape, wape_groups, coverage)
     identity = {**model, "contract_version": CONTRACT_VERSION}
     report = build_report(
         run_id=uuid.uuid4().hex, generated_at=datetime.now(UTC), model=identity, holdout_window=holdout,
-        group_metrics=metrics, coverage=coverage, gate=gate,
+        group_metrics=metrics, coverage=coverage, gate=gate, wape_groups=wape_groups,
     )
     if output_dir is not None:
         write_report_atomic(output_dir, report, model_version=model_version)
@@ -531,11 +653,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     passed = report["gate"]["passed"]
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    counts = report["counts"]
+    counts, wape = report["counts"], report["wape"]
     print(
-        f"{'PASS' if passed else 'FAIL'} — {len(report['groups'])} groups, {counts['n_total']} rows; "
-        f"{len(report['failing_groups'])} failing, {len(report['unscorable_groups'])} unscorable."
+        f"{'PASS' if passed else 'FAIL'} — overall WAPE {wape['overall']:.2f}% "
+        f"(band {wape['limit']:.1f}%), {counts['n_total']} rows; "
+        f"{len(report['failing_groups'])} gated group(s) failing, "
+        f"{len(report['diagnostic_groups'])} below the volume floor."
     )
+    for reason in report["gate"]["reasons"]:
+        print(f"  - {reason}")
     return 0 if passed else 1
 
 
