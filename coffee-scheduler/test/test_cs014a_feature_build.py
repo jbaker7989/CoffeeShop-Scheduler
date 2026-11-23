@@ -25,6 +25,7 @@ from agents.demand_forecast.feature_build import (  # noqa: E402
     HOLDOUT_DAYS,
     LOW_HISTORY_SHARE,
     SOURCE_WINDOW,
+    FeatureBuildError,
     build_cell_universe,
     build_feature_set,
     calendar_features,
@@ -205,14 +206,43 @@ class MaskTests(unittest.TestCase):
         self.assertFalse(leaky[(5, 7)])
         self.assertNotEqual(scoped[(5, 7)], leaky[(5, 7)])
 
-    # spec: F9.ac23 — a window shorter than the holdout still yields a flag for every store-hour.
-    def test_ac23_low_history_falls_back_on_short_window(self):
+    # spec: F9.ac23 — a window with no pre-cutoff history must fail, never silently re-leak.
+    def test_ac23_low_history_refuses_window_shorter_than_holdout(self):
         cells = build_cell_universe(TINY_HOURS, ["Coffee"], TINY_WINDOW)
         filled = zero_fill(cells, {cells[0]: (50, Decimal("10.00"))})
-        flags = low_history_map(cells, filled, cutoff=history_cutoff(TINY_WINDOW))
+        with self.assertRaises(FeatureBuildError):
+            low_history_map(cells, filled, cutoff=history_cutoff(TINY_WINDOW))
+        # cutoff=None is the explicit, documented opt-out for offline fixtures.
+        flags = low_history_map(cells, filled, cutoff=None)
         self.assertEqual({key[0] for key in flags}, {5})
         self.assertEqual({key[1] for key in flags}, {6, 7})
         self.assertEqual(HOLDOUT_DAYS, 28)
+
+    # spec: F9.ac23 — holdout_days must be at least 1 or the cutoff would disable scoping.
+    def test_ac23_history_cutoff_rejects_non_positive_holdout(self):
+        self.assertEqual(history_cutoff((date(2023, 1, 1), date(2023, 3, 1)), 28), date(2023, 2, 2))
+        for bad in (0, -5):
+            with self.assertRaises(ValueError):
+                history_cutoff(SOURCE_WINDOW, bad)
+
+    # spec: F9.ac23 — a store with cells but no pre-cutoff volume is flagged low-history throughout.
+    def test_ac23_store_without_pre_cutoff_history_is_flagged(self):
+        window = (date(2023, 1, 1), date(2023, 3, 1))
+        cutoff = history_cutoff(window)
+        hours = {
+            5: StoreOpenWindow(open_hour=6, close_hour=8, open_weekdays=frozenset(range(7))),
+            8: StoreOpenWindow(open_hour=6, close_hour=8, open_weekdays=frozenset(range(7))),
+        }
+        cells = build_cell_universe(hours, ["Coffee"], window)
+        # Store 5 sells only before the cutoff; store 8 only inside the holdout tail.
+        sales = {
+            cell: (100, Decimal("500.00"))
+            for cell in cells
+            if (cell[0] == 5 and cell[2] < cutoff) or (cell[0] == 8 and cell[2] >= cutoff)
+        }
+        flags = low_history_map(cells, zero_fill(cells, sales), cutoff=cutoff)
+        self.assertFalse(flags[(5, 6)])  # store 5 has real pre-cutoff history
+        self.assertTrue(all(flags[(8, hour)] for hour in (6, 7)))  # store 8 has none at all
 
     # spec: F9.ac24 — the rolling mean truncates to the 7 most recent prior same-hour observations.
     def test_ac24_rolling_truncates_to_seven_observations(self):
@@ -230,7 +260,8 @@ class MaskTests(unittest.TestCase):
         from agents.demand_forecast.feature_build import _HOLIDAY_SQL
 
         self.assertIn("jurisdiction", _HOLIDAY_SQL)
-        self.assertEqual(APPLICABLE_HOLIDAY_JURISDICTIONS, ("US-FED", "NY-STATE"))
+        self.assertIn("ANY(%s)", _HOLIDAY_SQL)  # bound parameter, not an inlined literal
+        self.assertEqual(APPLICABLE_HOLIDAY_JURISDICTIONS, ("US-FED", "NY-STATE", "NYC"))
 
     # spec: F9.ac25 — `revenue` is derived from the target, so no trainer may select it.
     def test_ac25_trainer_never_selects_revenue(self):
@@ -280,6 +311,41 @@ class FeatureBuildDatabaseTests(unittest.TestCase):
             f"SELECT * FROM forecast_features WHERE feature_version = %s {where}",
             (TEST_VERSION, *params),
         ).fetchall()
+
+    # spec: F9.ac24 — a jurisdiction outside the applicable set must not silently drop holidays.
+    def test_ac24_db_holiday_jurisdictions_cover_the_window(self):
+        from data_access.session import open_session_context
+
+        start, end = SOURCE_WINDOW
+        with psycopg.connect(DSN) as conn:
+            try:
+                with conn.transaction():
+                    open_session_context(conn, role="app_rw", tenant_id=TENANT_ID)
+                    present = {
+                        row[0]
+                        for row in conn.execute(
+                            "SELECT DISTINCT jurisdiction FROM holidays WHERE date BETWEEN %s AND %s",
+                            (start, end),
+                        ).fetchall()
+                    }
+                    self.assertTrue(present, "no holidays in the source window to scope")
+                    # Tripwire: a new jurisdiction forces a conscious decision instead of a silent
+                    # exclusion that would quietly stop setting is_holiday.
+                    unexpected = present - set(APPLICABLE_HOLIDAY_JURISDICTIONS)
+                    self.assertEqual(
+                        unexpected, set(),
+                        f"holidays carry jurisdiction(s) {unexpected} that the feature build excludes; "
+                        "widen APPLICABLE_HOLIDAY_JURISDICTIONS or confirm the exclusion is intended",
+                    )
+                    # A NULL jurisdiction is excluded by `= ANY(...)`, so it would vanish silently.
+                    nulls = conn.execute(
+                        "SELECT count(*) FROM holidays WHERE date BETWEEN %s AND %s AND jurisdiction IS NULL",
+                        (start, end),
+                    ).fetchone()[0]
+                    self.assertEqual(nulls, 0, "a NULL-jurisdiction holiday would be dropped silently")
+                    raise _Rollback
+            except _Rollback:
+                pass
 
     # spec: F9.ac1 — persisted row count equals the open-hour cell universe.
     def test_ac1_db_row_count_matches_open_hours(self):

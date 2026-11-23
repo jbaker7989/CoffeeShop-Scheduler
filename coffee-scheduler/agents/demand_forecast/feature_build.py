@@ -31,12 +31,16 @@ SOURCE_WINDOW = (date(2023, 1, 1), date(2023, 6, 30))
 # low_history: the evening tail the model has almost no signal for.
 LOW_HISTORY_SHARE = Decimal("0.05")
 # low_history is derived from `items` (the target) but is consumed as a PREDICTOR, so it is
-# computed only from dates before the reserved holdout tail. Matches CS-014c's holdout length so
-# the backtest can never score a row whose feature saw that row's period.
+# computed only from dates before the reserved holdout tail. This closes the leak for the FINAL
+# fold only: a rolling-origin backtest whose origin precedes that cutoff still scores rows whose
+# low_history was summed over that fold's own period. The length mirrors the 28-day holdout the
+# CS-014c backtest uses; CS-014c is not on main yet, so nothing here enforces that agreement.
 HOLDOUT_DAYS = 28
-# Every holiday calendar loaded for this tenant applies to its NYC stores; scoping the read keeps
-# a future out-of-jurisdiction calendar from silently flagging these dates.
-APPLICABLE_HOLIDAY_JURISDICTIONS = ("US-FED", "NY-STATE")
+# Holidays in any of these jurisdictions apply to this tenant's NYC stores (tenants carry
+# `NY-STATE+NYC`). Scoping the read keeps a future out-of-jurisdiction calendar from flagging
+# these dates; `test_ac24_db_holiday_jurisdictions_cover_the_window` trips if a new jurisdiction
+# appears, so widening this set stays a conscious decision rather than a silent exclusion.
+APPLICABLE_HOLIDAY_JURISDICTIONS = ("US-FED", "NY-STATE", "NYC")
 
 _WEATHER_KEYS = ("temperature_2m", "precipitation", "rain", "snowfall", "weather_bucket", "in_trading_hours")
 
@@ -330,11 +334,28 @@ def low_history_map(
     The flag is per store-hour (identical for every category and date at that store-hour), not
     per cell. Because it is derived from `items` — the target — yet consumed as a predictor, the
     share is summed only over dates strictly BEFORE `cutoff`, so it can never encode demand from
-    the reserved holdout tail. `cutoff=None`, or a cutoff that would leave no history at all
-    (a window shorter than the holdout), falls back to the whole supplied window.
+    the reserved holdout tail.
+
+    `cutoff=None` deliberately opts out and scores the whole window; it is target-leaky and is
+    meant for offline fixtures, not for a persisted feature set. A `cutoff` that leaves no history
+    at all raises `FeatureBuildError` rather than silently falling back, so a short-window rebuild
+    can never produce a leaky dataset that looks like a correctly scoped one.
+
+    A store with cells but no pre-cutoff volume has a peak of zero, so every one of its hours is
+    flagged low-history. That is the intended reading — there is no signal for that store yet —
+    and `low_history` is a NOT NULL boolean with no third state to record it more precisely.
     """
     cell_list = list(cells)
-    scoped = [cell for cell in cell_list if cutoff is None or cell[2] < cutoff] or cell_list
+    if cutoff is None:
+        scoped = cell_list
+    else:
+        scoped = [cell for cell in cell_list if cell[2] < cutoff]
+        if cell_list and not scoped:
+            raise FeatureBuildError(
+                f"no feature dates fall before the holdout cutoff {cutoff}; refusing to fall back "
+                "to a whole-window low_history that would encode the target. Widen the window, "
+                "lower holdout_days, or pass cutoff=None for an offline fixture."
+            )
     # Key off every cell so a store-hour absent from the scoped history still gets a flag.
     store_hour_items: dict[tuple[int, int], int] = {
         (location_id, hour): 0 for location_id, _category, _obs_date, hour in cell_list
@@ -353,7 +374,13 @@ def low_history_map(
 
 
 def history_cutoff(window: tuple[date, date], holdout_days: int = HOLDOUT_DAYS) -> date:
-    """First date of the reserved holdout tail; target-derived features use only earlier dates."""
+    """First date of the reserved holdout tail; target-derived features use only earlier dates.
+
+    `holdout_days` must be at least 1: zero or a negative value would push the cutoff past the
+    window's end, silently making every date "history" and re-leaking the target.
+    """
+    if holdout_days < 1:
+        raise ValueError(f"holdout_days must be at least 1, got {holdout_days}")
     _start, end = window
     return end - timedelta(days=holdout_days - 1)
 

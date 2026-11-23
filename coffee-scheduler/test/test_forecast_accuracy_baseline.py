@@ -47,7 +47,16 @@ def load_baseline() -> dict:
 
 
 def score(records, actual: dict) -> dict:
-    """Compute the holdout metrics from contract records plus the actual items per cell."""
+    """Compute the holdout metrics from contract records plus the actual items per cell.
+
+    Also reports how far the forecast and actual key sets diverge. Silently skipping unmatched
+    cells would let a shrinking scored population *improve* the error metrics (the thin evening
+    hours are the hardest), so the caller asserts both counts are zero rather than trusting a
+    row-count floor.
+    """
+    forecast_keys = {
+        (r.location_id, r.product_category, r.forecast_hour.date(), r.forecast_hour.hour) for r in records
+    }
     err_sum = act_sum = 0.0
     predicted: list[float] = []
     actuals: list[float] = []
@@ -85,6 +94,8 @@ def score(records, actual: dict) -> dict:
         "group_mape_median_pct": statistics.median(group_mapes),
         "n_scored": len(actuals),
         "unscorable_groups": unscorable,
+        "forecasts_without_actual": len(forecast_keys - set(actual)),
+        "actuals_without_forecast": len(set(actual) - forecast_keys),
     }
 
 
@@ -97,9 +108,17 @@ class BaselineArtifactTests(unittest.TestCase):
             self.assertIsInstance(baseline["metrics"][name], (int, float))
         for name in ("wape_pct_abs", "pinball_p70_abs", "group_mape_median_pct_abs", "calibration_drift_abs"):
             self.assertGreater(baseline["tolerances"][name], 0)
-        # The holdout must be the reserved tail the target-derived features are blind to.
+        # Consumed by the DB test below, so a baseline missing them must fail here, not with a
+        # KeyError mid-measurement.
+        self.assertGreater(baseline["tolerances"]["min_scored_rows"], 0)
+        self.assertGreaterEqual(baseline["tolerances"]["max_unscorable_groups"], 0)
+        self.assertGreater(baseline["n_scored"], 0)
+        # The holdout is the tail `low_history` is scoped away from. NOTE: the lag/rolling columns
+        # are NOT blind to it — they use actuals strictly before each scored row by design, so this
+        # floor is a one-step-ahead score, not a 28-day-ahead one (see the baseline's `limitations`).
         self.assertEqual(baseline["holdout_window"][0], history_cutoff(SOURCE_WINDOW).isoformat())
         self.assertEqual(baseline["holdout_window"][1], SOURCE_WINDOW[1].isoformat())
+        self.assertTrue(baseline.get("limitations"), "the baseline must state what it does not cover")
 
 
 _SKIP = None
@@ -144,6 +163,22 @@ class AccuracyRegressionTests(unittest.TestCase):
             except _Rollback:
                 pass
 
+        # The population must be identical to the baseline's, or the metrics below are computed
+        # over different rows and are not comparable to the recorded floor. Dropping the thin
+        # evening cells would *improve* every error metric, so this is asserted exactly.
+        self.assertEqual(
+            measured["forecasts_without_actual"], 0,
+            "forecast cells have no matching actual; the scored population drifted",
+        )
+        self.assertEqual(
+            measured["actuals_without_forecast"], 0,
+            "actual cells were never forecast; the scored population drifted",
+        )
+        self.assertEqual(
+            measured["n_scored"], baseline["n_scored"],
+            f"scored {measured['n_scored']} rows vs baseline {baseline['n_scored']}; "
+            "refresh reports/forecast_accuracy_baseline.json if this change is intended",
+        )
         self.assertGreaterEqual(measured["n_scored"], tolerance["min_scored_rows"])
         self.assertLessEqual(measured["unscorable_groups"], tolerance["max_unscorable_groups"])
         # Error metrics: lower is better, so only upward drift past tolerance is a regression.
