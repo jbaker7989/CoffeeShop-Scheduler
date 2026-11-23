@@ -324,7 +324,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-016c — Soft objectives & cost function
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Blocked (on CS-016b)
+- **Status:** ✅ Done (2026-11-23) — Added an integer-only, inspectable CP-SAT objective for labour cost, soft coverage shortfall, overtime, legal premiums, and sales-prior labour-percent breaches. The implementation carries slot and premium metadata from the hard model, records unavailable revenue priors as omissions, and is verified on synthetic feasible schedules plus a rollback-gated one-forward-day build; it does not claim a real full-week optimisation while BUG-072 and BUG-073 remain open.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
 - **Description:** Encode the weighted objective the solver optimises.
 - **Detailed specifications:**
@@ -2400,7 +2400,7 @@ closing regression evidence.
 | CS-016 | F11 | P1 | L | Blocked (umbrella) |
 | CS-016a | F11 | P1 | M | Blocked |
 | CS-016b | F11 | P1 | M | Blocked |
-| CS-016c | F11 | P1 | S | Blocked |
+| CS-016c | F11 | P1 | S | ✅ Done (2026-11-23) |
 | CS-016d | F11 | P1 | M | Blocked |
 | CS-017 | F13 | P2 | S | Not started |
 | CS-018 | F14 | P2 | L | Not started (umbrella) |
