@@ -22,7 +22,7 @@ from agents.scheduler.shifts import (
     build_slot_grid,
     find_rule_value,
 )
-from compliance.engine import Evaluation, Proposal, ShiftSpan, judge, load_snapshot
+from compliance.engine import Evaluation, Proposal, Rule, ShiftSpan, Snapshot, judge, load_snapshot
 from contracts.forecast import CANONICAL_TZ
 
 GROUPS = (
@@ -54,6 +54,7 @@ class SchedulingModel:
     excluded: dict[tuple[int, int], LegalityVerdict]
     slots: tuple[ShiftSlot, ...]
     premiums: dict[tuple[int, int], Decimal]
+    skipped_minimums: tuple[tuple[int, tuple[int, int]], ...]
 
 
 def _coverage_value(row: CoverageRuleInput) -> int:
@@ -217,18 +218,47 @@ def build_model(
     rest_duration = timedelta(seconds=float(rest * Decimal(3600)))
     target_start, target_end = inputs.target_window
     calendar_days = tuple(target_start + timedelta(days=offset) for offset in range((target_end - target_start).days + 1))
+    # The per-day, consecutive-day and per-week hour constraints are all keyed off calendar_days,
+    # so a slot dated outside the target window would appear in none of them and silently escape
+    # every hour bound. `build_slot_grid` never produces one, but `slots=` is caller-supplied.
+    stray = sorted({slot.day for slot in slots} - set(calendar_days))
+    if stray:
+        raise SolverModelError(
+            f"slots fall outside target window {target_start}..{target_end}: {stray}; "
+            "they would escape the daily, consecutive-day and weekly hour constraints"
+        )
+    days_by_week: dict[tuple[int, int], tuple] = {}
+    for day in calendar_days:
+        iso_year, iso_week, _ = day.isocalendar()
+        days_by_week[(iso_year, iso_week)] = days_by_week.get((iso_year, iso_week), ()) + (day,)
+    skipped_minimums: list[tuple[int, tuple[int, int]]] = []
     ordered_slots = tuple(sorted(
         enumerate(slots),
         key=lambda item: (_slot_start(item[1]), _slot_end(item[1]), item[1].location_id, item[0]),
     ))
     for employee in employees:
+        if employee.min_hours_week > employee.max_hours_week:
+            raise SolverModelError(
+                f"employee {employee.employee_id}: min_hours_week {employee.min_hours_week} exceeds "
+                f"max_hours_week {employee.max_hours_week}"
+            )
         employee_vars = [(index, assign[(employee.employee_id, index)]) for index in range(len(slots))]
         for day in calendar_days:
             daily = [var for index, var in employee_vars if slots[index].day == day]
             model.Add(sum(daily) <= 1).OnlyEnforceIf(assumptions["shift_rules"])
-        units = [int(slots[index].hours * 2) * var for index, var in employee_vars]
-        model.Add(sum(units) >= employee.min_hours_week * 2).OnlyEnforceIf(assumptions["shift_rules"])
-        model.Add(sum(units) <= employee.max_hours_week * 2).OnlyEnforceIf(assumptions["shift_rules"])
+        for iso_week, week_days in days_by_week.items():
+            units = [
+                int(slots[index].hours * 2) * var
+                for index, var in employee_vars
+                if slots[index].day in week_days
+            ]
+            model.Add(sum(units) <= employee.max_hours_week * 2).OnlyEnforceIf(assumptions["shift_rules"])
+            if employee.min_hours_week == 0:
+                continue
+            if len(week_days) == 7:
+                model.Add(sum(units) >= employee.min_hours_week * 2).OnlyEnforceIf(assumptions["shift_rules"])
+            else:
+                skipped_minimums.append((employee.employee_id, iso_week))
         for start in range(max(0, len(calendar_days) - consecutive_days)):
             span = set(calendar_days[start:start + consecutive_days + 1])
             model.Add(sum(var for index, var in employee_vars if slots[index].day in span) <= consecutive_days).OnlyEnforceIf(
@@ -247,7 +277,7 @@ def build_model(
                 model.Add(var == 0).OnlyEnforceIf(assumptions["shift_rules"])
             if slot.location_id != employee.home_location_id and not employee.cross_location_eligible:
                 model.Add(var == 0).OnlyEnforceIf(assumptions["home_location"])
-    return SchedulingModel(model, assign, assumptions, excluded, slots, premiums)
+    return SchedulingModel(model, assign, assumptions, excluded, slots, premiums, tuple(skipped_minimums))
 
 
 def _solver() -> cp_model.CpSolver:
@@ -302,6 +332,16 @@ def legality_from_compliance(conn_or_dsn: Any, inputs: SolverInputs) -> Callable
     """
     dsn = conn_or_dsn if isinstance(conn_or_dsn, str) else None
     tenant_id = "00000000-0000-0000-0000-000000000001"
+    snapshots: dict[tuple[str, str | None, int], Snapshot] = {}
+    decidable_rules: dict[tuple[str, str | None, int], tuple[Rule, ...]] = {}
+
+    def snapshot_for(proposal: Proposal) -> tuple[Snapshot, tuple[Rule, ...]]:
+        key = (proposal.tenant_id, proposal.employer_id, proposal.employee_id)
+        if key not in snapshots:
+            snapshot = load_snapshot(proposal, dsn=dsn)
+            snapshots[key] = snapshot
+            decidable_rules[key] = tuple(rule for rule in snapshot.rules if rule.metric in PER_ASSIGNMENT_METRICS)
+        return snapshots[key], decidable_rules[key]
 
     @cache
     def evaluate(employee_id: int, location_id: int, day, start: Decimal, end: Decimal) -> LegalityVerdict:
@@ -318,8 +358,7 @@ def legality_from_compliance(conn_or_dsn: Any, inputs: SolverInputs) -> Callable
             # crew we do not have is precisely the defect this replaces.
             crew=None, crew_complete=False,
         )
-        snapshot = load_snapshot(proposal, dsn=dsn)
-        decidable = tuple(rule for rule in snapshot.rules if rule.metric in PER_ASSIGNMENT_METRICS)
+        snapshot, decidable = snapshot_for(proposal)
         evaluation: Evaluation = judge(replace(snapshot, rules=decidable), proposal)
         binding = tuple((row.rule_id, row.reason) for row in evaluation.binding if row.result == "FAIL")
         premiums = tuple((row.rule_id, row.premium_cost_usd or Decimal()) for row in evaluation.results if row.result == "PREMIUM")
