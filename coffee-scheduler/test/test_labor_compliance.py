@@ -391,6 +391,58 @@ class LaborComplianceSpecifications(unittest.TestCase):
         self.assertEqual(evaluation.results[0].result, "FAIL")
         self.assertFalse(evaluation.claims_legal_accuracy)
 
+    # spec: F10.ac15 — the 14-15 occupation restriction is evaluated, not raised (BUG-070).
+    def test_minor_occupation_restriction_permits_only_listed_roles(self):
+        occupation = rule(
+            rule_id="FED-MINOR-1415-OCCUPATION", jurisdiction="US-FED", metric="role_eligibility",
+            operator=None, value_num=None, value_text="Register", unit="ROLE",
+            applies_age_min=14, applies_age_max=15, consequence="Block ineligible roles",
+            verification_status="VERIFY",
+        )
+        minor = employee(employee_id=1001, dob=date(2011, 4, 21), is_enrolled=True)
+
+        # A permitted role passes: the rule is genuinely evaluated rather than crashing.
+        school = {date(2026, 11, 18): DayFacts(True, True)}
+        allowed = evaluate(proposal(employee_id=1001, role="Register"),
+                           snapshot=snapshot([occupation], employee=minor, days=school))
+        self.assertEqual(
+            [r.result for r in allowed.results if r.rule_id == "FED-MINOR-1415-OCCUPATION"], ["PASS"]
+        )
+
+        # A role the rule does not list is blocked and binds.
+        blocked = evaluate(proposal(employee_id=1001, role="Barista"),
+                           snapshot=snapshot([occupation], employee=minor, days=school))
+        refused = [r for r in blocked.results if r.rule_id == "FED-MINOR-1415-OCCUPATION"]
+        self.assertEqual([r.result for r in refused], ["FAIL"])
+        self.assertIn("not permitted", refused[0].reason)
+        self.assertIn("FED-MINOR-1415-OCCUPATION", {r.rule_id for r in blocked.binding})
+        # Implementing the rule does not verify it: CS-021 still owns the primary-source check.
+        self.assertFalse(blocked.claims_legal_accuracy)
+
+    # spec: F10.ac15 — an allow-list, so an unlisted role is blocked rather than assumed legal.
+    def test_minor_occupation_restriction_is_an_allow_list_and_fails_closed(self):
+        minor = employee(employee_id=1001, dob=date(2011, 4, 21), is_enrolled=True)
+        occupation = rule(
+            rule_id="FED-MINOR-1415-OCCUPATION", jurisdiction="US-FED", metric="role_eligibility",
+            operator=None, value_num=None, value_text="Register|Shift lead", unit="ROLE",
+            applies_age_min=14, applies_age_max=15, consequence="Block ineligible roles",
+        )
+        school = {date(2026, 11, 18): DayFacts(True, True)}
+        unknown = evaluate(proposal(employee_id=1001, role="Barista"),
+                           snapshot=snapshot([occupation], employee=minor, days=school))
+        self.assertEqual(
+            [r.result for r in unknown.results if r.rule_id == "FED-MINOR-1415-OCCUPATION"], ["FAIL"]
+        )
+        # A value the engine cannot read is a configuration error, never a silent pass.
+        for unusable in (None, "", "   ", "|", " | ", "Restricted equipment/cooking tasks", "Register|Greeter"):
+            broken = rule(
+                rule_id="FED-MINOR-1415-OCCUPATION", metric="role_eligibility", operator=None,
+                value_num=None, value_text=unusable, unit="ROLE", applies_age_min=14, applies_age_max=15,
+            )
+            with self.assertRaises(ComplianceConfigError):
+                evaluate(proposal(employee_id=1001, role="Register"),
+                         snapshot=snapshot([broken], employee=minor, days=school))
+
     # spec: F10.ac2
     def test_early_start_without_a_midway_break_fails(self):
         meal = rule(
