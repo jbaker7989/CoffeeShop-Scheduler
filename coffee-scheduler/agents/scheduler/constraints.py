@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import cache
@@ -267,8 +267,34 @@ def assert_feasible(model: SchedulingModel) -> None:
         raise InfeasibleModelError(groups)
 
 
+# Metrics decidable from ONE candidate (employee, role, span, day) and therefore safe to
+# pre-compute and encode as a fixed variable. Everything else is deliberately excluded:
+#
+#   * schedule-scoped (`hours_per_week`, `days_per_week`, `rest_hours_between_shifts`) depends on
+#     which other assignments are chosen, so it belongs in the CP-SAT `shift_rules` group;
+#   * crew-scoped (`certified_staff_on_site`) depends on who else is on site, so it belongs in the
+#     `coverage_fpc` / `coverage_key_holder` / `coverage_peak_skill` groups, which already enforce it;
+#   * break-dependent (`break_minutes`) depends on breaks the solver does not yet assign;
+#   * call-out and posting rules (`hours_paid_min`, `process`, `premium_amount`,
+#     `advance_notice_days`) belong to the F14 re-plan and publish flows, not to slot assignment.
+#
+# Feeding those a synthetic context is what BUG-071 was: the adapter asserted `crew_complete=True`
+# over an empty crew and `breaks=[]`, so every crew and meal rule failed for every candidate and
+# all 39,600 assignments were excluded. A rule is either decidable here or enforced in the model —
+# never "evaluated" against invented facts.
+PER_ASSIGNMENT_METRICS = frozenset({
+    "role_eligibility", "work_window", "hours_per_day", "span_hours", "rate",
+})
+
+
 def legality_from_compliance(conn_or_dsn: Any, inputs: SolverInputs) -> Callable[[Any, ShiftSlot], LegalityVerdict]:
-    """Adapt CS-013, memoising the one pre-search evaluation for each candidate span."""
+    """Adapt CS-013 for the rules one candidate assignment can actually decide.
+
+    Only `PER_ASSIGNMENT_METRICS` are evaluated. The day-scoped ones (`hours_per_day`,
+    `span_hours`) read the proposal's week, and a single-shift week is exact for them because
+    `build_model` already constrains an employee to at most one slot per day, so the day's hours
+    equal this candidate's span whatever else the week holds.
+    """
     dsn = conn_or_dsn if isinstance(conn_or_dsn, str) else None
     tenant_id = "00000000-0000-0000-0000-000000000001"
 
@@ -277,13 +303,19 @@ def legality_from_compliance(conn_or_dsn: Any, inputs: SolverInputs) -> Callable
         employee = next((item for item in inputs.employees if item.employee_id == employee_id), None)
         if employee is None:
             raise SolverModelError(f"employee {employee_id}: absent from SolverInputs")
+        slot = ShiftSlot(location_id, day, start, end)
+        span = ShiftSpan(_slot_start(slot), _slot_end(slot))
         proposal = Proposal(
             tenant_id=tenant_id, location_id=location_id, employee_id=employee_id, role=employee.role,
-            start_at=_slot_start(ShiftSlot(location_id, day, start, end)), end_at=_slot_end(ShiftSlot(location_id, day, start, end)),
-            breaks=[], week_start=inputs.target_window[0], week_shifts=[ShiftSpan(_slot_start(ShiftSlot(location_id, day, start, end)), _slot_end(ShiftSlot(location_id, day, start, end)))], week_complete=True,
-            crew=[], crew_complete=True,
+            start_at=span.start, end_at=span.end, breaks=[],
+            week_start=inputs.target_window[0], week_shifts=[span], week_complete=True,
+            # No crew-scoped rule is evaluated here, so no crew is claimed. Asserting a complete
+            # crew we do not have is precisely the defect this replaces.
+            crew=None, crew_complete=False,
         )
-        evaluation: Evaluation = judge(load_snapshot(proposal, dsn=dsn), proposal)
+        snapshot = load_snapshot(proposal, dsn=dsn)
+        decidable = tuple(rule for rule in snapshot.rules if rule.metric in PER_ASSIGNMENT_METRICS)
+        evaluation: Evaluation = judge(replace(snapshot, rules=decidable), proposal)
         binding = tuple((row.rule_id, row.reason) for row in evaluation.binding if row.result == "FAIL")
         premiums = tuple((row.rule_id, row.premium_cost_usd or Decimal()) for row in evaluation.results if row.result == "PREMIUM")
         return LegalityVerdict(not binding, binding, premiums)
