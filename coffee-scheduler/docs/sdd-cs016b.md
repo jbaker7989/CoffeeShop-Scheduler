@@ -23,3 +23,20 @@
 | F11.ac12 | `test_ac12_home_location` |
 | F11.ac13 | `test_ac13_diagnoses_assumption_core` |
 | F11.ac14 | `test_ac14_model_has_no_objective` |
+
+## BUG-071 — legality partition (2026-11-23)
+
+Pre-computing legality is only valid for rules one candidate assignment can decide. The original
+adapter fed every rule a synthetic context (`crew=[]` with `crew_complete=True`, `breaks=[]`), so
+crew-scoped and break-dependent rules failed for every candidate and all 39,600 assignments were
+excluded. A rule is now either decidable per assignment or enforced as a CP-SAT constraint.
+
+8. **F11.ac15**: only per-assignment-decidable metrics are pre-computed and encoded; schedule-scoped
+   (`hours_per_week`, `days_per_week`, `rest_hours_between_shifts`), crew-scoped
+   (`certified_staff_on_site`), break-dependent (`break_minutes`) and call-out/posting rules are
+   excluded from the pre-computation, no crew-scoped rule ever excludes a candidate, and the model
+   retains legal candidates to choose from.
+
+| Acceptance criterion | Tests |
+| --- | --- |
+| F11.ac15 | `LegalityPartitionTests.test_ac15_partition_excludes_schedule_crew_and_break_metrics` · `LegalityPartitionDatabaseTests.test_ac15_crew_rules_do_not_exclude_candidates` |
