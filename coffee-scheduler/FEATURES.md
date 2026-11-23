@@ -113,6 +113,7 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
   12. **AC12** — An unknown `(metric, operator, unit)` raises before any shift is judged legal.
   13. **AC13** — `reconcile_coverage` raises when a `LAW` coverage row cites a missing rule or a non-blocking legal rule.
   14. **AC14** — `claims_legal_accuracy` is false when any applied rule is not `VERIFIED`, and the illegal shift still fails.
+  15. **AC15** — a `role_eligibility` rule is evaluated as a pipe-separated allow-list of permitted roles for its age band: a listed role passes, an unlisted role fails and binds, and a value the engine cannot read raises a configuration error rather than passing silently.
 - **Edge / adversarial:** Waiver expiry is half-open. Age flips on the birthday. A 05:15 start must take a midway meal when the early-start rule's condition matches. Prose occupation text raises for a 14–15 year old instead of passing. Empty tenant context is an error, not an all-pass.
 - **Cross-references:** `labor_rules`, `consent_waivers`, `school_calendar_days`, `employer_config`, `coverage_rules`, `rule_eval_log`. CS-004 calendar. CS-021 owns the VERIFIED gate. CS-016 consumes `binding` and does not recompute legality.
 - **Expected outcome:** A single authoritative legality service that writes every decision to `rule_eval_log`, honours waiver expiry on the actual shift date, and never silently contradicts the coverage rules — the solver and LLM never compute legality themselves.
