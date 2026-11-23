@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from agents.scheduler.inputs import ShiftRuleInput, SolverInputs
+from contracts.forecast import CANONICAL_TZ
 
 
 class SolverModelError(Exception):
@@ -23,6 +25,19 @@ class ShiftSlot:
     @property
     def hours(self) -> Decimal:
         return self.end_hour - self.start_hour
+
+
+@dataclass(frozen=True, slots=True)
+class SlotIndex:
+    """Deterministic, once-per-build lookup data for a candidate slot grid."""
+
+    start_at: tuple[datetime, ...]
+    end_at: tuple[datetime, ...]
+    by_day: dict[date, tuple[int, ...]]
+    by_store_day_hour: dict[tuple[int, date, int], tuple[int, ...]]
+    by_week: dict[tuple[int, int], tuple[int, ...]]
+    minutes_from_base: tuple[int, ...]
+    duration_minutes: tuple[int, ...]
 
 
 def parse_rule_value(shift_rules: tuple[ShiftRuleInput, ...], rule_id: str) -> Decimal:
@@ -88,3 +103,64 @@ def build_slot_grid(inputs: SolverInputs) -> tuple[ShiftSlot, ...]:
                 start += Decimal("0.5")
         day += timedelta(days=1)
     return tuple(result)
+
+
+def _slot_datetime(day: date, hour: Decimal) -> datetime:
+    minutes = hour * Decimal(60)
+    if minutes != minutes.to_integral_value():
+        raise SolverModelError(f"slot {day} at {hour}: bounds must be exact whole minutes")
+    minute = int(minutes)
+    if not 0 <= minute <= 24 * 60:
+        raise SolverModelError(f"slot {day} at {hour}: bounds fall outside one calendar day")
+    return datetime.combine(day, time.min, ZoneInfo(CANONICAL_TZ)) + timedelta(minutes=minute)
+
+
+def _elapsed_minutes(start: datetime, end: datetime, *, description: str) -> int:
+    elapsed = end.astimezone(UTC) - start.astimezone(UTC)
+    total_microseconds = ((elapsed.days * 24 * 60 * 60 + elapsed.seconds) * 1_000_000) + elapsed.microseconds
+    minute_microseconds = 60 * 1_000_000
+    if total_microseconds % minute_microseconds:
+        raise SolverModelError(f"{description}: elapsed time is not an exact whole minute")
+    return total_microseconds // minute_microseconds
+
+
+def build_slot_index(
+    slots: tuple[ShiftSlot, ...], *, calendar_days: tuple[date, ...], rest: Decimal
+) -> SlotIndex:
+    """Build all slot lookups once, using elapsed rather than wall-clock time."""
+    if not calendar_days:
+        raise SolverModelError("slot index requires at least one calendar day")
+    if not rest.is_finite() or rest < 0:
+        raise SolverModelError(f"shift_rules rest: invalid value {rest!r}")
+    base = datetime.combine(min(calendar_days), time.min, ZoneInfo(CANONICAL_TZ))
+    starts: list[datetime] = []
+    ends: list[datetime] = []
+    minutes_from_base: list[int] = []
+    duration_minutes: list[int] = []
+    by_day: dict[date, list[int]] = {}
+    by_store_day_hour: dict[tuple[int, date, int], list[int]] = {}
+    by_week: dict[tuple[int, int], list[int]] = {}
+    for index, slot in enumerate(slots):
+        start = _slot_datetime(slot.day, slot.start_hour)
+        end = _slot_datetime(slot.day, slot.end_hour)
+        duration = _elapsed_minutes(start, end, description=f"slot {index} duration")
+        if duration < 0:
+            raise SolverModelError(f"slot {index}: end precedes start")
+        starts.append(start)
+        ends.append(end)
+        minutes_from_base.append(_elapsed_minutes(base, start, description=f"slot {index} start"))
+        duration_minutes.append(duration)
+        by_day.setdefault(slot.day, []).append(index)
+        iso_year, iso_week, _ = slot.day.isocalendar()
+        by_week.setdefault((iso_year, iso_week), []).append(index)
+        first_hour = int(slot.start_hour.to_integral_value(rounding=ROUND_CEILING))
+        last_hour = int((slot.end_hour - 1).to_integral_value(rounding=ROUND_FLOOR))
+        for hour in range(first_hour, last_hour + 1):
+            by_store_day_hour.setdefault((slot.location_id, slot.day, hour), []).append(index)
+    return SlotIndex(
+        tuple(starts), tuple(ends),
+        {key: tuple(sorted(value)) for key, value in sorted(by_day.items())},
+        {key: tuple(sorted(value)) for key, value in sorted(by_store_day_hour.items())},
+        {key: tuple(sorted(value)) for key, value in sorted(by_week.items())},
+        tuple(minutes_from_base), tuple(duration_minutes),
+    )

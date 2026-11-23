@@ -17,9 +17,11 @@ from agents.scheduler.shifts import (
     RULE_MAX_CONSECUTIVE_DAYS,
     RULE_MIN_REST_HOURS,
     ShiftSlot,
+    SlotIndex,
     SolverModelError,
     _shift_lengths,
     build_slot_grid,
+    build_slot_index,
     find_rule_value,
 )
 from compliance.engine import Evaluation, Proposal, Rule, ShiftSpan, Snapshot, judge, load_snapshot
@@ -53,6 +55,7 @@ class SchedulingModel:
     assumptions: dict[str, cp_model.IntVar]
     excluded: dict[tuple[int, int], LegalityVerdict]
     slots: tuple[ShiftSlot, ...]
+    index: SlotIndex
     premiums: dict[tuple[int, int], Decimal]
     skipped_minimums: tuple[tuple[int, tuple[int, int]], ...]
 
@@ -121,31 +124,44 @@ def build_model(
 ) -> SchedulingModel:
     """Encode all hard groups, with each group independently assumable for diagnosis."""
     slots = slots if slots is not None else build_slot_grid(inputs)
+    target_start, target_end = inputs.target_window
+    calendar_days = tuple(target_start + timedelta(days=offset) for offset in range((target_end - target_start).days + 1))
+    # The per-day, consecutive-day and per-week hour constraints are all keyed off calendar_days,
+    # so a slot dated outside the target window would appear in none of them and silently escape
+    # every hour bound. `build_slot_grid` never produces one, but `slots=` is caller-supplied.
+    stray = sorted({slot.day for slot in slots} - set(calendar_days))
+    if stray:
+        raise SolverModelError(
+            f"slots fall outside target window {target_start}..{target_end}: {stray}; "
+            "they would escape the daily, consecutive-day and weekly hour constraints"
+        )
+    rest = find_rule_value(inputs.shift_rules, RULE_MIN_REST_HOURS)
+    index = build_slot_index(slots, calendar_days=calendar_days, rest=rest)
     model = cp_model.CpModel()
     assumptions = {name: model.NewBoolVar(f"assume_{name}") for name in GROUPS}
     for name in GROUPS:
         model.AddAssumption(assumptions[name])
     employees = tuple(sorted(inputs.employees, key=lambda item: item.employee_id))
     assign = {
-        (employee.employee_id, index): model.NewBoolVar(f"assign_e{employee.employee_id}_s{index}")
+        (employee.employee_id, slot_index): model.NewBoolVar(f"assign_e{employee.employee_id}_s{slot_index}")
         for employee in employees
-        for index in range(len(slots))
+        for slot_index in range(len(slots))
     }
     excluded: dict[tuple[int, int], LegalityVerdict] = {}
     premiums: dict[tuple[int, int], Decimal] = {}
     legality = legality or (lambda _employee, _slot: LegalityVerdict(True))
     for employee in employees:
-        for index, slot in enumerate(slots):
+        for slot_index, slot in enumerate(slots):
             verdict = legality(employee, slot)
             if verdict.allowed and verdict.premiums:
-                premiums[(employee.employee_id, index)] = sum((amount for _rule, amount in verdict.premiums), Decimal())
+                premiums[(employee.employee_id, slot_index)] = sum((amount for _rule, amount in verdict.premiums), Decimal())
             if not verdict.allowed or verdict.binding:
                 if not verdict.binding:
                     raise SolverModelError(
                         f"legality employee {employee.employee_id} store {slot.location_id}: exclusion lacks rule_id and reason"
                     )
-                excluded[(employee.employee_id, index)] = verdict
-                model.Add(assign[(employee.employee_id, index)] == 0).OnlyEnforceIf(assumptions["legality"])
+                excluded[(employee.employee_id, slot_index)] = verdict
+                model.Add(assign[(employee.employee_id, slot_index)] == 0).OnlyEnforceIf(assumptions["legality"])
 
     stores = {store.location_id: store for store in inputs.stores}
     min_crew = _coverage_rules(inputs, "min", "crew")
@@ -157,17 +173,16 @@ def build_model(
         if slot.location_id not in stores:
             raise SolverModelError(f"store {slot.location_id}: slot refers to unknown store")
     for store_id, store in sorted(stores.items()):
-        for day in sorted({slot.day for slot in slots if slot.location_id == store_id}):
+        store_days = sorted({day for location_id, day, _hour in index.by_store_day_hour if location_id == store_id})
+        for day in store_days:
             window = store.open_windows.get(day.weekday())
             if window is None:
                 continue
             for hour in range(window.open_hour, window.close_hour):
-                vars_here = [
-                    assign[(employee.employee_id, index)]
-                    for employee in employees
-                    for index, slot in enumerate(slots)
-                    if slot.location_id == store_id and slot.day == day and _covers(slot, hour)
-                ]
+                slot_indices = index.by_store_day_hour.get((store_id, day, hour), ())
+                vars_here = [assign[(employee.employee_id, slot_index)] for employee in employees for slot_index in slot_indices]
+                if not vars_here:
+                    continue
                 for rule in min_crew:
                     if _applicable(rule, store_id):
                         model.Add(sum(vars_here) >= _coverage_value(rule)).OnlyEnforceIf(assumptions["coverage_min_crew"])
@@ -180,28 +195,26 @@ def build_model(
                     if not _applicable(rule, store_id):
                         continue
                     fpc_vars = [
-                        assign[(employee.employee_id, index)]
+                        assign[(employee.employee_id, slot_index)]
                         for employee in employees if employee.food_protection_cert
-                        for index, slot in enumerate(slots)
-                        if slot.location_id == store_id and slot.day == day and _covers(slot, hour)
+                        for slot_index in slot_indices
                     ]
                     model.Add(sum(fpc_vars) >= _coverage_value(rule)).OnlyEnforceIf(assumptions["coverage_fpc"])
                 for rule in peak_skill:
                     if not _applicable(rule, store_id) or hour not in _peak_hours(inputs, store_id, day):
                         continue
                     skilled = [
-                        assign[(employee.employee_id, index)]
+                        assign[(employee.employee_id, slot_index)]
                         for employee in employees if employee.skill_level == 3
-                        for index, slot in enumerate(slots)
-                        if slot.location_id == store_id and slot.day == day and _covers(slot, hour)
+                        for slot_index in slot_indices
                     ]
                     model.Add(sum(skilled) >= _coverage_value(rule)).OnlyEnforceIf(assumptions["coverage_peak_skill"])
             for hour in (window.open_hour, window.close_hour - 1):
+                slot_indices = index.by_store_day_hour.get((store_id, day, hour), ())
                 key_vars = [
-                    assign[(employee.employee_id, index)]
+                    assign[(employee.employee_id, slot_index)]
                     for employee in employees if employee.is_key_holder
-                    for index, slot in enumerate(slots)
-                    if slot.location_id == store_id and slot.day == day and _covers(slot, hour)
+                    for slot_index in slot_indices
                 ]
                 for rule in key_holder:
                     if _applicable(rule, store_id):
@@ -211,46 +224,32 @@ def build_model(
     # Honour whatever the tenant's shift_rules say; `parse_rule_value` already fails closed on a
     # missing or non-positive row, so these values are used rather than asserted against constants.
     consecutive = find_rule_value(inputs.shift_rules, RULE_MAX_CONSECUTIVE_DAYS)
-    rest = find_rule_value(inputs.shift_rules, RULE_MIN_REST_HOURS)
     if consecutive != consecutive.to_integral_value():
         raise SolverModelError(f"shift_rules rule {RULE_MAX_CONSECUTIVE_DAYS!r}: invalid day count {consecutive!r}")
     consecutive_days = int(consecutive)
-    rest_duration = timedelta(seconds=float(rest * Decimal(3600)))
-    target_start, target_end = inputs.target_window
-    calendar_days = tuple(target_start + timedelta(days=offset) for offset in range((target_end - target_start).days + 1))
-    # The per-day, consecutive-day and per-week hour constraints are all keyed off calendar_days,
-    # so a slot dated outside the target window would appear in none of them and silently escape
-    # every hour bound. `build_slot_grid` never produces one, but `slots=` is caller-supplied.
-    stray = sorted({slot.day for slot in slots} - set(calendar_days))
-    if stray:
-        raise SolverModelError(
-            f"slots fall outside target window {target_start}..{target_end}: {stray}; "
-            "they would escape the daily, consecutive-day and weekly hour constraints"
-        )
+    rest_minutes_decimal = rest * Decimal(60)
+    if rest_minutes_decimal != rest_minutes_decimal.to_integral_value():
+        raise SolverModelError(f"shift_rules rule {RULE_MIN_REST_HOURS!r}: not an exact whole minute")
+    rest_minutes = int(rest_minutes_decimal)
     days_by_week: dict[tuple[int, int], tuple] = {}
     for day in calendar_days:
         iso_year, iso_week, _ = day.isocalendar()
         days_by_week[(iso_year, iso_week)] = days_by_week.get((iso_year, iso_week), ()) + (day,)
     skipped_minimums: list[tuple[int, tuple[int, int]]] = []
-    ordered_slots = tuple(sorted(
-        enumerate(slots),
-        key=lambda item: (_slot_start(item[1]), _slot_end(item[1]), item[1].location_id, item[0]),
-    ))
     for employee in employees:
         if employee.min_hours_week > employee.max_hours_week:
             raise SolverModelError(
                 f"employee {employee.employee_id}: min_hours_week {employee.min_hours_week} exceeds "
                 f"max_hours_week {employee.max_hours_week}"
             )
-        employee_vars = [(index, assign[(employee.employee_id, index)]) for index in range(len(slots))]
+        employee_vars = [(slot_index, assign[(employee.employee_id, slot_index)]) for slot_index in range(len(slots))]
         for day in calendar_days:
-            daily = [var for index, var in employee_vars if slots[index].day == day]
+            daily = [assign[(employee.employee_id, slot_index)] for slot_index in index.by_day.get(day, ())]
             model.Add(sum(daily) <= 1).OnlyEnforceIf(assumptions["shift_rules"])
-        for iso_week, week_days in days_by_week.items():
+        for iso_week, week_days in sorted(days_by_week.items()):
             units = [
-                int(slots[index].hours * 2) * var
-                for index, var in employee_vars
-                if slots[index].day in week_days
+                int(slots[slot_index].hours * 2) * assign[(employee.employee_id, slot_index)]
+                for slot_index in index.by_week.get(iso_week, ())
             ]
             model.Add(sum(units) <= employee.max_hours_week * 2).OnlyEnforceIf(assumptions["shift_rules"])
             if employee.min_hours_week == 0:
@@ -260,24 +259,32 @@ def build_model(
             else:
                 skipped_minimums.append((employee.employee_id, iso_week))
         for start in range(max(0, len(calendar_days) - consecutive_days)):
-            span = set(calendar_days[start:start + consecutive_days + 1])
-            model.Add(sum(var for index, var in employee_vars if slots[index].day in span) <= consecutive_days).OnlyEnforceIf(
+            span_indices = tuple(
+                slot_index for day in calendar_days[start:start + consecutive_days + 1]
+                for slot_index in index.by_day.get(day, ())
+            )
+            model.Add(sum(assign[(employee.employee_id, slot_index)] for slot_index in span_indices) <= consecutive_days).OnlyEnforceIf(
                 assumptions["shift_rules"]
             )
-        for left_position, (left, left_slot) in enumerate(ordered_slots):
-            for right, right_slot in ordered_slots[left_position + 1:]:
-                gap = _slot_start(right_slot) - _slot_end(left_slot)
-                if gap < rest_duration:
-                    left_var = assign[(employee.employee_id, left)]
-                    right_var = assign[(employee.employee_id, right)]
-                    model.Add(left_var + right_var <= 1).OnlyEnforceIf(assumptions["shift_rules"])
-        for index, var in employee_vars:
-            slot = slots[index]
+        intervals = []
+        for slot_index, var in employee_vars:
+            active = model.NewBoolVar(f"rest_active_e{employee.employee_id}_s{slot_index}")
+            model.Add(active <= var)
+            model.Add(active <= assumptions["shift_rules"])
+            model.Add(active >= var + assumptions["shift_rules"] - 1)
+            start_at = index.minutes_from_base[slot_index]
+            size = index.duration_minutes[slot_index] + rest_minutes
+            intervals.append(model.NewOptionalIntervalVar(start_at, size, start_at + size, active,
+                                                          f"rest_e{employee.employee_id}_s{slot_index}"))
+        if intervals:
+            model.AddNoOverlap(intervals)
+        for slot_index, var in employee_vars:
+            slot = slots[slot_index]
             if slot.hours < min_shift or slot.hours > max_shift or (slot.hours * 2) != int(slot.hours * 2):
                 model.Add(var == 0).OnlyEnforceIf(assumptions["shift_rules"])
             if slot.location_id != employee.home_location_id and not employee.cross_location_eligible:
                 model.Add(var == 0).OnlyEnforceIf(assumptions["home_location"])
-    return SchedulingModel(model, assign, assumptions, excluded, slots, premiums, tuple(skipped_minimums))
+    return SchedulingModel(model, assign, assumptions, excluded, slots, index, premiums, tuple(skipped_minimums))
 
 
 def _solver() -> cp_model.CpSolver:
