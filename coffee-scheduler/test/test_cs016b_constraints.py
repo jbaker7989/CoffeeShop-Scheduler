@@ -121,6 +121,7 @@ class ConstraintTests(unittest.TestCase):
             build_slot_grid(bad)
         slots = (ShiftSlot(3, DAY, Decimal("8"), Decimal("10")),)
         short = replace(_inputs(), employees=(replace(_inputs().employees[0], min_hours_week=3),))
+        short = replace(short, target_window=(DAY, DAY.fromordinal(DAY.toordinal() + 6)))
         model = build_model(short, slots=slots)
         self.assertIn("shift_rules", diagnose_infeasibility(model))
 
@@ -132,6 +133,7 @@ class ConstraintTests(unittest.TestCase):
         slots = tuple(ShiftSlot(3, day, Decimal("8"), Decimal("12")) for day in days)
 
         model = build_model(inputs, slots=slots)
+        model.model.Add(sum(model.assign.values()) == len(slots))
 
         self.assertEqual(_solve(model), cp_model.INFEASIBLE)
         self.assertIn("shift_rules", diagnose_infeasibility(model))
@@ -151,6 +153,7 @@ class ConstraintTests(unittest.TestCase):
         )
 
         model = build_model(inputs, slots=slots)
+        model.model.Add(sum(model.assign.values()) == len(slots))
 
         self.assertEqual(_solve(model), cp_model.INFEASIBLE)
         self.assertIn("shift_rules", diagnose_infeasibility(model))

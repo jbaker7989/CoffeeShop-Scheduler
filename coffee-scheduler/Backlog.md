@@ -2779,7 +2779,7 @@ closing regression evidence.
 - **Blocks:** [[CS-016c]]. An objective over a model with no feasible assignment is meaningless, so this should land before the cost function.
 
 ### BUG-072
-- **Status:** 🐞 Open · **Type:** Constraint scoped to the wrong horizon · **Found:** 2026-11-23 (solving the BUG-071 fix)
+- **Status:** ✅ Fixed (2026-11-23). Weekly employee bounds are now partitioned by ISO year/week: each touched week retains its full maximum, while a minimum is enforced only for a fully covered seven-day week. Partial-week omitted minimums are exposed as `SchedulingModel.skipped_minimums`, zero minimums add no constraint, and contradictory employee bounds fail early with an employee-named `SolverModelError`. Regression coverage pins sub-week, multi-week, aligned and unaligned-week behavior. · **Type:** Constraint scoped to the wrong horizon · **Found:** 2026-11-23 (solving the BUG-071 fix)
 - **Feature:** [F11](./FEATURES.md) · relates to [[CS-016b]], [[CS-016d]]
 - **Symptom:** `build_model` on a 2-day target window is `INFEASIBLE`, and `diagnose_infeasibility` names `('legality', 'shift_rules')`.
 - **Cause:** the `shift_rules` group applies the roster's **weekly** bounds (`min_hours_week`, `max_hours_week`) to whatever window it is given. Most employees carry `min_hours_week = 32`, but a 2-day window caps them at 2 x 8 = 16 hours, so the minimum is unsatisfiable by construction. The diagnosis is correct and useful — the constraint is simply scoped to the wrong horizon.
@@ -2787,9 +2787,58 @@ closing regression evidence.
 - **Note:** this is not what BUG-071 fixed. BUG-071 removed the universal legality exclusion; this is a separate horizon-scoping defect that the now-solvable model exposed.
 
 ### BUG-073
-- **Status:** 🐞 Open · **Type:** Performance / scalability · **Found:** 2026-11-23 (solving the BUG-071 fix)
+- **Status:** ✅ Fixed (2026-11-23). `legality_from_compliance` now owns a closure-local immutable snapshot cache keyed by `(tenant_id, employer_id, employee_id)`, so all candidate spans for one employee reuse the same compliance snapshot and per-assignment rule filter. The cached snapshot is still copied before judging, preserving verdict semantics and preventing mutation of shared rules, days, or waivers; separate adapters do not share cache state. Offline and rollback-gated checks pin reuse across days and stores plus the snapshot's span independence. · **Type:** Performance / scalability · **Found:** 2026-11-23 (solving the BUG-071 fix)
+- **Measured on real data (2026-11-23), forward Dec-2026 windows:** build time 1-day **13.4s** (495 slots, 19,800 vars), 3-day **53.7s** (1,485 / 59,400), 7-day Mon-Sun **188.8s** (3,465 / 138,600). A full week previously did not finish in **over 12 minutes** and had to be cancelled, so a week is now buildable for the first time. `skipped_minimums` is **40** for the 1-day and 3-day windows (every employee's minimum correctly skipped on a partial week) and **0** for the Monday-Sunday week (exactly one fully covered ISO week, so the minimum applies) — BUG-072's scoping confirmed end to end. Build time is still superlinear (7x the slots costs 14x the time), which is [[CS-092]], not this fix.
 - **Feature:** [F11](./FEATURES.md) · relates to [[CS-016b]], [[CS-016d]]
 - **Symptom:** building the model for a 2-day window takes seconds; a full 7-day window did not finish in over 12 minutes and had to be cancelled.
 - **Cause:** `legality_from_compliance` calls `compliance.load_snapshot` once per unique `(employee, location, day, span)` candidate. The `@cache` only de-duplicates identical tuples, so a week of 3 stores x 40 employees x every candidate span is tens of thousands of snapshot loads, each its own set of database round trips.
 - **Fix:** load the snapshot once per `(employee, week)` and reuse it across that employee's candidate spans — the snapshot is employee- and week-scoped, not span-scoped, so nothing per-candidate changes. Consider also narrowing the candidate span grid before evaluation.
 - **Why it matters:** [[CS-016d]] carries the performance target "solve a full week for all 3 stores within an agreed time budget". That target cannot be assessed until this is addressed, and a full-week feasibility answer is currently unobtainable.
+
+## P1 — F11 solver follow-ups (raised by the BUG-072/BUG-073 review, 2026-11-23)
+
+### CS-088 — Make guaranteed weekly hours a soft fairness term
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** `min_hours_week` is currently a **hard** CP-SAT constraint. BUG-072 scoped it correctly to fully covered ISO weeks, but hardness itself is the deeper problem: a guaranteed-hours commitment can contradict the law. A minor whose lawful slots total fewer hours than their minimum makes the model infeasible with **no legal remedy** — the only "fix" would be to schedule them illegally.
+- **Detailed specifications:**
+  - Move `min_hours_week` out of the `shift_rules` hard group and into the objective as a shortfall penalty, so an unmeetable guarantee costs the schedule rather than destroying it.
+  - Note that weekly hour bounds are **not** in F11's stated shift-rules list ("min/max length, 30-minute increments, max 5 consecutive days, 10h rest, no split shifts"); guaranteed hours look much more like [[CS-081]]'s fairness objective, so align with that story rather than duplicating it.
+  - Keep `max_hours_week` hard: a ceiling can always be satisfied by scheduling less.
+  - Report the shortfall per employee and week so a manager can see who was under-booked and why.
+
+### CS-089 — One authoritative definition of "week"
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** Three different notions of a week are now in play and nothing reconciles them: BUG-072's hour bounds use the **ISO week** (`date.isocalendar()`), `legality_from_compliance` passes `week_start = inputs.target_window[0]` as the compliance week, and the employer's payroll or contractual week may be neither. Minor weekly caps, overtime thresholds and guaranteed hours are all week-relative, so a mismatch silently mis-enforces the law.
+- **Detailed specifications:**
+  - Decide and record the authoritative week (most likely tenant-configured, defaulting to Monday) and thread it through the hour bounds, the compliance week context, overtime, and any fairness term.
+  - A non-Monday-aligned seven-day window currently covers no ISO week fully, so no minimum applies. That is safe but surprising; the chosen definition must make it explicit rather than incidental.
+  - Add a test that the same seven days produce the same weekly verdicts regardless of which weekday the window starts on, once the definition is tenant-anchored.
+
+### CS-090 — Let the compliance engine reuse an open session
+- **Feature:** [F10](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** `compliance.engine.load_snapshot` opens a **new psycopg connection** on every call (`psycopg.connect(url)`), runs `prepare_session`, then issues roughly seven queries. BUG-073 cut the call count from tens of thousands to one per employee, but each remaining call is still a fresh connection and the caller already holds an RLS-scoped session.
+- **Detailed specifications:**
+  - Accept an optional open connection (already inside a transaction with the tenant GUC set) and skip both the connect and `prepare_session` when given one, keeping the current behaviour when not.
+  - Preserve the existing fail-closed guards: refuse autocommit, refuse a non-`app_rw` role, require the tenant context.
+  - Benefits every caller, not just the solver; the solver should then pass its own session.
+
+### CS-091 — Price the premiums the per-assignment pre-computation cannot see
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P2 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** CS-016c prices premiums from `SchedulingModel.premiums`, which only carries verdicts from `PER_ASSIGNMENT_METRICS`. BUG-071 deliberately excluded crew- and schedule-scoped rules from the pre-computation, so premiums arising from them — Fair Workweek change premiums (`advance_notice_days`, `premium_amount`) and anything crew-dependent — are **never priced**. The objective therefore understates premium cost, and the solver cannot trade a premium off against the labour cost that triggers it.
+- **Detailed specifications:**
+  - Enumerate which premium-bearing rules are schedule- or crew-dependent and therefore invisible to the per-assignment pass.
+  - Encode those premiums as CP-SAT expressions over the assignment variables, in the same half-hour and cents units the objective already uses, rather than pre-computing them per candidate.
+  - Assert that a schedule incurring a Fair Workweek premium costs more than an equivalent one that does not.
+
+### CS-092 — Make the model build scale to a full week
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Description:** Separate from BUG-073's snapshot loading, `build_model` rebuilds a per-store-hour variable list by scanning **every** slot for every `(store, day, hour)` and again for each coverage rule, and the objective repeats the same scan. That is roughly employees x slots x hours work in Python, so a full week remains slow even once snapshots are reused. [[CS-016d]] carries the performance target "solve a full week for all 3 stores within an agreed time budget", which cannot be met until the build itself is linear.
+- **Detailed specifications:**
+  - Index slots once by `(location, day)` and by covered hour, then reuse the index across every coverage rule, the station capacity constraints and the objective.
+  - Record the measured build and solve time for a one-day, seven-day and fourteen-day window so the CS-016d budget is set against evidence.
+  - No change to any constraint's meaning: the same model, built faster, asserted by comparing the objective value and chosen assignments before and after on a fixed seed.
