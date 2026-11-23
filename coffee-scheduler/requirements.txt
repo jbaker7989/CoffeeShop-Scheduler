@@ -9,6 +9,8 @@ psycopg[binary]==3.3.9
 alembic==1.20.1
 # CS-014b/F9: deterministic numpy-only demand forecasting.
 numpy==2.4.6
+# CS-016b/F11 needs CP-SAT; 9.15.6755 is the only release with a cp314 wheel. Its protobuf>=6.33.1 conflicts with deliberately pinned opentelemetry-proto==1.29.0 (protobuf<6.0): unsatisfiable on Python 3.14 but metadata-only, safe because CP-SAT solves under protobuf 5.29.6 and OTLP imports under 6.33.6; CI installs this then otel/requirements.txt, does not pip check, and upgrading OTel is separate.
+ortools==9.15.6755
 # CS-061a (F61): Argon2id password hashing for tenant auth credentials.
 argon2-cffi==25.1.0
 # CS-061a (F61): FastAPI auth routing + RS256 access-token signing/verification.
