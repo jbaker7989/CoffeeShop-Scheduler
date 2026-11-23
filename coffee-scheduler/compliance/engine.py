@@ -19,6 +19,9 @@ AGENT = "labor-compliance-agent"
 FEDERAL = "US-FED"
 RESULTS = frozenset({"PASS", "FAIL", "PREMIUM", "WARN"})
 BLOCKING_ENFORCEMENT = frozenset({"HARD", "PROCESS"})
+# Mirrors the `employees.role` CHECK constraint, so a role_eligibility rule listing anything else
+# is a misconfiguration rather than a verdict.
+ROLE_VOCABULARY = frozenset({"Barista", "Register", "Shift lead"})
 # (metric, operator or "", unit or "") present in the committed Labor_Rules sheet.
 SUPPORTED = frozenset({
     ("role_eligibility", "", "ROLE"),
@@ -485,9 +488,7 @@ def _validate_span_times(start, end, label) -> None:
 def _judge_rule(rule, snapshot, proposal, zone, shift_day) -> RuleResult:
     key = vocab_key(rule.metric, rule.operator, rule.unit)
     if key == ("role_eligibility", "", "ROLE"):
-        raise ComplianceConfigError(
-            f"{rule.rule_id} value_text is not a pipe-separated role list ({rule.value_text!r})"
-        )
+        return _role_eligibility(rule, proposal)
     if key == ("work_window", "BETWEEN", "TIME"):
         return _window(rule, proposal, zone)
     if key == ("hours_paid_min", ">=", "HOURS"):
@@ -591,6 +592,41 @@ def _meal(rule, proposal, zone) -> RuleResult:
     inside = _break_minutes_inside(proposal, zone, window)
     ok = inside >= rule.value_num
     return _result(rule, "PASS" if ok else "FAIL", None, f"{rule.rule_id} break inside window {inside} bound >= {rule.value_num}", None, rule.value_num)
+
+
+def _permitted_roles(rule) -> frozenset[str]:
+    """Parse the rule's pipe-separated permitted-role list, refusing an unusable value.
+
+    Entries are checked against `ROLE_VOCABULARY`, which mirrors the `employees.role` CHECK
+    constraint. That matters: without it, prose such as 'Restricted equipment/cooking tasks' would
+    parse as a one-item allow-list and quietly return FAIL for every role, reporting a
+    misconfigured rule as a legal verdict. An unreadable rule must be a configuration error.
+    """
+    roles = frozenset(part.strip() for part in (rule.value_text or "").split("|") if part.strip())
+    unknown = sorted(roles - ROLE_VOCABULARY)
+    if not roles or unknown:
+        raise ComplianceConfigError(
+            f"{rule.rule_id} value_text must be a pipe-separated list of roles drawn from "
+            f"{sorted(ROLE_VOCABULARY)}, got {rule.value_text!r}"
+        )
+    return roles
+
+
+def _role_eligibility(rule, proposal) -> RuleResult:
+    """Permit only the roles the rule lists for this age band.
+
+    The list is an allow-list on purpose: a role the rule does not name is blocked rather than
+    assumed legal, so adding a role to the roster cannot silently widen what a minor may do.
+    """
+    permitted = _permitted_roles(rule)
+    role = (proposal.role or "").strip()
+    allowed = role in permitted
+    return _result(
+        rule, "PASS" if allowed else "FAIL", None,
+        f"{rule.rule_id} role {role!r} {'is' if allowed else 'is not'} permitted for this age band "
+        f"(permitted: {', '.join(sorted(permitted))})",
+        None,
+    )
 
 
 def _window(rule, proposal, zone) -> RuleResult:
