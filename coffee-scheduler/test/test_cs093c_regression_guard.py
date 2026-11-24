@@ -11,17 +11,19 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import measure_solver_scale  # noqa: E402
+from cs093_support import allow_all, real_shape_inputs  # noqa: E402
+
 from agents.scheduler.constraints import build_model  # noqa: E402
 from agents.scheduler.objective import build_objective  # noqa: E402
 from agents.scheduler.solve import SolverStopPolicy, solve_schedule  # noqa: E402
-from cs093_support import allow_all, real_shape_inputs  # noqa: E402
 
-import measure_solver_scale  # noqa: E402
-
-# Capped policy for every regression solve. Generous gap so a feasible incumbent is accepted as
-# best found; short time so CI cannot spend minutes proving optimality.
-CAPPED = SolverStopPolicy(max_time_seconds=5.0, max_relative_gap=1.0)
+# Capped policy for every regression solve. Generous publish guard so a time-stopped incumbent is
+# accepted as best found; short time so CI cannot spend minutes proving optimality.
+CAPPED = SolverStopPolicy(max_time_seconds=5.0, max_relative_gap=0.9)
 # Known CS-092 optima for the shared fixture: asserted on the objective, never on OPTIMAL status.
+# The 2-day fixture proves optimal in under a second; the 3-day one reaches the same incumbent
+# but cannot be proven, so it is accepted as best found under the publish guard.
 KNOWN_OBJECTIVE = {(2, 3): 26900, (3, 4): 38300}
 
 
@@ -38,6 +40,7 @@ class RegressionGuardTests(unittest.TestCase):
                 self.assertEqual(result.objective, objective)
                 self.assertIn(result.cp_sat_status, ("OPTIMAL", "FEASIBLE"))
                 # Each returned assignment is a legal (employee, slot) pair in the model.
+                self.assertTrue(result.assignments)
                 for key in result.assignments:
                     self.assertIn(key, model.assign)
 

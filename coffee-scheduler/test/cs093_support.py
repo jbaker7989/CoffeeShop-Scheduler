@@ -38,7 +38,9 @@ def allow_all(*_args) -> LegalityVerdict:
 def real_shape_inputs(days: int = 3, employees: int = 4) -> SolverInputs:
     """The CS-092 three-day / four-employee shape: reaches its optimum fast, proves slowly."""
     dates = tuple(DAY + timedelta(days=offset) for offset in range(days))
-    windows = {weekday: StoreOpenWindow(8, 18, frozenset({weekday})) for weekday in range(7)}
+    # Weekday windows 0-4 only, matching the CS-016b/CS-092 fixture whose known optima this
+    # guard re-solves (DAY is a Monday, so a three-day window stays inside the work week).
+    windows = {weekday: StoreOpenWindow(8, 18, frozenset({weekday})) for weekday in range(5)}
     people = tuple(
         EmployeeInput(number, "Barista", 3, 3, False, True, True, True, Decimal(10 + number), "open", 0,
                       40, date(1990, 1, 1), False, None, "", False)

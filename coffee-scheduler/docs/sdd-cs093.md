@@ -26,17 +26,19 @@ limit, and a negative, non-finite, non-numeric or over-cap (> 1.0 ratio) gap, be
 
 **F11.ac35** (CS-093a): `production_stop_policy()` is an explicit, valid policy; `SCHEDULER_SOLVE_MAX_SECONDS`
 and `SCHEDULER_SOLVE_MAX_GAP` override it and fail closed on an unparseable value; the policy's
-limits are written to `CpSolver.parameters.max_time_in_seconds` and `relative_gap_limit`.
+time budget is written to `CpSolver.parameters.max_time_in_seconds` (the accepted gap is a
+post-solve publish guard, not a CP-SAT limit — see the finding below).
 
 **F11.ac36** (CS-093a): `SolveResult.to_dict()` exposes the policy, the CP-SAT status name, the
 integer objective, the best bound, a finite relative gap, the elapsed seconds and a stopping
 reason that reads `optimal` only when CP-SAT returned `OPTIMAL`.
 
-**F11.ac37** (CS-093b): under a short time cap a feasible-but-unproven incumbent is returned as
-best found — `optimal` is `False`, the reason is not `optimal`, the objective is the known
-incumbent, and the result is within the accepted gap.
+**F11.ac37** (CS-093b): under a short time cap the hard fixture is time-stopped — a `FEASIBLE`
+incumbent returned as best found, `optimal` `False`, reason `time_limit`/`limit_or_unknown`, a
+non-zero gap within the accepted guard, and a real schedule rather than an empty one.
 
-**F11.ac38** (CS-093b): an `OPTIMAL` solve reports a zero relative gap and reason `optimal`.
+**F11.ac38** (CS-093b): a solve that proves optimality reports status `OPTIMAL`, a zero relative
+gap and reason `optimal`.
 
 **F11.ac39** (CS-093b): `UNKNOWN` or `MODEL_INVALID` with no incumbent raises `NoIncumbentError`
 carrying the status, never an empty schedule; `INFEASIBLE` still raises `InfeasibleModelError`
@@ -78,19 +80,44 @@ zero/near-zero objective yields a finite gap equal to the absolute difference ra
 division by zero. A proven `OPTIMAL` therefore reports gap `0.0`. The gap is left signed (never
 clamped) so a bound that floats a hair above the incumbent is visible rather than hidden.
 
+## Finding: CP-SAT `OPTIMAL` is not proof when a gap limit is set, and the decoupled guard
+
+Measured on ortools 9.15: `CpSolver` returns status **`OPTIMAL` whenever its `relative_gap_limit`
+is merely satisfied**, not only when it proves optimality. With `relative_gap_limit = 1.0` the
+three-day fixture returns `OPTIMAL` in 0.03s over an incumbent of 127500 (true optimum 38300) with
+a bound of 3000. So the status name alone is unsafe, and a loose accepted gap wired into
+`relative_gap_limit` makes CP-SAT **stop early at a materially worse schedule** (gap limit 0.85 →
+objective 54150 instead of 38300). A tight gap wired there has the opposite failure: the real
+full-week solve reaches a gap of only ~0.85 at 30s (a weak linear bound, not a bad schedule), so
+every real week would be rejected.
+
+The plan's step 2 ("pass the policy to `relative_gap_limit`") is therefore replaced, on evidence,
+by a **decoupled** design:
+
+- CP-SAT is given the time budget and `relative_gap_limit = 0.0`, so the search pursues optimality
+  for the whole budget and status `OPTIMAL` means genuinely proven (gap zero);
+- the accepted gap is enforced **after** the solve as a publish guard: an incumbent within it is
+  published as best found, one outside it raises `UnacceptableGapError` and is never published.
+
+This keeps solution quality (no early stop at a worse incumbent), keeps `OPTIMAL` honest, and
+still fails closed. `relative_gap` is always the computed `(objective - bound) / max(|objective|,1)`,
+never CP-SAT's status.
+
 ## Stopping reason, without guessing
 
-OR-Tools does not report which limit stopped the search, so the reason is derived from evidence,
-not guessed:
+OR-Tools does not report which limit stopped the search, so the reason is derived from the
+computed gap and the time evidence, never from the status name alone:
 
-- `OPTIMAL` → `optimal`.
-- `FEASIBLE`, gap satisfied, time budget not yet reached → `gap_limit`.
-- `FEASIBLE`, time budget reached, gap not satisfied → the solve is rejected (`UnacceptableGapError`).
-- `FEASIBLE`, both the gap satisfied and the time budget reached → `limit_or_unknown` (ambiguous).
-- `FEASIBLE`, neither (a solver-internal stop) → `limit_or_unknown`.
+- gap zero and status `OPTIMAL` (proven) → `optimal`.
+- status `OPTIMAL` with a non-zero gap (defensive; cannot arise while `relative_gap_limit = 0`) →
+  `gap_limit`.
+- `FEASIBLE` within the accepted gap, time budget reached → `time_limit`.
+- `FEASIBLE` within the accepted gap, stopped earlier for a solver-internal reason → `limit_or_unknown`.
+- any incumbent outside the accepted gap → rejected (`UnacceptableGapError`).
+- no incumbent (`UNKNOWN`/`MODEL_INVALID`) → `NoIncumbentError`.
 
-An accepted `FEASIBLE` is only ever published as best found; `optimal` is reserved for a true
-`OPTIMAL` status.
+An accepted `FEASIBLE` is only ever published as best found; `optimal` is reserved for a proven
+zero-gap `OPTIMAL`.
 
 ## What this story does not change
 

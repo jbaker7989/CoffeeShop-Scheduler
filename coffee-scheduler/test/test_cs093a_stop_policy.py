@@ -12,8 +12,8 @@ sys.path.insert(0, str(ROOT))
 
 from agents.scheduler.solve import (  # noqa: E402
     MAX_ALLOWED_GAP,
-    SolveResult,
     SolvePolicyError,
+    SolveResult,
     SolverStopPolicy,
     production_stop_policy,
     relative_gap,
@@ -64,13 +64,13 @@ class StopPolicyContractTests(unittest.TestCase):
         with self.assertRaises(SolvePolicyError):
             production_stop_policy(env={"SCHEDULER_SOLVE_MAX_GAP": "-1"})
 
-        # The policy's limits are the ones handed to CP-SAT, nothing silently substituted.
+        # The time budget is the CP-SAT-facing limit and is handed over verbatim. The accepted
+        # gap is a post-solve publish guard, not CP-SAT's relative_gap_limit (see the SDD).
         from ortools.sat.python import cp_model
 
         solver = cp_model.CpSolver()
         SolverStopPolicy(7.5, 0.05).apply(solver)
         self.assertEqual(solver.parameters.max_time_in_seconds, 7.5)
-        self.assertAlmostEqual(solver.parameters.relative_gap_limit, 0.05)
 
     # spec: F11.ac36
     def test_ac36_result_serialization_is_not_misleading(self):
