@@ -26,3 +26,7 @@ class AccessTokenSingleValidationTests(unittest.TestCase):
         self.assertEqual([token], calls)
 
 
+
+
+if __name__ == "__main__":
+    unittest.main()

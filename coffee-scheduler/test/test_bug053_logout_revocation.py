@@ -87,3 +87,7 @@ class LogoutRevocationTests(unittest.TestCase):
         self.assertEqual((tenant, user), ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001"))
         self.assertEqual(timezone.utc, expiry.tzinfo)
         self.assertGreater(expiry, datetime.now(timezone.utc))
+
+
+if __name__ == "__main__":
+    unittest.main()
