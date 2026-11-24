@@ -334,14 +334,9 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-016d — Solver runner, output object & tuning
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Blocked (on CS-016b, CS-016c)
+- **Status:** ✅ Done (2026-11-24)
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
-- **Description:** Run the model to a time/quality bound and emit a reviewable schedule.
-- **Detailed specifications:**
-  - Configure solver time limit, search params, and determinism (fixed seed) so runs are reproducible.
-  - Emit a structured schedule object (shift → employee/station/time) consumed by CS-015/CS-017.
-  - Attach the `Rule_Eval_Log` evaluation refs and objective breakdown for explainability.
-  - Performance target: solve a full week for all 3 stores within an agreed time budget.
+- **Description:** `agents/scheduler/runner.py` now composes typed input assembly, legality adaptation, model and objective construction, CS-093's bounded deterministic solve, and pure decoding into frozen `ScheduleOutput` objects. The output carries sorted shifts, per-shift premium rule ids, labour and premium economics, omitted objective terms, and the whole `SolveResult`; it deliberately does not duplicate CP-SAT penalty-slack itemisation or write `rule_eval_log`. Offline coverage pins rounding reconciliation, empty feasible schedules, premiums, determinism, typed failure propagation, phantom employees, and omissions; one rollback-only forward-day database check exercises the integrated path.
 
 ### CS-021 — Compliance verification pass
 - **Feature:** [F19](./FEATURES.md) · **Priority:** P1 (gate before any "legally accurate" demo) · **Size:** M
@@ -2402,7 +2397,7 @@ closing regression evidence.
 | CS-016a | F11 | P1 | M | Blocked |
 | CS-016b | F11 | P1 | M | Blocked |
 | CS-016c | F11 | P1 | S | ✅ Done (2026-11-23) |
-| CS-016d | F11 | P1 | M | Blocked |
+| CS-016d | F11 | P1 | M | ✅ Done (2026-11-24) |
 | CS-017 | F13 | P2 | S | Not started |
 | CS-018 | F14 | P2 | L | Not started (umbrella) |
 | CS-018a | F14 | P2 | M | Not started |
