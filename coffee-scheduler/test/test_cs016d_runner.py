@@ -38,7 +38,14 @@ from agents.scheduler.solve import (  # noqa: E402
 from contracts.forecast import ForecastRecord, ForecastSet, StoreOpenWindow  # noqa: E402
 
 DAY = date(2026, 12, 7)
+# Tiny synthetic models solve instantly, so the offline tests cap hard at 5s.
 CAPPED = SolverStopPolicy(max_time_seconds=5.0, max_relative_gap=1.0)
+# A real one-day, three-store model needs the production-scale budget to reach a first
+# incumbent: CS-093 measured a 1-day solve finding an incumbent only within ~30s, and
+# solve_schedule runs the whole budget (relative_gap_limit is pinned to 0.0). 5s is enough on
+# fast local hardware but not on a slower CI runner, where it returned UNKNOWN. gap 1.0 accepts
+# whatever incumbent is found, since this test checks the decode, not the gap guard.
+DB_CAPPED = SolverStopPolicy(max_time_seconds=30.0, max_relative_gap=1.0)
 
 
 def _allow_all(*_args, **_kwargs) -> LegalityVerdict:
@@ -232,7 +239,7 @@ class DatabaseRunnerTests(unittest.TestCase):
                                     rows=build_inference_rows(conn, window=target, history_feature_version=version))
                 persist_forecasts(conn, forecasts)
                 inputs = assemble_solver_inputs(conn, target_window=target, model_version=version)
-                output = run_schedule(conn, target_window=target, model_version=version, policy=CAPPED)
+                output = run_schedule(conn, target_window=target, model_version=version, policy=DB_CAPPED)
                 self.assertTrue(output.shifts)
                 self.assertEqual(output.objective, output.solve.objective)
                 self.assertEqual(output.economics.labour_cost_cents,
