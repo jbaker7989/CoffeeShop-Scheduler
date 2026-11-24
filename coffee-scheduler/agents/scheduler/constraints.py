@@ -173,15 +173,67 @@ def build_model(
         if slot.location_id not in stores:
             raise SolverModelError(f"store {slot.location_id}: slot refers to unknown store")
     for store_id, store in sorted(stores.items()):
-        store_days = sorted({day for location_id, day, _hour in index.by_store_day_hour if location_id == store_id})
+        store_days = tuple(
+            day for day in calendar_days
+            if (window := store.open_windows.get(day.weekday())) is not None and day.weekday() in window.open_weekdays
+        )
         for day in store_days:
             window = store.open_windows.get(day.weekday())
-            if window is None:
-                continue
+            if window is None:  # pragma: no cover - guaranteed by the open-day predicate above.
+                raise SolverModelError(f"store {store_id} weekday {day.weekday()}: missing open window")
+            if window.close_hour <= window.open_hour:
+                raise SolverModelError(
+                    f"store {store_id} weekday {day.weekday()}: close_hour {window.close_hour} "
+                    f"must exceed open_hour {window.open_hour}"
+                )
+            covering_by_hour = {
+                hour: index.by_store_day_hour.get((store_id, day, hour), ())
+                for hour in range(window.open_hour, window.close_hour)
+            }
+            for hour, covering in covering_by_hour.items():
+                if covering:
+                    continue
+                required_rule = next(
+                    (
+                        rule
+                        for rule in min_crew
+                        if _applicable(rule, store_id) and _coverage_value(rule) > 0
+                    ),
+                    None,
+                )
+                if required_rule is None:
+                    required_rule = next(
+                        (
+                            rule
+                            for rule in break_relief
+                            if rule.unit != "FLAG" and _applicable(rule, store_id) and _coverage_value(rule) > 0
+                        ),
+                        None,
+                    )
+                if required_rule is None:
+                    required_rule = next(
+                        (rule for rule in fpc if _applicable(rule, store_id) and _coverage_value(rule) > 0),
+                        None,
+                    )
+                if required_rule is None and hour in (window.open_hour, window.close_hour - 1):
+                    required_rule = next(
+                        (rule for rule in key_holder if _applicable(rule, store_id) and _coverage_value(rule) > 0),
+                        None,
+                    )
+                if required_rule is None and hour in _peak_hours(inputs, store_id, day):
+                    required_rule = next(
+                        (rule for rule in peak_skill if _applicable(rule, store_id) and _coverage_value(rule) > 0),
+                        None,
+                    )
+                if required_rule is not None:
+                    raise SolverModelError(
+                        f"store {store_id} / day {day} / hour {hour} / rule {required_rule.rule_id}: "
+                        "no candidate slot covers this open hour"
+                    )
             for hour in range(window.open_hour, window.close_hour):
-                slot_indices = index.by_store_day_hour.get((store_id, day, hour), ())
+                slot_indices = covering_by_hour[hour]
                 vars_here = [assign[(employee.employee_id, slot_index)] for employee in employees for slot_index in slot_indices]
-                if not vars_here:
+                if not slot_indices:
                     continue
                 for rule in min_crew:
                     if _applicable(rule, store_id):
@@ -210,7 +262,9 @@ def build_model(
                     ]
                     model.Add(sum(skilled) >= _coverage_value(rule)).OnlyEnforceIf(assumptions["coverage_peak_skill"])
             for hour in (window.open_hour, window.close_hour - 1):
-                slot_indices = index.by_store_day_hour.get((store_id, day, hour), ())
+                slot_indices = covering_by_hour[hour]
+                if not slot_indices:
+                    continue
                 key_vars = [
                     assign[(employee.employee_id, slot_index)]
                     for employee in employees if employee.is_key_holder

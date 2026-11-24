@@ -2859,13 +2859,8 @@ closing regression evidence.
 
 ### CS-094 — Require coverage for every open store-hour, not only for hours a slot happens to cover
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
-- **Description:** `build_model` drives its coverage loop from the **slots**, not from the store's open calendar, so a store-day with no candidate slots gets **no coverage constraints at all**. Demonstrated on both `ba2a162` and the CS-092 tree: a store open 08:00-10:00 with a 4-hour minimum shift produces zero slots, and the solver reports the model satisfiable with the store open and **nobody scheduled**, rather than reporting that the hours cannot be staffed. `COV-MIN-CREW` is seeded at 2, so this silently drops a real requirement.
-- **Detailed specifications:**
-  - Drive the store-day and store-hour loops from each store's `open_windows` over the target window, and treat an open hour with no candidate slot as a reportable failure naming the store, day and hour.
-  - Decide and document whether such an hour is infeasible or a surfaced warning, and attribute it to the coverage group that was skipped so `diagnose_infeasibility` names it.
-  - Covers the related case where a slot shorter than one hour covers no integer hour, so it reaches `by_day` but no `by_store_day_hour` bucket.
-  - Add `StoreOpenWindow` validation refusing `close_hour <= open_hour`: nothing validates it today, and the key-holder loop would then require staff at an hour the store is closed. No seeded row is degenerate, so this is latent rather than live.
+- **Status:** ✅ Done (2026-11-23)
+- **Summary:** Coverage now traverses open calendar days using the same weekday predicate as slot generation, rejects degenerate used windows, and raises `SolverModelError` for an open hour with no candidate slot and a positive applicable minimum. Candidate slots that cover an hour but lack a required role retain their existing assumption-group infeasibility diagnosis.
 
 ### CS-095 — Make database-gated tests skip when the database is unreachable
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P2 · **Size:** S
@@ -2875,3 +2870,13 @@ closing regression evidence.
   - Audit every DB-gated test for the `psycopg.connect(DSN, connect_timeout=3)` skip-gate and make the gate cover the whole connection path, including connections opened inside the test body or a fixture.
   - Assert the behaviour: with an unreachable DSN the suite reports skips and zero failures.
   - Keep the rollback-only `conn.transaction()` plus `_Rollback` pattern unchanged; this is only about the gate.
+
+### CS-096 — Coverage rules are matched by free text, so both key-holder rules apply at both open and close
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~0.5d (est.)
+- **Description:** `_coverage_rules(inputs, *terms)` in `agents/scheduler/constraints.py` selects coverage rules by substring-matching the terms against `rule_id + description + basis`. `_coverage_rules("key", "holder")` therefore returns **both** `COV-KEYHOLDER-OPEN` and `COV-KEYHOLDER-CLOSE`, and the key-holder loop applies **every** matched rule at **both** the open hour and the close hour. With both rows seeded at headcount 1 this is a redundant `>= 1` and harmless, but it is a latent correctness bug: a tenant who sets `COV-KEYHOLDER-OPEN` to 2 and `COV-KEYHOLDER-CLOSE` to 1 would get **2 key-holders required at close** as well as at open, and vice versa. The same free-text selection means any future coverage rule whose description shares words with another is silently conflated. Found during the CS-094 review; not introduced by it.
+- **Detailed specifications:**
+  - Match coverage rules by their canonical `rule_id`, as [[CS-092]]'s BUG-072 did for `shift_rules` (`RULE_MIN_REST_HOURS` etc.), rather than by free-text terms over the description.
+  - Apply `COV-KEYHOLDER-OPEN` only at the open hour and `COV-KEYHOLDER-CLOSE` only at the close hour, so differing headcounts are honoured per edge.
+  - Fail closed with a typed error naming the rule id when an expected coverage rule is absent, keeping the current "missing rule" behaviour.
+  - Add a test with `COV-KEYHOLDER-OPEN = 2`, `COV-KEYHOLDER-CLOSE = 1` asserting the open hour requires 2 and the close hour requires 1, which fails under the current matcher.

@@ -124,6 +124,7 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **CS-016b (hard constraints, done):** Deterministic CP-SAT legality, coverage, capacity, shift, and location constraints are specified in [docs/sdd-cs016b.md](docs/sdd-cs016b.md) (F11.ac8–ac14).
 - **CS-016c (soft objectives, done):** Integer-only labour, coverage, overtime, premium, and sales-prior objective terms are specified in [docs/sdd-cs016c.md](docs/sdd-cs016c.md) (F11.ac16–ac21).
 - **CS-092 (build scaling, done):** Slot lookups are built once and the minimum-rest rule is encoded as one no-overlap constraint per employee over optional intervals, specified in [docs/sdd-cs092.md](docs/sdd-cs092.md) (F11.ac27-ac33).
+- **CS-094 (open-hour coverage, done):** Open store-hours without any candidate slot now fail closed at model build time, while role shortages remain coverage-group infeasibility; specified in [docs/sdd-cs094.md](docs/sdd-cs094.md) (F11.ac34-ac40).
 - **Description:** OR-Tools CP-SAT model emitting a legal, cost-aware weekly schedule. Hard constraints: legality and coverage. Soft objectives: labour % target, 85% utilisation, overtime budget, cost targets. Respects stations per store (LM/HK 4 stations/6 staff, Astoria 3/4) and fixed tasks. **The solver's input tables must be enumerated explicitly in the implementation so nothing is implicit:**
   - Forecast output (F8 / F9)
   - Roster (F2)
