@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from ortools.sat.python import cp_model
 
-from agents.scheduler.constraints import SchedulingModel, _covers
+from agents.scheduler.constraints import SchedulingModel
 from agents.scheduler.inputs import CostTargetInput, SolverInputs, ThroughputInput
 from contracts.forecast import CANONICAL_TZ
 
@@ -161,15 +161,16 @@ def build_objective(
     utilisation = _utilisation_target(inputs)
     employees = tuple(sorted(inputs.employees, key=lambda employee: employee.employee_id))
     slots = model.slots
+    index = model.index
     labour_parts: list[Any] = []
     labour_by_store: dict[int, list[Any]] = {store.location_id: [] for store in inputs.stores}
     for employee in employees:
         rate = _decimal(employee.hourly_rate, description=f"employee {employee.employee_id} hourly_rate")
         if rate < 0:
             raise ObjectiveError(f"employee {employee.employee_id}: negative hourly_rate")
-        for index, slot in enumerate(slots):
+        for slot_index, slot in enumerate(slots):
             cents = _cents(slot.hours * rate, description=f"employee {employee.employee_id} labour cost")
-            part = cents * model.assign[(employee.employee_id, index)]
+            part = cents * model.assign[(employee.employee_id, slot_index)]
             labour_parts.append(part)
             labour_by_store[slot.location_id].append(part)
 
@@ -178,16 +179,17 @@ def build_objective(
     for store in sorted(inputs.stores, key=lambda item: item.location_id):
         penalty = _integer(targets[store.location_id].understaffing_penalty_weight,
                            description=f"cost_targets store {store.location_id}")
-        for day in sorted({slot.day for slot in slots if slot.location_id == store.location_id}):
+        store_days = sorted({day for location_id, day, _hour in index.by_store_day_hour if location_id == store.location_id})
+        for day in store_days:
             window = store.open_windows.get(day.weekday())
             if window is None:
                 continue
             for hour in range(window.open_hour, window.close_hour):
+                slot_indices = index.by_store_day_hour.get((store.location_id, day, hour), ())
                 vars_here = [
-                    model.assign[(employee.employee_id, index)]
+                    model.assign[(employee.employee_id, slot_index)]
                     for employee in employees
-                    for index, slot in enumerate(slots)
-                    if slot.location_id == store.location_id and slot.day == day and _covers(slot, hour)
+                    for slot_index in slot_indices
                 ]
                 needed = int(required_labour_hours(
                     _records_here(inputs, store.location_id, day, hour), inputs.throughput,

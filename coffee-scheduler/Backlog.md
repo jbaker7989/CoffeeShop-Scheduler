@@ -2836,9 +2836,42 @@ closing regression evidence.
 
 ### CS-092 — Make the model build scale to a full week
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Status:** ✅ Done (2026-11-23) · **Developer:** Codex (dev+tests), Claude (verification) · **Started:** 2026-11-23 · **Duration:** ~1d
 - **Description:** Separate from BUG-073's snapshot loading, `build_model` rebuilds a per-store-hour variable list by scanning **every** slot for every `(store, day, hour)` and again for each coverage rule, and the objective repeats the same scan. That is roughly employees x slots x hours work in Python, so a full week remains slow even once snapshots are reused. [[CS-016d]] carries the performance target "solve a full week for all 3 stores within an agreed time budget", which cannot be met until the build itself is linear.
+- **Outcome:** `build_model` now builds every slot lookup once (`SlotIndex` in `agents/scheduler/shifts.py`: per-day, per-ISO-week and per-store-hour buckets plus precomputed start/end datetimes and integer elapsed minutes) and `agents/scheduler/objective.py` reads the same index instead of repeating the scan. Profiling first showed the cost was **two** things, not one: 47.3M `_slot_start`/`_slot_end` calls from an O(slots²) rest scan nested **inside** the per-employee loop computing an employee-independent gap, and ~15.9M pairwise `left + right <= 1` constraints. Indexing alone would have left the second, so the minimum-rest rule is now one `AddNoOverlap` per employee over optional intervals of size `duration + rest`; two such intervals overlap exactly when the gap is under the rest, so the rule is unchanged. `AddNoOverlap` takes no `OnlyEnforceIf`, so each interval's presence literal is a reified `active <=> assign AND shift_rules`, which keeps F11.ac13's infeasibility attribution working.
+- **Measured (3 stores, 40 employees, 06:00-21:00, stub legality):** build **13.9s → 0.4s** (1 day), **57.8s → 1.3s** (3 days), **3.4s** (7 days), **7.0s** (14 days) — a 14-day window had never been buildable. Growth is now linear in slots. Constraints over 3 days fall from roughly 15.9M to 288k. The full test suite's CS-016b file and CI's Test suite both benefit.
+- **Equivalence:** proven by enumerating the **entire feasible set** of a tiny fixture (2401 solutions, digest `ebb4fb94e397f9bac5b6f86c702876fc563c7d1024b3da8a5c912f31e7eaabf0`) and matching the pairwise encoding at `ba2a162` exactly, plus identical objective values (26900 and 38300). The plan's original criterion — a hash of the chosen assignments — was **wrong and was corrected**: the objective has ties, so re-encoding changes which tied optimum CP-SAT reaches first.
+- **Not claimed:** solve time. Neither encoding proves optimality on the three-day, four-employee fixture inside 150s; both reach 38300 in under a second and stall. Measured on both trees, so it is pre-existing and is tracked as [[CS-093]].
 - **Detailed specifications:**
   - Index slots once by `(location, day)` and by covered hour, then reuse the index across every coverage rule, the station capacity constraints and the objective.
   - Record the measured build and solve time for a one-day, seven-day and fourteen-day window so the CS-016d budget is set against evidence.
   - No change to any constraint's meaning: the same model, built faster, asserted by comparing the objective value and chosen assignments before and after on a fixed seed.
+
+### CS-093 — Give the solver a stopping rule instead of waiting for proven optimality
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** M
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~2d (est.)
+- **Description:** Measured during [[CS-092]] on **both** the old pairwise and the new interval encoding: a three-day, four-employee fixture reaches objective 38300 in under a second and then **cannot prove optimality within 150s**. [[CS-092]] made the model *build* linear (a 14-day window builds in 7s), so the build is no longer the wall — the optimality proof is. [[CS-016d]]'s target, "solve a full week for all 3 stores within an agreed time budget", is unreachable as stated because it implies proven optimality.
+- **Detailed specifications:**
+  - Replace "solve to optimality" with an explicit stopping rule: a time budget plus an accepted optimality gap, both configuration rather than constants, and record which one stopped the search.
+  - Return the gap and the stopping reason on the result object so a schedule can be reported as "best found, within x% of the bound" rather than implying it is optimal.
+  - Set the budget from measurement on a full week at real scale, not on the small fixtures used in tests.
+  - Keep tests capped and asserting the objective value, never an `OPTIMAL` status, so CI cannot spend minutes proving optimality (this cost one CS-092 test 376s before it was capped).
+
+### CS-094 — Require coverage for every open store-hour, not only for hours a slot happens to cover
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Description:** `build_model` drives its coverage loop from the **slots**, not from the store's open calendar, so a store-day with no candidate slots gets **no coverage constraints at all**. Demonstrated on both `ba2a162` and the CS-092 tree: a store open 08:00-10:00 with a 4-hour minimum shift produces zero slots, and the solver reports the model satisfiable with the store open and **nobody scheduled**, rather than reporting that the hours cannot be staffed. `COV-MIN-CREW` is seeded at 2, so this silently drops a real requirement.
+- **Detailed specifications:**
+  - Drive the store-day and store-hour loops from each store's `open_windows` over the target window, and treat an open hour with no candidate slot as a reportable failure naming the store, day and hour.
+  - Decide and document whether such an hour is infeasible or a surfaced warning, and attribute it to the coverage group that was skipped so `diagnose_infeasibility` names it.
+  - Covers the related case where a slot shorter than one hour covers no integer hour, so it reaches `by_day` but no `by_store_day_hour` bucket.
+  - Add `StoreOpenWindow` validation refusing `close_hour <= open_hour`: nothing validates it today, and the key-holder loop would then require staff at an hour the store is closed. No seeded row is degenerate, so this is latent rather than live.
+
+### CS-095 — Make database-gated tests skip when the database is unreachable
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~0.5d (est.)
+- **Description:** `test_cs016c_objective.py::DatabaseObjectiveTests::test_ac21_real_one_day_objective_builds` **errors** with `psycopg.OperationalError` instead of skipping when `DATABASE_URL` points at no server. Reproduced identically on `ba2a162`, so it is pre-existing, and it passes against a live database — but the skip-gate is what lets the suite run without Postgres, and one test escaping it makes a no-database run report a failure that is not one.
+- **Detailed specifications:**
+  - Audit every DB-gated test for the `psycopg.connect(DSN, connect_timeout=3)` skip-gate and make the gate cover the whole connection path, including connections opened inside the test body or a fixture.
+  - Assert the behaviour: with an unreachable DSN the suite reports skips and zero failures.
+  - Keep the rollback-only `conn.transaction()` plus `_Rollback` pattern unchanged; this is only about the gate.
