@@ -208,6 +208,10 @@ class BuildScalingTests(unittest.TestCase):
     # spec: F11.ac30
     def test_ac30_identical_bounds_and_single_slot(self):
         inputs = _inputs(1, 1)
+        inputs = replace(
+            inputs,
+            stores=(replace(inputs.stores[0], open_windows={0: StoreOpenWindow(8, 12, frozenset({0}))}),),
+        )
         slots = (ShiftSlot(3, DAY, Decimal("8"), Decimal("12")), ShiftSlot(3, DAY, Decimal("8"), Decimal("12")))
         model = build_model(inputs, slots=slots, legality=_allow)
         model.model.Add(sum(model.assign.values()) == 2)
@@ -225,7 +229,12 @@ class BuildScalingTests(unittest.TestCase):
         with self.assertRaises(SolverModelError):
             build_model(_inputs(1, 1, "0"), legality=_allow)
         slots = (ShiftSlot(3, DAY, Decimal("8"), Decimal("12")), ShiftSlot(3, DAY, Decimal("12"), Decimal("16")))
-        model = build_model(_inputs(1, 1), slots=slots, legality=_allow)
+        inputs = _inputs(1, 1)
+        inputs = replace(
+            inputs,
+            stores=(replace(inputs.stores[0], open_windows={0: StoreOpenWindow(8, 16, frozenset({0}))}),),
+        )
+        model = build_model(inputs, slots=slots, legality=_allow)
         self.assertEqual(model.index.by_store_day_hour.get((3, DAY, 7), ()), ())
         model.model.Add(sum(model.assign.values()) == 2)
         self.assertEqual(_solve(model)[1], cp_model.INFEASIBLE)  # one shift per day remains binding
