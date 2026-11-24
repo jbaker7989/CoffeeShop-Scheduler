@@ -1628,8 +1628,9 @@ closing regression evidence.
 
 ### BUG-019 — `test_rules_admin.py` has no `unittest.main()` → runs 0 tests when invoked as a script
 - **Feature:** [F34](./FEATURES.md) (CS-034) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open · **Type:** Defect (tests silently do not run) · **Pattern:** —
-- **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.1d (est.)
+- **Status:** ✅ Fixed (2026-11-24) · **Type:** Defect (tests silently do not run) · **Pattern:** —
+- **Developer:** Claude · **Found:** 2026-11-14 · **Duration:** ~0.1d (est.)
+- **Outcome:** `test_rules_admin.py` now inserts the package root on `sys.path` (it raised `ModuleNotFoundError` as a script, not just "zero tests") and ends with `unittest.main()`; the three siblings with the same missing-entrypoint defect (`test_bug051/052/053`) got the entrypoint too. New `test/test_bug019_test_harness_runnable.py` is a convention guard: every `test/test_*.py` must have an `if __name__ == "__main__":` entrypoint, and `test_rules_admin.py` is proven to run >0 tests as a script. Plan: [BUG-019 plan](./docs/plans/BUG-019-test-rules-admin-runnable.md). Test-only change; no production code touched.
 - **Description:** `coffee-scheduler/test/test_rules_admin.py` defines 18 test methods but has **no**
   `if __name__ == "__main__": unittest.main()` block (every other test file in the repo has one). Its own
   docstring says to run it with `python3 coffee-scheduler/test/test_rules_admin.py`, but that invocation
@@ -2579,7 +2580,7 @@ closing regression evidence.
 
 ### BUG-055 — F36/F38: protect telemetry endpoints and require TLS off loopback
 - **Feature:** [F36](./FEATURES.md) + [F38](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** 🐞 Open
+- **Status:** ✅ Fixed — `test(F36/F38/BUG-055)` `233b44e` + `fix(F36/F38/BUG-055)` `4ae18c3` (merged to `main`): loopback-only plaintext, fail-closed TLS/mTLS for remote OTLP in `otel/telemetry.py`, `127.0.0.1`-bound dev ports, and `otel/collector-config.prod.yaml`. `test/test_bug055_secure_otlp_transport.py` = 21/21 pass. (Status corrected 2026-11-24; the entry had been left Open after the merge.)
 - **Description:** The observability compose file publishes OTLP and health-check ports on all host interfaces, while the SDK always sets `insecure=True`. Collector OTLP receivers are unauthenticated. A machine reachable on the host network can submit telemetry or probe health, and telemetry sent to a remote endpoint has no transport encryption.
 - **AC1:** Compose publishes development OTLP and health ports on `127.0.0.1` only while preserving service-to-service access on the compose network.
 - **AC2:** SDK configuration permits plaintext only for an explicitly recognized loopback endpoint.
@@ -2688,7 +2689,8 @@ closing regression evidence.
   - The runbook states the expected behaviour when pre-existing rows violate the contract (fail-fast vs. quarantine), cross-referenced from `docs/contracts/forecast-output.md`.
 
 ### BUG-063 — CI: `check_test_first.py` is a no-op under the `coffee-scheduler/` repo layout
-- **Area:** CI gate (`test/SKILL.md` job 2) · **Priority:** P2 · **Size:** XS · **Status:** 🐞 Open · **Type:** CI integrity (silent pass) · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Area:** CI gate (`test/SKILL.md` job 2) · **Priority:** P2 · **Size:** XS · **Status:** ✅ Fixed (2026-11-24) · **Type:** CI integrity (silent pass) · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Outcome:** `scripts/ci/check_test_first.py` now discovers the project's repo subdirectory with `git -C ROOT rev-parse --show-prefix` and strips the leading `coffee-scheduler/` from each `git log` path before classifying, so `contracts/`, `db/`, `api/`, `agents/`, etc. match again; the ordering decision is extracted into a pure `evaluate(commits, subdir)`. New `test/test_bug063_test_first_guard.py` (9 tests) proves normalisation, the production/test classification regression, the before/after/same-commit/no-test ordering outcomes, and that excluded prefixes keep their meaning; a `""` subdir (sub-tree checkout) is a no-op. Plan: [BUG-063 plan](./docs/plans/BUG-063-test-first-guard-layout.md).
 - **Description:** `scripts/ci/check_test_first.py` compares `git log … --name-only` paths (which are repo-root-relative, e.g. `coffee-scheduler/contracts/forecast.py`) against `PRODUCTION_PREFIXES` that omit the `coffee-scheduler/` segment (`"contracts/"`, `"db/"`, …). No path ever matches, so the guard reports "no production files added; nothing to order" for every PR and never enforces test-first. Observed on this PR, which added `contracts/` and `db/migrations/` yet the guard saw no production files.
 - **Story:** As a reviewer, I want the test-first guard to actually detect production files in this repo's `coffee-scheduler/` layout, so a PR that lands implementation before its tests is caught.
 - **Acceptance criteria:**
