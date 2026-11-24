@@ -1,4 +1,4 @@
-"""CS-093b — bounded feasible and no-incumbent semantics (F11.ac37-ac40)."""
+"""CS-093b — bounded feasible and no-incumbent semantics (F11.ac44-ac47)."""
 
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ INCUMBENT = 38300
 
 
 class BoundedSemanticsTests(unittest.TestCase):
-    # spec: F11.ac37
-    def test_ac37_feasible_incumbent_is_best_found(self):
+    # spec: F11.ac44
+    def test_ac44_feasible_incumbent_is_best_found(self):
         # The hard CS-092 fixture reaches its incumbent fast but cannot be proven optimal. Under a
         # short time cap the search is time-stopped: a FEASIBLE incumbent, reported as best found
         # within the accepted gap, never as optimal.
@@ -49,8 +49,8 @@ class BoundedSemanticsTests(unittest.TestCase):
         self.assertLessEqual(result.relative_gap, 0.9)
         self.assertTrue(result.assignments)  # a real schedule, not an empty one
 
-    # spec: F11.ac38
-    def test_ac38_optimal_is_zero_gap(self):
+    # spec: F11.ac45
+    def test_ac45_optimal_is_zero_gap(self):
         inputs = tiny_optimal_inputs()
         model = build_model(inputs, legality=allow_all)
         build_objective(model, inputs)
@@ -60,8 +60,8 @@ class BoundedSemanticsTests(unittest.TestCase):
         self.assertEqual(result.stopping_reason, "optimal")
         self.assertEqual(result.relative_gap, 0.0)
 
-    # spec: F11.ac39
-    def test_ac39_no_incumbent_and_infeasible_fail_closed(self):
+    # spec: F11.ac46
+    def test_ac46_no_incumbent_and_infeasible_fail_closed(self):
         # UNKNOWN / MODEL_INVALID with no incumbent is a typed failure carrying the status,
         # tested at the classification boundary so it does not depend on solver timing.
         for status in (cp_model.UNKNOWN, cp_model.MODEL_INVALID):
@@ -81,8 +81,8 @@ class BoundedSemanticsTests(unittest.TestCase):
             solve_schedule(model, policy=SolverStopPolicy(max_time_seconds=10.0, max_relative_gap=1.0))
         self.assertTrue(caught.exception.groups)
 
-    # spec: F11.ac40
-    def test_ac40_incumbent_outside_gap_is_rejected(self):
+    # spec: F11.ac47
+    def test_ac47_incumbent_outside_gap_is_rejected(self):
         inputs = real_shape_inputs(3, 4)
         model = build_model(inputs, legality=allow_all)
         build_objective(model, inputs)

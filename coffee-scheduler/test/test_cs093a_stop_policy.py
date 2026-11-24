@@ -1,4 +1,4 @@
-"""CS-093a — stop-policy and result contract (F11.ac34-ac36)."""
+"""CS-093a — stop-policy and result contract (F11.ac41-ac43)."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ from agents.scheduler.solve import (  # noqa: E402
 
 
 class StopPolicyContractTests(unittest.TestCase):
-    # spec: F11.ac34
-    def test_ac34_policy_validates_time_and_gap(self):
+    # spec: F11.ac41
+    def test_ac41_policy_validates_time_and_gap(self):
         # A valid policy survives construction and is immutable.
         policy = SolverStopPolicy(max_time_seconds=5.0, max_relative_gap=0.02)
         self.assertEqual(policy.max_time_seconds, 5.0)
@@ -45,8 +45,8 @@ class StopPolicyContractTests(unittest.TestCase):
         self.assertEqual(SolverStopPolicy(5.0, 0.0).max_relative_gap, 0.0)
         self.assertEqual(SolverStopPolicy(5.0, MAX_ALLOWED_GAP).max_relative_gap, MAX_ALLOWED_GAP)
 
-    # spec: F11.ac35
-    def test_ac35_default_is_explicit_and_overridable_and_applied(self):
+    # spec: F11.ac42
+    def test_ac42_default_is_explicit_and_overridable_and_applied(self):
         default = production_stop_policy()
         self.assertIsInstance(default, SolverStopPolicy)
         self.assertGreater(default.max_time_seconds, 0.0)
@@ -72,8 +72,8 @@ class StopPolicyContractTests(unittest.TestCase):
         SolverStopPolicy(7.5, 0.05).apply(solver)
         self.assertEqual(solver.parameters.max_time_in_seconds, 7.5)
 
-    # spec: F11.ac36
-    def test_ac36_result_serialization_is_not_misleading(self):
+    # spec: F11.ac43
+    def test_ac43_result_serialization_is_not_misleading(self):
         policy = SolverStopPolicy(5.0, 0.02)
         result = SolveResult(
             assignments=((1, 0), (2, 3)),
@@ -97,8 +97,8 @@ class StopPolicyContractTests(unittest.TestCase):
         self.assertFalse(result.optimal)
         self.assertNotEqual(data["stopping_reason"], "optimal")
 
-    # spec: F11.ac36 (gap arithmetic + zero-objective convention)
-    def test_ac36_gap_arithmetic_is_finite_and_zero_at_optimum(self):
+    # spec: F11.ac43 (gap arithmetic + zero-objective convention)
+    def test_ac43_gap_arithmetic_is_finite_and_zero_at_optimum(self):
         self.assertEqual(relative_gap(0.0, 0.0), 0.0)
         self.assertEqual(relative_gap(100.0, 100.0), 0.0)
         # Denominator floored at 1.0, so a near-zero objective stays finite.

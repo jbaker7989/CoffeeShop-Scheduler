@@ -21,55 +21,55 @@ and CI tests cannot spend minutes attempting an optimality proof.
 
 ## Acceptance criteria
 
-**F11.ac34** (CS-093a): `SolverStopPolicy` refuses a non-positive, non-finite or non-numeric time
+**F11.ac41** (CS-093a): `SolverStopPolicy` refuses a non-positive, non-finite or non-numeric time
 limit, and a negative, non-finite, non-numeric or over-cap (> 1.0 ratio) gap, before any solve.
 
-**F11.ac35** (CS-093a): `production_stop_policy()` is an explicit, valid policy; `SCHEDULER_SOLVE_MAX_SECONDS`
+**F11.ac42** (CS-093a): `production_stop_policy()` is an explicit, valid policy; `SCHEDULER_SOLVE_MAX_SECONDS`
 and `SCHEDULER_SOLVE_MAX_GAP` override it and fail closed on an unparseable value; the policy's
 time budget is written to `CpSolver.parameters.max_time_in_seconds` (the accepted gap is a
 post-solve publish guard, not a CP-SAT limit — see the finding below).
 
-**F11.ac36** (CS-093a): `SolveResult.to_dict()` exposes the policy, the CP-SAT status name, the
+**F11.ac43** (CS-093a): `SolveResult.to_dict()` exposes the policy, the CP-SAT status name, the
 integer objective, the best bound, a finite relative gap, the elapsed seconds and a stopping
 reason that reads `optimal` only when CP-SAT returned `OPTIMAL`.
 
-**F11.ac37** (CS-093b): under a short time cap the hard fixture is time-stopped — a `FEASIBLE`
+**F11.ac44** (CS-093b): under a short time cap the hard fixture is time-stopped — a `FEASIBLE`
 incumbent returned as best found, `optimal` `False`, reason `time_limit`/`limit_or_unknown`, a
 non-zero gap within the accepted guard, and a real schedule rather than an empty one.
 
-**F11.ac38** (CS-093b): a solve that proves optimality reports status `OPTIMAL`, a zero relative
+**F11.ac45** (CS-093b): a solve that proves optimality reports status `OPTIMAL`, a zero relative
 gap and reason `optimal`.
 
-**F11.ac39** (CS-093b): `UNKNOWN` or `MODEL_INVALID` with no incumbent raises `NoIncumbentError`
+**F11.ac46** (CS-093b): `UNKNOWN` or `MODEL_INVALID` with no incumbent raises `NoIncumbentError`
 carrying the status, never an empty schedule; `INFEASIBLE` still raises `InfeasibleModelError`
 with its binding groups.
 
-**F11.ac40** (CS-093b): a feasible incumbent whose gap exceeds the allowed gap raises
+**F11.ac47** (CS-093b): a feasible incumbent whose gap exceeds the allowed gap raises
 `UnacceptableGapError` rather than being published.
 
-**F11.ac41** (CS-093c): the CS-016 hard-constraint and objective fixtures solved through
+**F11.ac48** (CS-093c): the CS-016 hard-constraint and objective fixtures solved through
 `solve_schedule` under a capped policy keep their assignment legality and objective value; the
 assertion is on the objective, never on an `OPTIMAL` status.
 
-**F11.ac42** (CS-093c): every capped solve in the suite terminates within an explicit wall-clock
+**F11.ac49** (CS-093c): every capped solve in the suite terminates within an explicit wall-clock
 guard, so CI stays bounded.
 
-**F11.ac43** (CS-093c): the real-scale measurement command records model build time, solve time,
+**F11.ac50** (CS-093c): the real-scale measurement command records model build time, solve time,
 incumbent objective, bound, gap, status, elapsed and the selected default to a checked-in report,
 and runs only opt-in so CI never attempts the proof.
 
 | AC | Test |
 | --- | --- |
-| F11.ac34 | `test_cs093a_stop_policy.py::test_ac34_policy_validates_time_and_gap` |
-| F11.ac35 | `test_cs093a_stop_policy.py::test_ac35_default_is_explicit_and_overridable_and_applied` |
-| F11.ac36 | `test_cs093a_stop_policy.py::test_ac36_result_serialization_is_not_misleading` |
-| F11.ac37 | `test_cs093b_bounded_semantics.py::test_ac37_feasible_incumbent_is_best_found` |
-| F11.ac38 | `test_cs093b_bounded_semantics.py::test_ac38_optimal_is_zero_gap` |
-| F11.ac39 | `test_cs093b_bounded_semantics.py::test_ac39_no_incumbent_and_infeasible_fail_closed` |
-| F11.ac40 | `test_cs093b_bounded_semantics.py::test_ac40_incumbent_outside_gap_is_rejected` |
-| F11.ac41 | `test_cs093c_regression_guard.py::test_ac41_capped_solve_preserves_objective` |
-| F11.ac42 | `test_cs093c_regression_guard.py::test_ac42_capped_solve_terminates_within_guard` |
-| F11.ac43 | `test_cs093c_regression_guard.py::test_ac43_measurement_command_writes_report` |
+| F11.ac41 | `test_cs093a_stop_policy.py::test_ac41_policy_validates_time_and_gap` |
+| F11.ac42 | `test_cs093a_stop_policy.py::test_ac42_default_is_explicit_and_overridable_and_applied` |
+| F11.ac43 | `test_cs093a_stop_policy.py::test_ac43_result_serialization_is_not_misleading` |
+| F11.ac44 | `test_cs093b_bounded_semantics.py::test_ac44_feasible_incumbent_is_best_found` |
+| F11.ac45 | `test_cs093b_bounded_semantics.py::test_ac45_optimal_is_zero_gap` |
+| F11.ac46 | `test_cs093b_bounded_semantics.py::test_ac46_no_incumbent_and_infeasible_fail_closed` |
+| F11.ac47 | `test_cs093b_bounded_semantics.py::test_ac47_incumbent_outside_gap_is_rejected` |
+| F11.ac48 | `test_cs093c_regression_guard.py::test_ac48_capped_solve_preserves_objective` |
+| F11.ac49 | `test_cs093c_regression_guard.py::test_ac49_capped_solve_terminates_within_guard` |
+| F11.ac50 | `test_cs093c_regression_guard.py::test_ac50_measurement_command_writes_report` |
 
 ## Gap arithmetic and the zero-objective convention
 

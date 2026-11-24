@@ -1,4 +1,4 @@
-"""CS-093c — solver regression and bounded-CI performance guard (F11.ac41-ac43)."""
+"""CS-093c — solver regression and bounded-CI performance guard (F11.ac48-ac50)."""
 
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ KNOWN_OBJECTIVE = {(2, 3): 26900, (3, 4): 38300}
 
 
 class RegressionGuardTests(unittest.TestCase):
-    # spec: F11.ac41
-    def test_ac41_capped_solve_preserves_objective(self):
+    # spec: F11.ac48
+    def test_ac48_capped_solve_preserves_objective(self):
         for (days, people), objective in KNOWN_OBJECTIVE.items():
             with self.subTest(days=days, people=people):
                 inputs = real_shape_inputs(days, people)
@@ -44,8 +44,8 @@ class RegressionGuardTests(unittest.TestCase):
                 for key in result.assignments:
                     self.assertIn(key, model.assign)
 
-    # spec: F11.ac42
-    def test_ac42_capped_solve_terminates_within_guard(self):
+    # spec: F11.ac49
+    def test_ac49_capped_solve_terminates_within_guard(self):
         inputs = real_shape_inputs(3, 4)
         model = build_model(inputs, legality=allow_all)
         build_objective(model, inputs)
@@ -56,8 +56,8 @@ class RegressionGuardTests(unittest.TestCase):
         self.assertLess(elapsed, 20.0)
         self.assertLessEqual(result.elapsed_seconds, elapsed + 0.5)
 
-    # spec: F11.ac43
-    def test_ac43_measurement_command_writes_report(self):
+    # spec: F11.ac50
+    def test_ac50_measurement_command_writes_report(self):
         # A small capped measurement proves the command records the documented evidence; the
         # real-scale default is established by running the script manually (see the report).
         inputs = real_shape_inputs(2, 3)
