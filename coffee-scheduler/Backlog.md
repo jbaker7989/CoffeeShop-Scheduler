@@ -2870,3 +2870,13 @@ closing regression evidence.
   - Audit every DB-gated test for the `psycopg.connect(DSN, connect_timeout=3)` skip-gate and make the gate cover the whole connection path, including connections opened inside the test body or a fixture.
   - Assert the behaviour: with an unreachable DSN the suite reports skips and zero failures.
   - Keep the rollback-only `conn.transaction()` plus `_Rollback` pattern unchanged; this is only about the gate.
+
+### CS-096 — Coverage rules are matched by free text, so both key-holder rules apply at both open and close
+- **Feature:** [F11](./FEATURES.md) · **Priority:** P2 · **Size:** S
+- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~0.5d (est.)
+- **Description:** `_coverage_rules(inputs, *terms)` in `agents/scheduler/constraints.py` selects coverage rules by substring-matching the terms against `rule_id + description + basis`. `_coverage_rules("key", "holder")` therefore returns **both** `COV-KEYHOLDER-OPEN` and `COV-KEYHOLDER-CLOSE`, and the key-holder loop applies **every** matched rule at **both** the open hour and the close hour. With both rows seeded at headcount 1 this is a redundant `>= 1` and harmless, but it is a latent correctness bug: a tenant who sets `COV-KEYHOLDER-OPEN` to 2 and `COV-KEYHOLDER-CLOSE` to 1 would get **2 key-holders required at close** as well as at open, and vice versa. The same free-text selection means any future coverage rule whose description shares words with another is silently conflated. Found during the CS-094 review; not introduced by it.
+- **Detailed specifications:**
+  - Match coverage rules by their canonical `rule_id`, as [[CS-092]]'s BUG-072 did for `shift_rules` (`RULE_MIN_REST_HOURS` etc.), rather than by free-text terms over the description.
+  - Apply `COV-KEYHOLDER-OPEN` only at the open hour and `COV-KEYHOLDER-CLOSE` only at the close hour, so differing headcounts are honoured per edge.
+  - Fail closed with a typed error naming the rule id when an expected coverage rule is absent, keeping the current "missing rule" behaviour.
+  - Add a test with `COV-KEYHOLDER-OPEN = 2`, `COV-KEYHOLDER-CLOSE = 1` asserting the open hour requires 2 and the close hour requires 1, which fails under the current matcher.
