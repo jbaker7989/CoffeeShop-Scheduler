@@ -2859,13 +2859,8 @@ closing regression evidence.
 
 ### CS-094 — Require coverage for every open store-hour, not only for hours a slot happens to cover
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
-- **Description:** `build_model` drives its coverage loop from the **slots**, not from the store's open calendar, so a store-day with no candidate slots gets **no coverage constraints at all**. Demonstrated on both `ba2a162` and the CS-092 tree: a store open 08:00-10:00 with a 4-hour minimum shift produces zero slots, and the solver reports the model satisfiable with the store open and **nobody scheduled**, rather than reporting that the hours cannot be staffed. `COV-MIN-CREW` is seeded at 2, so this silently drops a real requirement.
-- **Detailed specifications:**
-  - Drive the store-day and store-hour loops from each store's `open_windows` over the target window, and treat an open hour with no candidate slot as a reportable failure naming the store, day and hour.
-  - Decide and document whether such an hour is infeasible or a surfaced warning, and attribute it to the coverage group that was skipped so `diagnose_infeasibility` names it.
-  - Covers the related case where a slot shorter than one hour covers no integer hour, so it reaches `by_day` but no `by_store_day_hour` bucket.
-  - Add `StoreOpenWindow` validation refusing `close_hour <= open_hour`: nothing validates it today, and the key-holder loop would then require staff at an hour the store is closed. No seeded row is degenerate, so this is latent rather than live.
+- **Status:** ✅ Done (2026-11-23)
+- **Summary:** Coverage now traverses open calendar days using the same weekday predicate as slot generation, rejects degenerate used windows, and raises `SolverModelError` for an open hour with no candidate slot and a positive applicable minimum. Candidate slots that cover an hour but lack a required role retain their existing assumption-group infeasibility diagnosis.
 
 ### CS-095 — Make database-gated tests skip when the database is unreachable
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P2 · **Size:** S
