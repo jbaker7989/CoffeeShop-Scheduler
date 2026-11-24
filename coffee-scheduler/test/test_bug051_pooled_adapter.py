@@ -80,3 +80,7 @@ class PooledAdapterDelegationTests(unittest.TestCase):
         self.assertEqual(["self", "tenant_id", "user_id", "jti", "issued_at"], list(parameters))
 
 
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -2,9 +2,17 @@
 import csv
 import io
 import os
+import sys
 import unittest
 from datetime import date
+from pathlib import Path
 from unittest import mock
+
+# Put the package root (coffee-scheduler/) on sys.path so `from compliance import ...` resolves
+# when this file is run directly as a script, not only under `python3 -m unittest` discovery.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 try:
     import psycopg
@@ -253,3 +261,7 @@ class RulesAdminTests(unittest.TestCase):
             rules_admin.patch_rule(self.conn, "NYC-WAGE-MIN-2026", {}, if_match="bad", principal=self.principal)
         with self.assertRaises(rules_admin.Forbidden):
             rules_admin.patch_rule(self.conn, "NYC-WAGE-MIN-2026", {}, if_match=old["etag"], principal={"tenant_id": TENANT, "capabilities": set()})
+
+
+if __name__ == "__main__":
+    unittest.main()
