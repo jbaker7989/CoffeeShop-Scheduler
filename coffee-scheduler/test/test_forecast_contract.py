@@ -6,9 +6,10 @@ import os
 import sys
 import unittest
 from dataclasses import fields
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,7 @@ from contracts.forecast import (  # noqa: E402
     VersionMismatchError,
     from_json,
     from_row,
+    load_store_hours,
     load_vocabulary,
     missing_keys,
     record_from_dict,
@@ -133,6 +135,60 @@ class ForecastContractTests(unittest.TestCase):
                 validate_set(ForecastSet(CONTRACT_VERSION, field_value, "m", datetime.now(UTC), ()),
                              allowed_categories=CATEGORIES, allowed_locations=ALLOWED_LOCATIONS,
                              store_hours=STORE_HOURS)
+    def test_load_store_hours_keeps_per_weekday_windows(self):
+        conn = Mock()
+        conn.execute.return_value.fetchall.return_value = [
+            (5, "Monday", time(6), time(21)),
+            (5, "Saturday", time(7), time(18)),
+        ]
+        self.assertEqual(load_store_hours(conn), {
+            5: {
+                0: StoreOpenWindow(6, 21, frozenset({0})),
+                5: StoreOpenWindow(7, 18, frozenset({5})),
+            },
+        })
+
+    def test_load_store_hours_ceils_open_minutes(self):
+        conn = Mock()
+        conn.execute.return_value.fetchall.return_value = [
+            (5, "Monday", time(6, 30), time(20, 30)),
+        ]
+        window = load_store_hours(conn)[5]
+        # Read either shape so the regression isolates rounding.
+        if not isinstance(window, StoreOpenWindow):
+            window = window[0]
+        self.assertEqual((window.open_hour, window.close_hour), (7, 21))
+
+    def test_validate_set_uses_record_weekday_window(self):
+        hours = {5: {
+            0: StoreOpenWindow(6, 21, frozenset({0})),
+            5: StoreOpenWindow(7, 18, frozenset({5})),
+        }}
+        for day, hour, accepted in ((5, 6, True), (10, 7, True), (10, 6, False), (11, 9, False)):
+            with self.subTest(day=day, hour=hour):
+                record = valid_record(forecast_hour=datetime(
+                    2026, 1, day, hour, tzinfo=ZoneInfo("America/New_York"),
+                ))
+                if accepted:
+                    validate_set(valid_set((record,)), allowed_categories=CATEGORIES,
+                                 allowed_locations=ALLOWED_LOCATIONS, store_hours=hours)
+                else:
+                    with self.assertRaises(StoreHoursError):
+                        validate_set(valid_set((record,)), allowed_categories=CATEGORIES,
+                                     allowed_locations=ALLOWED_LOCATIONS, store_hours=hours)
+
+    def test_validate_set_accepts_uniform_window_mapping(self):
+        validate_set(valid_set(), allowed_categories=CATEGORIES,
+                     allowed_locations=ALLOWED_LOCATIONS, store_hours=STORE_HOURS)
+
+    def test_validate_set_weekday_boundary_across_utc(self):
+        record = valid_record(forecast_hour=datetime(2026, 1, 11, 2, tzinfo=UTC))
+        hours = {5: {
+            5: StoreOpenWindow(7, 22, frozenset({5})),
+            6: StoreOpenWindow(7, 18, frozenset({6})),
+        }}
+        validate_set(valid_set((record,)), allowed_categories=CATEGORIES,
+                     allowed_locations=ALLOWED_LOCATIONS, store_hours=hours)
 
     # spec: F8.ac1 — Pinned taxonomy categories are accepted and unknown or empty vocabularies fail closed.
     def test_ac1_vocabulary_accepts_pinned_categories_and_fails_closed(self):
