@@ -2199,7 +2199,7 @@ closing regression evidence.
 
 ### BUG-042 — F61/CS-061c: audit-store outage converts a valid login into a 500 (a genuine auth result is lost)
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** S · **Pattern:** D3 (availability coupling)
-- **Status:** 🐞 Open · **Type:** Spec deviation / resilience defect · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (branch `fix/bug-042-audit-outage`) — success-path audit is now BEST_EFFORT and cannot fail a login; invitations stay REQUIRED · **Type:** Spec deviation / resilience defect · **Found:** 2026-11-17 (Claude review of CS-061c) · **Follow-ups:** BUG-074, BUG-075
 - **Root cause:** `TenantAuthService._audit` (`auth/service.py`) wraps `record_audit` and, on any failure,
   logs and **re-raises**. It is invoked on the login success path (`auth.login.succeeded`) *after* the
   credential + MFA checks pass and the session is issuable. So if the audit store (the `auth_record_audit`
@@ -2523,7 +2523,7 @@ closing regression evidence.
 | BUG-051 | F61 | P2 | S | ✅ Fixed — centralized typed pooled repository delegation |
 | BUG-052 | F61 | P2 | XS | ✅ Fixed — one JWT validation per protected authorization |
 | BUG-053 | F61 | P1 | S | ✅ Fixed — logout revokes access token and presented refresh family |
-| BUG-054 | F45 | P2 | XS | 🐞 Open — validate and bound repository list pagination |
+| BUG-054 | F45 | P2 | XS | ✅ Fixed — `Repository.list` bounds limit 1..MAX and rejects non-int/negative values; follow-ups BUG-076–BUG-079 |
 | BUG-055 | F36/F38 | P1 | M | 🐞 Open — limit collector exposure and require TLS for remote OTLP |
 
 ### BUG-051 — F61: centralize pooled auth repository delegation
@@ -2562,7 +2562,7 @@ closing regression evidence.
 
 ### BUG-054 — F45: bound and validate repository list pagination
 - **Feature:** [F45](./FEATURES.md) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open
+- **Status:** ✅ Fixed (branch `fix/bug-054-pagination`) — `_bounded_int` validates limit 1..1000 and offset >= 0 before any SQL; regression `RepositoryPaginationTests` in `test_data_access.py`
 - **Description:** `Repository.list()` converts `limit` and `offset` with `int()` but does not reject negative values or cap page size. PostgreSQL treats a negative LIMIT as unlimited, so a caller can accidentally or deliberately retrieve the entire tenant table; negative offsets and lossy values also create surprising behavior.
 - **AC1:** `limit` accepts only a non-boolean integer in the inclusive range 1..1000; default remains 100.
 - **AC2:** `offset` accepts only a non-boolean integer greater than or equal to zero; default remains zero.
@@ -2665,7 +2665,7 @@ closing regression evidence.
   - The DB forecast→category domain is pinned to real categories (e.g. FK to a product-category/taxonomy table rather than `throughput_standards`, or an exclusion of the overhead row), so the database cannot store an overhead forecast; covered by a `spec: F8.ac1` regression test (Python and DB-gated).
 
 ### BUG-061 — F8/CS-012: `load_store_hours` keeps only the first weekday's window and ignores non-zero open-time minutes
-- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Correctness (latent) · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** ✅ Fixed (branch `fix/bug-061-store-hours`) — per-weekday windows, ceiled open minutes; follow-ups BUG-080–BUG-082 · **Type:** Correctness (latent) · **Found:** 2026-11-21 (Claude review of CS-012)
 - **Description:** `load_store_hours` builds one `StoreOpenWindow` per store via `grouped.setdefault(location_id, (open_time.hour, close_hour, set()))`, so the open/close hours come from whichever weekday row is read first and all other rows only contribute their weekday to `open_weekdays`. A store with different hours by day (e.g. shorter Sundays) is validated against a single day's window. Separately, the close time is rounded up for a non-zero minute (20:30 → 21) but the open time is floored to its hour, so a `06:30` open would wrongly admit a `06:00` pre-open forecast. Latent today because the seeded three stores share uniform, on-the-hour open times.
 - **Story:** As a forecast validator, I want each store's open window to reflect its actual per-weekday open and close times, so a forecast is accepted only within the hours that store is genuinely open on that day.
 - **Acceptance criteria:**
@@ -2724,3 +2724,65 @@ closing regression evidence.
   - `validate_set` also validates field types for directly constructed dataclasses before calling string methods, collection membership, Decimal comparisons, or datetime operations; malformed values never leak raw `AttributeError` or `TypeError`.
   - Regressions cover null/numeric versions, an array category, a non-object record, missing required fields, and a non-array `records` value; canonical valid JSON and database-row round trips remain accepted.
 - **Plan:** [BUG-066 plan](./docs/plans/BUG-066-forecast-payload-types.md).
+
+### BUG-067 — F8/CS-012: migration `0021` unavailable behind a long forecast read
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** M · **Status:** ✅ Fixed (branch `fix/bug-067-migration-lock`) — preflight, `ADD CONSTRAINT ... NOT VALID`, then `VALIDATE CONSTRAINT`; exclusive metadata window no longer spans the table scan · **Type:** Migration availability · **Found:** 2026-11-21 (independent review of merged BUG-065) · **Follow-ups:** BUG-083, BUG-084
+- **Root cause:** `0021` took `ACCESS EXCLUSIVE` up front and held it across the preflight plus the validating `ADD CONSTRAINT`, so an ordinary `SELECT` blocked the whole migration.
+- **Acceptance criteria:** enforcement installed for future writes before the scan; the exclusive window covers catalog metadata only; validation runs under the weaker lock; the actionable preflight diagnostic is retained; downgrade drops only this constraint.
+- **Tests:** `test_bug067_migration_lock.py` (6 tests, disposable-DB gated) + `test_migrations_roundtrip.py` 3 passed.
+
+### BUG-074 — F61: a failed audit statement leaves the connection aborted, so the login still fails
+- **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Resultant defect from BUG-042 · **Found:** 2026-11-25 (adversarial review of `fix/bug-042-audit-outage`)
+- **Root cause:** `_audit()` now swallows the exception, but on a non-autocommit connection a failed statement leaves the transaction in the aborted state. The next query in `_issue()` (token insert) fails with `InFailedSqlTransaction`, so the login still returns 500 — the exact failure BUG-042 set out to remove.
+- **Impact:** The production gateway uses autocommit so it is not hit today; any caller that supplies a transactional connection loses the fix silently. The outage tests mock `record_audit`, so they cannot see it.
+- **Acceptance criteria:** the audit write runs inside a savepoint; a failed audit statement rolls back to the savepoint so the surrounding transaction stays usable; a PostgreSQL regression test drives a real failing statement and then issues the token insert in the same transaction; the BEST_EFFORT/REQUIRED contract is unchanged.
+
+### BUG-075 — F61: a raising logging handler escapes the audit guard
+- **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Edge case from BUG-042 · **Found:** 2026-11-25 (adversarial review of `fix/bug-042-audit-outage`)
+- **Root cause:** `_audit()` catches the audit-store exception, then calls `logging.exception(...)` inside the `except` block. A handler that raises (custom handler, broken log sink) propagates out of the guard, so BEST_EFFORT still fails the login and can mask the original audit error.
+- **Acceptance criteria:** the log call is itself guarded; a raising handler cannot change the auth outcome; a regression test injects a handler that raises and asserts the login still returns tokens.
+
+### BUG-076 — F45: the new pagination tests error instead of skipping without psycopg
+- **Feature:** [F45](./FEATURES.md) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Test hygiene · **Found:** 2026-11-25 (adversarial review of `fix/bug-054-pagination`)
+- **Root cause:** `test_data_access.py` imports the data-access module inside a `try/except ImportError` and sets `psycopg = None`, but `RepositoryPaginationTests` is not gated on that flag. In an environment without psycopg the class raises `NameError: Repository is not defined` instead of skipping, which turns a missing optional dependency into a red suite.
+- **Acceptance criteria:** the pagination test class is gated on the same `psycopg`/`Repository` availability as the integration class, or the import is moved to module scope; running without psycopg skips cleanly.
+
+### BUG-077 — F45: the fake-spec test never asserts the bound SQL parameters
+- **Feature:** [F45](./FEATURES.md) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Coverage gap · **Found:** 2026-11-25 (adversarial review of `fix/bug-054-pagination`)
+- **Root cause:** `test_list_accepts_boundary_values` stops at the exploding cursor. Nothing asserts that a valid `limit`/`offset` reaches `cursor.execute` as the trailing two parameters in the right order, so a regression in the bind path would pass the validation tests.
+- **Acceptance criteria:** a recording cursor captures the executed SQL and params; the test asserts `params[-2:] == [limit, offset]` for a nonzero offset and a boundary limit.
+
+### BUG-078 — F45: invalid pagination echoes the raw value into the exception
+- **Feature:** [F45](./FEATURES.md) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Error-message hygiene · **Found:** 2026-11-25 (adversarial review of `fix/bug-054-pagination`)
+- **Root cause:** `_bounded_int` includes `{value!r}` in its `ValueError`. A caller that passes a sensitive object as `limit` gets it into the exception text, which may reach logs or an HTTP error body.
+- **Acceptance criteria:** the message names the parameter and the bound but not the raw value; a test asserts the value is absent from the message.
+
+### BUG-079 — F45: pagination validation now outranks column validation
+- **Feature:** [F45](./FEATURES.md) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Contract precedence · **Found:** 2026-11-25 (adversarial review of `fix/bug-054-pagination`)
+- **Root cause:** validation moved to the top of `list()`, so a call with both an unknown column and a bad limit now raises `ValueError` where it used to raise `KeyError`. Any caller or test keying on the exception type sees a different error.
+- **Acceptance criteria:** the precedence is documented in the docstring; a test pins the mixed-invalid-input behaviour; or column validation is moved ahead of pagination validation if the old contract must be preserved.
+
+### BUG-080 — F8: cached forecast features keep the old weekday hours
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Resultant defect from BUG-061 · **Found:** 2026-11-25 (adversarial review of `fix/bug-061-store-hours`)
+- **Root cause:** `load_store_hours` now returns per-weekday windows, but any persisted or cached feature row built before the change still encodes the collapsed single window. A consumer that reuses those rows keeps validating against the wrong hours, and a forecast built from them can be rejected or accepted incorrectly.
+- **Acceptance criteria:** the change documents the feature-version bump; persisted features are rebuilt or invalidated; a regression test proves a pre-change row is not silently reused.
+
+### BUG-081 — F8: weekday names are not canonicalised, so `Monday` and `monday` collide
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** XS · **Status:** 🐞 Open · **Type:** Input canonicalisation · **Found:** 2026-11-25 (adversarial review of `fix/bug-061-store-hours`)
+- **Root cause:** the loader groups by the raw weekday text. Two store-hours rows that differ only in case produce two entries for the same weekday, and the last one wins — so the window depends on row order.
+- **Acceptance criteria:** weekday text is normalised (lower-case or a strict enum) before grouping; a duplicate `(location, weekday)` raises or is deterministically resolved; a test covers the mixed-case pair.
+
+### BUG-082 — F8: the loader ignores seconds and microseconds in store hours
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Edge case from BUG-061 · **Found:** 2026-11-25 (adversarial review of `fix/bug-061-store-hours`)
+- **Root cause:** the ceiling logic reads only `.minute`. A `06:30:30` opening rounds to `07:00`, which is right, but a `06:00:30` opening also rounds to `07:00` — a thirty-second offset pushes the whole window an hour later.
+- **Acceptance criteria:** the rounding rule is defined for any nonzero sub-hour component; a test covers seconds and microseconds; the behaviour is documented in the forecast contract doc.
+
+### BUG-083 — F8: a failed validation leaves a partially applied migration
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Resultant defect from BUG-067 · **Found:** 2026-11-25 (adversarial review of `fix/bug-067-migration-lock`)
+- **Root cause:** the enforcement phase commits before validation runs. If `VALIDATE CONSTRAINT` fails (a legacy row violates the check), the constraint stays installed but `alembic_version` still records `0021`'s predecessor. A retry re-runs the preflight and the guard, but the operator sees a database that is neither at the old nor the new revision.
+- **Acceptance criteria:** the partial state is documented in the migration docstring and the runbook; a retry is proven idempotent; the operator-facing error names the violating rows or the constraint so the fix is obvious.
+
+### BUG-084 — F8: the retry guard accepts any same-named constraint
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Edge case from BUG-067 · **Found:** 2026-11-25 (adversarial review of `fix/bug-067-migration-lock`)
+- **Root cause:** the idempotency guard checks only that a constraint named `forecasts_interval_finite` exists. A pre-existing constraint with that name but a different predicate is reused, so the intended enforcement is never installed.
+- **Acceptance criteria:** the guard compares the constraint definition (or the validated flag) and fails loudly on a mismatch; a test seeds a same-named constraint with a weaker predicate and asserts the migration refuses.
