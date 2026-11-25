@@ -18,8 +18,8 @@ class Bug033DemoAuthCloseoutTests(unittest.TestCase):
         self.assertIn('DEMO_MANAGER_PASSWORD_HASH = os.environ.get("DEMO_MANAGER_PASSWORD_HASH")', source)
 
     def test_production_app_does_not_mount_legacy_demo_login(self):
-        from auth.service import TenantAuthService
         from api.app import create_app
+        from auth.service import TenantAuthService
 
         app = create_app(TenantAuthService.for_contract_fixture())
         routes = [route for route in app.routes if getattr(route, "path", None) == "/auth/login"
