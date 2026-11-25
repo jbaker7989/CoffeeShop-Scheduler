@@ -28,6 +28,10 @@ class ForecastContractError(Exception):
     """Base error for a forecast-output contract violation."""
 
 
+class InvalidForecastPayload(ForecastContractError):
+    """A forecast payload has an invalid shape or scalar type."""
+
+
 class UnknownCategoryError(ForecastContractError):
     """Raised when a category is absent from the approved vocabulary."""
 
@@ -104,6 +108,18 @@ def validate_record(
     store_hours: Mapping[int, StoreOpenWindow],
 ) -> None:
     """Validate one forecast record against its approved vocabulary and store hours."""
+    if not isinstance(r, ForecastRecord):
+        raise InvalidForecastPayload("record must be a ForecastRecord")
+    if type(r.location_id) is not int:
+        raise InvalidForecastPayload("record.location_id must be an integer")
+    if not isinstance(r.product_category, str):
+        raise InvalidForecastPayload("record.product_category must be a string")
+    if not isinstance(r.model_version, str) or not isinstance(r.taxonomy_version, str):
+        raise InvalidForecastPayload("record model_version and taxonomy_version must be strings")
+    if not isinstance(allowed_categories, Collection) or not isinstance(allowed_locations, Collection):
+        raise InvalidForecastPayload("allowed vocabularies must be collections")
+    if not isinstance(store_hours, Mapping):
+        raise InvalidForecastPayload("store_hours must be a mapping")
     if not allowed_categories or r.product_category not in allowed_categories:
         raise UnknownCategoryError(f"Unknown product category {r.product_category!r}")
 
@@ -140,6 +156,18 @@ def validate_set(
     store_hours: Mapping[int, StoreOpenWindow],
 ) -> None:
     """Validate envelope versions, uniqueness, and every contained record."""
+    if not isinstance(fs, ForecastSet):
+        raise InvalidForecastPayload("forecast envelope must be a ForecastSet")
+    if not isinstance(fs.contract_version, str):
+        raise InvalidForecastPayload("contract_version must be a string")
+    if not isinstance(fs.taxonomy_version, str):
+        raise InvalidForecastPayload("taxonomy_version must be a string")
+    if not isinstance(fs.model_version, str):
+        raise InvalidForecastPayload("model_version must be a string")
+    if not isinstance(fs.records, (tuple, list)):
+        raise InvalidForecastPayload("records must be an array of forecast records")
+    if any(not isinstance(record, ForecastRecord) for record in fs.records):
+        raise InvalidForecastPayload("records must contain forecast records")
     if fs.contract_version != CONTRACT_VERSION:
         raise VersionMismatchError(f"Unsupported contract version {fs.contract_version!r}")
     if not fs.taxonomy_version.strip():
@@ -151,6 +179,8 @@ def validate_set(
 
     keys: set[tuple[int, str, datetime]] = set()
     for record in fs.records:
+        validate_record(record, allowed_categories=allowed_categories,
+                        allowed_locations=allowed_locations, store_hours=store_hours)
         if record.taxonomy_version != fs.taxonomy_version:
             raise VersionMismatchError(
                 f"Record taxonomy version {record.taxonomy_version!r} does not match {fs.taxonomy_version!r}"
@@ -163,16 +193,19 @@ def validate_set(
         if key in keys:
             raise DuplicateRecordError(f"Duplicate forecast record key {key!r}")
         keys.add(key)
-        validate_record(
-            record,
-            allowed_categories=allowed_categories,
-            allowed_locations=allowed_locations,
-            store_hours=store_hours,
-        )
 
 
 def record_to_dict(r: ForecastRecord) -> dict:
     """Convert a record to its JSON-safe contract representation."""
+    if not isinstance(r, ForecastRecord):
+        raise InvalidForecastPayload("record must be a ForecastRecord")
+    if not isinstance(r.forecast_hour, datetime):
+        raise InvalidForecastPayload("record.forecast_hour must be a datetime")
+    for field in ("product_category", "model_version", "taxonomy_version"):
+        if not isinstance(getattr(r, field), str):
+            raise InvalidForecastPayload(f"record.{field} must be a string")
+    for field in ("p70", "lower", "upper"):
+        _validate_interval_value(getattr(r, field))
     return {
         "location_id": r.location_id,
         "product_category": r.product_category,
@@ -186,11 +219,36 @@ def record_to_dict(r: ForecastRecord) -> dict:
 
 
 def _parse_datetime(value: object) -> datetime:
-    return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        raise InvalidForecastPayload("timestamp must be an ISO-8601 string")
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise InvalidForecastPayload("timestamp must be a valid ISO-8601 string") from None
 
 
 def record_from_dict(d: Mapping) -> ForecastRecord:
     """Parse a record structurally, without applying business validation."""
+    if not isinstance(d, Mapping):
+        raise InvalidForecastPayload("record must be an object")
+    required = {"location_id", "product_category", "forecast_hour", "p70", "lower", "upper", "model_version", "taxonomy_version"}
+    missing = required - d.keys()
+    if missing:
+        raise InvalidForecastPayload(f"record is missing required field {sorted(missing)[0]}")
+    if type(d["location_id"]) is not int:
+        raise InvalidForecastPayload("record.location_id must be an integer")
+    for field in ("product_category", "model_version", "taxonomy_version"):
+        if not isinstance(d[field], str):
+            raise InvalidForecastPayload(f"record.{field} must be a string")
+    for field in ("p70", "lower", "upper"):
+        if isinstance(d[field], bool) or not isinstance(d[field], (str, int, float, Decimal)):
+            raise InvalidForecastPayload(f"record.{field} must be a decimal number or string")
+        try:
+            Decimal(str(d[field]))
+        except Exception:
+            raise InvalidForecastPayload(f"record.{field} must be a valid decimal") from None
     return ForecastRecord(
         location_id=d["location_id"],
         product_category=d["product_category"],
@@ -217,7 +275,21 @@ def to_json(fs: ForecastSet) -> str:
 
 def from_json(s: str | bytes) -> ForecastSet:
     """Parse an envelope structurally, without applying business validation."""
-    payload = json.loads(s)
+    try:
+        payload = json.loads(s)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        raise InvalidForecastPayload("forecast payload must be valid JSON") from None
+    if not isinstance(payload, Mapping):
+        raise InvalidForecastPayload("forecast envelope must be an object")
+    required = {"contract_version", "taxonomy_version", "model_version", "generated_at", "records"}
+    missing = required - payload.keys()
+    if missing:
+        raise InvalidForecastPayload(f"forecast envelope is missing required field {sorted(missing)[0]}")
+    for field in ("contract_version", "taxonomy_version", "model_version"):
+        if not isinstance(payload[field], str):
+            raise InvalidForecastPayload(f"{field} must be a string")
+    if not isinstance(payload["records"], list):
+        raise InvalidForecastPayload("records must be an array")
     return ForecastSet(
         contract_version=payload["contract_version"],
         taxonomy_version=payload["taxonomy_version"],
