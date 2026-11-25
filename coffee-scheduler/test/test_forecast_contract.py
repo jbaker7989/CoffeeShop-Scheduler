@@ -18,9 +18,11 @@ if str(SCHEDULER_ROOT) not in sys.path:
 from contracts.forecast import (  # noqa: E402
     CONTRACT_VERSION,
     DuplicateRecordError,
+    ForecastContractError,
     ForecastRecord,
     ForecastSet,
     IntervalError,
+    InvalidForecastPayload,
     StoreHoursError,
     StoreOpenWindow,
     TimezoneError,
@@ -97,6 +99,41 @@ except Exception as exc:  # pragma: no cover - environment-dependent skip
 
 
 class ForecastContractTests(unittest.TestCase):
+    # spec: F8.ac1/ac2 — malformed but valid JSON fails in the documented contract family.
+    def test_malformed_envelope_shapes_and_types_are_typed_errors(self):
+        for payload in ("null", "[]", "{}", json.dumps({"contract_version": None}),
+                        json.dumps({"contract_version": CONTRACT_VERSION, "taxonomy_version": "t",
+                                    "model_version": "m", "generated_at": "2026-01-05T08:00:00+00:00",
+                                    "records": {}}),
+                        json.dumps({"contract_version": CONTRACT_VERSION, "taxonomy_version": "t",
+                                    "model_version": "m", "generated_at": None, "records": []})):
+            with self.subTest(payload=payload), self.assertRaises(ForecastContractError):
+                from_json(payload)
+
+    def test_malformed_record_shapes_and_scalars_are_typed_errors(self):
+        base={"location_id":5,"product_category":"Coffee","forecast_hour":"2026-01-05T09:00:00-05:00",
+              "p70":"42","lower":"35","upper":"50","model_version":"m","taxonomy_version":"t"}
+        for malformed in (None, [], {**base,"product_category":[]}, {k:v for k,v in base.items() if k!="p70"},
+                          {**base,"location_id":True}, {**base,"forecast_hour":{}}, {**base,"p70":"not-a-number"}):
+            with self.subTest(malformed=malformed), self.assertRaises(InvalidForecastPayload):
+                record_from_dict(malformed)
+        self.assertEqual(record_from_dict(base).product_category, "Coffee")
+        with self.assertRaises(InvalidForecastPayload):
+            from_json(json.dumps({"contract_version":CONTRACT_VERSION,"taxonomy_version":"t","model_version":"m",
+                                  "generated_at":"2026-01-05T08:00:00+00:00","records":[None]}))
+
+    def test_direct_dataclass_values_cannot_bypass_shape_checks(self):
+        for record in (valid_record(product_category=[]), valid_record(forecast_hour="bad"),
+                       valid_record(p70="42"), valid_record(model_version=None)):
+            with self.assertRaises(ForecastContractError):
+                validate_set(valid_set((record,)), allowed_categories=CATEGORIES,
+                             allowed_locations=ALLOWED_LOCATIONS, store_hours=STORE_HOURS)
+        for field_value in (None, 1):
+            with self.assertRaises(ForecastContractError):
+                validate_set(ForecastSet(CONTRACT_VERSION, field_value, "m", datetime.now(UTC), ()),
+                             allowed_categories=CATEGORIES, allowed_locations=ALLOWED_LOCATIONS,
+                             store_hours=STORE_HOURS)
+
     # spec: F8.ac1 — Pinned taxonomy categories are accepted and unknown or empty vocabularies fail closed.
     def test_ac1_vocabulary_accepts_pinned_categories_and_fails_closed(self):
         validate_record(
