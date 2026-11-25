@@ -65,6 +65,17 @@ class CellUniverseTests(unittest.TestCase):
         dates = {d for (_l, _c, d, _h) in cells}
         self.assertEqual(dates, {date(2023, 1, 2)})  # the Monday only
 
+    def test_cell_universe_uses_per_weekday_windows(self):
+        sunday, monday = TINY_WINDOW
+        hours = {5: {
+            6: StoreOpenWindow(7, 8, frozenset({6})),
+            0: StoreOpenWindow(6, 7, frozenset({0})),
+        }}
+        self.assertEqual(build_cell_universe(hours, {"Coffee"}, TINY_WINDOW), [
+            (5, "Coffee", sunday, 7),
+            (5, "Coffee", monday, 6),
+        ])
+
 
 class ZeroFillTests(unittest.TestCase):
     # spec: F9.ac2 — an open hour with no sale is 0, a sold hour carries the summed qty.
