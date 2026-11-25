@@ -1880,8 +1880,8 @@ closing regression evidence.
 
 ### BUG-033 — F30: demo manager password falls back to a known default when env is unset
 - **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P2 · **Size:** XS · **Pattern:** D2
-- **Status:** 🐞 Open · **Type:** Defect (insecure default) · **Found:** 2026-11-16
-- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Status:** ✅ Done (2026-11-24; superseded by CS-061a / BUG-035) · **Type:** Defect (insecure default; retired auth path) · **Found:** 2026-11-16
+- **Developer:** Codex · **Duration:** ~0.5d
 - **Description:** `api/config.py` hashes a hard-coded default password (`demo-pass-change-me`) when neither
   `DEMO_MANAGER_PASSWORD_HASH` nor `DEMO_MANAGER_PASSWORD` is set, so the demo runs out of the box. A
   deployment that forgets to set them ships a **publicly known** manager credential.
@@ -1890,6 +1890,13 @@ closing regression evidence.
 - **Proposed fix:** require `DEMO_MANAGER_PASSWORD_HASH` (raise at startup) whenever `COOKIE_SECURE=true` /
   non-dev; keep the convenience default for local dev only, behind a loud log warning. (Superseded once CS-061
   provides real `tenant_users` auth.)
+- **Resolution:** CS-061a replaced and removed the production CS-030 demo login. The production `/auth/login`
+  route is owned by `auth.api` and uses the tenant-auth service; legacy `DEMO_MANAGER_*` values are optional
+  dormant-helper configuration only. `api.config` contains neither a known default password nor a generated
+  password hash. Closeout plan: [BUG-033 demo auth closeout](./docs/plans/BUG-033-demo-auth-closeout.md).
+- **Verification:** `test_bug033_demo_auth_closeout.py` (3 tests), `test_cs061a_gateway_integration.py` (13 tests),
+  and `test_f61_auth_deployment_contract.py` (2 tests) all pass. Regressions cover no default secret, no legacy
+  login route, and fail-closed CS-061a startup despite legacy credential variables.
 - **Risk if unfixed:** a known-password manager login reachable in any non-local deployment.
 
 ### BUG-034 — F30: API gateway has no CORS/exposure policy (must stay internal)
