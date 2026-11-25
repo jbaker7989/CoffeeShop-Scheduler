@@ -10,7 +10,19 @@ finite-value constraint that rejects each special value independently.
 
 ``v <> 'NaN'`` is FALSE for a ``NaN`` value (PostgreSQL defines ``NaN = NaN`` as
 TRUE), so the exclusion rejects ``NaN`` as well as the two infinities, and leaves
-every finite value — including ``0`` and negative decimals — accepted.
+the existing interval rules in force for finite values.
+
+The preflight scans with an ordinary read lock. ADD CONSTRAINT NOT VALID
+holds ACCESS EXCLUSIVE only through the catalog update and its commit.
+Validation then scans under SHARE UPDATE EXCLUSIVE, which permits ordinary
+reads and writes but conflicts with some maintenance and schema changes.
+
+Drain long-running forecast readers before applying 0021. The metadata phase
+waits up to five seconds for a conflicting lock. Retry after readers release
+their locks. If a legacy non-finite row arrives between preflight and
+enforcement, validation raises a constraint error. After a validation failure
+the installed constraint still enforces new writes, and a retry runs the
+preflight again and reuses the existing constraint.
 """
 from alembic import op
 
@@ -21,24 +33,7 @@ depends_on = None
 
 CONSTRAINT = "forecasts_interval_finite"
 
-# Serialize against concurrent writers. `ADD CONSTRAINT` already takes ACCESS
-# EXCLUSIVE, but taking it up front — inside Alembic's migration transaction, so
-# it is held until commit — closes the window where a writer could insert a
-# non-finite row *after* the preflight SELECT but *before* the ALTER, which would
-# otherwise trip the opaque constraint error instead of the actionable preflight
-# message.
-#
-# OPERATIONAL IMPACT (assess before deploying): the ACCESS EXCLUSIVE lock blocks
-# ALL reads and writes to `forecasts` for the whole migration transaction, and
-# `ADD CONSTRAINT` scans every row to validate it. Both scale with production
-# `forecasts` volume, which is not characterized here, so size the table and
-# schedule a maintenance window accordingly. The fixed `lock_timeout` below makes
-# lock acquisition fail fast — rather than queue indefinitely behind a
-# long-running reader — so a blocked migration aborts cleanly; if acquisition
-# times out, retry the migration in a quieter window. Each statement runs in its
-# own op.execute so neither depends on multi-command execution support.
 LOCK_TIMEOUT_SQL = "SET LOCAL lock_timeout = '5s';"
-LOCK_SQL = "LOCK TABLE forecasts IN ACCESS EXCLUSIVE MODE;"
 
 # Preflight: adding the CHECK would itself fail on pre-existing non-finite rows,
 # but with an opaque constraint-violation error. Surface a clear, actionable
@@ -61,14 +56,24 @@ END $$;
 """
 
 UP_SQL = f"""
-ALTER TABLE forecasts
-  ADD CONSTRAINT {CONSTRAINT}
-  CHECK (
-    lower <> 'NaN'::numeric AND lower <> 'Infinity'::numeric AND lower <> '-Infinity'::numeric
-    AND p70 <> 'NaN'::numeric AND p70 <> 'Infinity'::numeric AND p70 <> '-Infinity'::numeric
-    AND upper <> 'NaN'::numeric AND upper <> 'Infinity'::numeric AND upper <> '-Infinity'::numeric
-  );
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'forecasts'::regclass AND conname = '{CONSTRAINT}'
+  ) THEN
+    ALTER TABLE forecasts
+      ADD CONSTRAINT {CONSTRAINT}
+      CHECK (
+        lower <> 'NaN'::numeric AND lower <> 'Infinity'::numeric AND lower <> '-Infinity'::numeric
+        AND p70 <> 'NaN'::numeric AND p70 <> 'Infinity'::numeric AND p70 <> '-Infinity'::numeric
+        AND upper <> 'NaN'::numeric AND upper <> 'Infinity'::numeric AND upper <> '-Infinity'::numeric
+      ) NOT VALID;
+  END IF;
+END $$;
 """
+
+VALIDATE_SQL = f"ALTER TABLE forecasts VALIDATE CONSTRAINT {CONSTRAINT};"
 
 # Downgrade removes ONLY this constraint; the 0017 ordering/FK/unique objects stay intact.
 DOWN_SQL = f"ALTER TABLE forecasts DROP CONSTRAINT IF EXISTS {CONSTRAINT};"
@@ -76,9 +81,16 @@ DOWN_SQL = f"ALTER TABLE forecasts DROP CONSTRAINT IF EXISTS {CONSTRAINT};"
 
 def upgrade() -> None:
     op.execute(LOCK_TIMEOUT_SQL)
-    op.execute(LOCK_SQL)
     op.execute(PREFLIGHT_SQL)
     op.execute(UP_SQL)
+
+    # Alembic commits on entry and starts a new transaction on exit. Release
+    # ACCESS EXCLUSIVE before validation acquires its weaker lock.
+    with op.get_context().autocommit_block():
+        pass
+
+    op.execute("SET LOCAL lock_timeout = '0';")
+    op.execute(VALIDATE_SQL)
 
 
 def downgrade() -> None:
