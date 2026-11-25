@@ -166,5 +166,59 @@ class DataAccessSpecTests(unittest.TestCase):
                 open_session_context(conn, role="app_rw", tenant_id="")
 
 
+class _ExplodingConn:
+    """Any attribute access fails, so a validation error must precede cursor use."""
+
+    def cursor(self, *args, **kwargs):
+        raise AssertionError("cursor used before pagination was validated")
+
+
+class _FakeSpec:
+    name = "employees"
+    columns = ("tenant_id", "employee_id")
+
+
+class RepositoryPaginationTests(unittest.TestCase):
+    """BUG-054: pagination is validated before any SQL is built or executed."""
+
+    def _repo(self):
+        return Repository(_ExplodingConn(), "employees", spec=_FakeSpec())
+
+    def test_list_rejects_zero_and_negative_limit(self):
+        for value in (0, -1, -1000):
+            with self.assertRaises(ValueError) as caught:
+                self._repo().list(limit=value)
+            self.assertIn("limit", str(caught.exception))
+
+    def test_list_rejects_limit_above_max(self):
+        with self.assertRaises(ValueError) as caught:
+            self._repo().list(limit=1001)
+        self.assertIn("1000", str(caught.exception))
+
+    def test_list_rejects_negative_offset(self):
+        with self.assertRaises(ValueError) as caught:
+            self._repo().list(offset=-1)
+        self.assertIn("offset", str(caught.exception))
+
+    def test_list_rejects_bool_float_and_str_pagination(self):
+        for kwargs in ({"limit": True}, {"limit": 10.5}, {"limit": "10"},
+                       {"offset": False}, {"offset": 2.5}, {"offset": "2"}):
+            with self.assertRaises(ValueError):
+                self._repo().list(**kwargs)
+
+    def test_list_validates_before_touching_the_cursor(self):
+        with self.assertRaises(ValueError):
+            self._repo().list(limit=-1)
+        with self.assertRaises(ValueError):
+            self._repo().list(offset=-1)
+
+    def test_list_accepts_boundary_values(self):
+        repo = self._repo()
+        with self.assertRaises(AssertionError):
+            repo.list(limit=1000, offset=0)
+        with self.assertRaises(AssertionError):
+            repo.list(limit=1, offset=10**9)
+
+
 if __name__ == "__main__":
     unittest.main()
