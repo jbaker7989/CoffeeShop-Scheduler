@@ -1,32 +1,21 @@
-"""CS-030 — manager-UI API gateway foundation (F30), on the CS-061a auth boundary (BUG-035).
-
-Exercises the auth → tenant-context → RLS → data path of the FastAPI gateway in-process via
-Starlette's TestClient, AFTER the BUG-035 cutover: login issues a CS-061a RS256 access token, and
-the tenant id is taken ONLY from the validated, reconciled token claims. A request with no /
-tampered / foreign-signed credential is rejected 401 (fail-closed), and an authenticated request
-sees only its own tenant's rows.
-
-The auth service is the in-memory CS-061a contract fixture (maven-demo owner, tenant
-00000000-0000-0000-0000-000000000001), so no AUTH_DATABASE_URL is needed; the RLS data read still
-goes to the real database via api.db.fetch_stores. The legacy demo /auth/login + session cookie are
-gone — the route-level auth boundary is covered offline in test_cs061a_gateway_integration.py.
-
-Run: GATEWAY_DATABASE_URL=postgresql://coffeeshop:coffeeshop@localhost:6432/coffeeshop \
-     python3 coffee-scheduler/test/test_api_foundation.py
-Skips unless the gateway deps (incl. psycopg_pool) are importable AND the database is reachable.
-"""
-import os
+"""CS-030 gateway tests using the in-memory auth fixture and seeded store reads."""
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
 if str(SCHEDULER_ROOT) not in sys.path:
     sys.path.insert(0, str(SCHEDULER_ROOT))
 
-os.environ.setdefault(
-    "GATEWAY_DATABASE_URL", "postgresql://coffeeshop:coffeeshop@localhost:6432/coffeeshop"
-)
+import jwt
+import psycopg
+from fastapi.testclient import TestClient
+from psycopg_pool import ConnectionPool
+
+from api.app import create_app
+from api.config import GATEWAY_DATABASE_URL
+from auth.service import TenantAuthService
 
 LOGIN = {
     "tenant_slug": "maven-demo",
@@ -35,30 +24,17 @@ LOGIN = {
 }
 FIXTURE_TENANT = "00000000-0000-0000-0000-000000000001"
 
-_SKIP = None
-try:
-    import jwt
-    import psycopg
-    import psycopg_pool  # noqa: F401 — gateway data pool dependency
-    from fastapi.testclient import TestClient
 
-    from api.app import create_app
-    from auth.service import TenantAuthService
-    # DB reachability probe (the gateway reads through PgBouncer).
-    with psycopg.connect(os.environ["GATEWAY_DATABASE_URL"], connect_timeout=3) as _c:
-        _c.execute("SELECT 1")
-except Exception as exc:  # pragma: no cover - environment-dependent skip
-    _SKIP = f"gateway deps or database unavailable: {exc}"
-
-
-@unittest.skipIf(_SKIP, _SKIP or "")
 class ApiFoundation(unittest.TestCase):
+    def require_store_database(self):
+        try:
+            with psycopg.connect(GATEWAY_DATABASE_URL, connect_timeout=3):
+                pass
+        except psycopg.OperationalError as exc:
+            self.skipTest(f"gateway database unavailable ({type(exc).__name__})")
+
     def _client(self):
-        # Fixture CS-061a auth (no AUTH DB) + real RLS-scoped store reads (default fetch_stores).
-        client = TestClient(create_app(TenantAuthService.for_contract_fixture()))
-        client.__enter__()
-        self.addCleanup(client.__exit__, None, None, None)
-        return client
+        return self.enterContext(TestClient(create_app(TenantAuthService.for_contract_fixture())))
 
     def _login(self, client, body=None):
         return client.post("/auth/login", json=body or LOGIN)
@@ -113,6 +89,7 @@ class ApiFoundation(unittest.TestCase):
 
     # spec: F30.ac — an authenticated owner sees ONLY their tenant's stores (RLS-scoped from claims).
     def test_stores_returns_tenant_scoped_rows(self):
+        self.require_store_database()
         c = self._client()
         r = c.get("/stores", headers=self._bearer(c))
         self.assertEqual(r.status_code, 200, r.text)
@@ -121,6 +98,36 @@ class ApiFoundation(unittest.TestCase):
         for s in stores:
             self.assertIn("location_id", s)
             self.assertIn("store_location", s)
+
+    # spec: F30.ac2 — a real pool must survive other apps and be replaceable on restart.
+    def test_store_reads_across_app_shutdown_and_restart(self):
+        self.require_store_database()
+        first = create_app(TenantAuthService.for_contract_fixture())
+        second = create_app(TenantAuthService.for_contract_fixture())
+
+        def assert_reads(client):
+            response = client.get("/stores", headers=self._bearer(client))
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(len(response.json()["stores"]), 3)
+
+        pools = []
+
+        def record_pool(**kwargs):
+            pool = ConnectionPool(**kwargs)
+            pools.append(pool)
+            return pool
+
+        with patch("api.db.ConnectionPool", side_effect=record_pool):
+            with TestClient(first) as client:
+                assert_reads(client)
+                with TestClient(second) as other:
+                    assert_reads(other)
+                self.assertEqual([False, True], [pool.closed for pool in pools])
+                assert_reads(client)
+            self.assertTrue(pools[0].closed)
+            with TestClient(first) as restarted:
+                assert_reads(restarted)
+            self.assertEqual([True, True, True], [pool.closed for pool in pools])
 
     # spec: F30.ac — /me reflects the reconciled claims.
     def test_me_returns_claims(self):

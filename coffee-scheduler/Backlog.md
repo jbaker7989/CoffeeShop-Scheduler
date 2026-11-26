@@ -2907,3 +2907,16 @@ closing regression evidence.
   - Apply `COV-KEYHOLDER-OPEN` only at the open hour and `COV-KEYHOLDER-CLOSE` only at the close hour, so differing headcounts are honoured per edge.
   - Fail closed with a typed error naming the rule id when an expected coverage rule is absent, keeping the current "missing rule" behaviour.
   - Add a test with `COV-KEYHOLDER-OPEN = 2`, `COV-KEYHOLDER-CLOSE = 1` asserting the open hour requires 2 and the close hour requires 1, which fails under the current matcher.
+
+### CS-106 — Give each gateway app ownership of its store and routing connections
+- **Feature:** F30 (CS-030), F61 · **Priority:** P2 · **Status:** Implemented locally, pending merge
+- **Story:** As a gateway operator, I can restart an application or stop one of two applications in the same process while authenticated store reads keep working.
+- **Acceptance:** A second lifespan of the same app can query stores. Stopping a second app leaves the first app's pool usable. Startup and health checks allocate no connections. Fully injected adapters allocate no pool.
+- **Maintenance:** Share the exact-name cookie counting rule between access and refresh handlers. Remove the unused unfiltered tenant lookup. Run gateway tests that use no database even when PostgreSQL is offline.
+- **Plan and regression coverage:** [CS-106 gateway maintenance](docs/plans/CS-106-gateway-maintenance.md).
+
+### CS-107 — Make changed-file CI checks inspect the scheduler project
+- **Feature:** F6 · **Priority:** P2 · **Status:** Implemented locally, pending merge
+- **Finding:** Both CI scripts receive `coffee-scheduler/test/...` from Git. Traceability expects `test/...` and the review checklist prepends a second `coffee-scheduler/`, silently skipping files.
+- **Acceptance:** From a nested checkout, both gates reject a deliberately untagged test with an unlinked task comment. After correction both pass. Sibling paths are excluded. Both local changes and PR comparison ranges are covered.
+- **Implementation:** Share one project-relative, NUL-delimited diff reader. Inspect Python task markers in comment tokens so the checker can scan its own source.
