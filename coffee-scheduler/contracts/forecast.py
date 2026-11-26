@@ -67,7 +67,7 @@ StoreWeekHours = Mapping[int, Mapping[int, StoreOpenWindow]]
 StoreHours = Mapping[int, StoreOpenWindow | Mapping[int, StoreOpenWindow]]
 
 
-def _window_for(
+def window_for(
     store_hours: StoreHours, location: int, weekday: int,
 ) -> StoreOpenWindow | None:
     """Resolve the local weekday in either supported store-hours mapping."""
@@ -155,7 +155,7 @@ def validate_record(
         raise StoreHoursError(f"Unknown store location {r.location_id!r}")
     if r.location_id not in store_hours:
         raise StoreHoursError(f"Store has no open window {r.location_id!r}")
-    window = _window_for(store_hours, r.location_id, local.weekday())
+    window = window_for(store_hours, r.location_id, local.weekday())
     if window is None or not window.open_hour <= local.hour < window.close_hour:
         raise StoreHoursError(f"Store is closed for forecast hour {local!r}")
 
@@ -366,8 +366,13 @@ def load_store_hours(conn) -> dict[int, dict[int, StoreOpenWindow]]:
         close_time = _row_value(row, "close_time", 3)
         if day_name not in weekdays or open_time is None or close_time is None:
             continue
-        open_hour = open_time.hour + (1 if open_time.minute else 0)
-        close_hour = close_time.hour + (1 if close_time.minute else 0)
+        # Forecasts represent exact whole-hour instants. Any fractional part of
+        # the opening time means that hour's forecast precedes opening, so round
+        # up; a fractional close similarly keeps the containing hour open.
+        open_fraction = bool(open_time.minute or open_time.second or open_time.microsecond)
+        close_fraction = bool(close_time.minute or close_time.second or close_time.microsecond)
+        open_hour = open_time.hour + int(open_fraction)
+        close_hour = close_time.hour + int(close_fraction)
         if close_hour <= open_hour:
             raise StoreHoursError(
                 f"Invalid store window for location {location_id!r} on {day_name}: "

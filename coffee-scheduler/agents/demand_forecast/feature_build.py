@@ -21,9 +21,9 @@ from decimal import Decimal
 from contracts.forecast import (
     PINNED_TAXONOMY_VERSION,
     StoreHours,
-    _window_for,
     load_store_hours,
     load_vocabulary,
+    window_for,
 )
 
 FEATURE_VERSION = "forecast-features-v2"
@@ -95,7 +95,7 @@ def build_cell_universe(
     for location_id in sorted(store_hours):
         for offset in ordinal_days:
             day = date.fromordinal(start.toordinal() + offset)
-            window_spec = _window_for(store_hours, location_id, day.weekday())
+            window_spec = window_for(store_hours, location_id, day.weekday())
             if window_spec is None:
                 continue
             for hour in range(window_spec.open_hour, window_spec.close_hour):

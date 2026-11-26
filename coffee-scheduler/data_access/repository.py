@@ -33,6 +33,9 @@ def _ident(name: str) -> str:
 
 
 MAX_LIMIT = 1000
+# PostgreSQL LIMIT/OFFSET expressions use bigint; reject values the database
+# cannot represent before acquiring a cursor rather than leaking an adapter/SQL error.
+MAX_OFFSET = (1 << 63) - 1
 
 
 def _bounded_int(name: str, value: object, *, minimum: int, maximum: int | None = None) -> int:
@@ -68,7 +71,7 @@ class Repository:
 
     def list(self, *, limit: int = 100, offset: int = 0, order_by: str | None = None, **eq) -> list[dict]:
         limit = _bounded_int("limit", limit, minimum=1, maximum=MAX_LIMIT)
-        offset = _bounded_int("offset", offset, minimum=0)
+        offset = _bounded_int("offset", offset, minimum=0, maximum=MAX_OFFSET)
         for col in (*eq, *( [order_by] if order_by else [])):
             if col not in self.spec.columns:
                 raise KeyError(f"{self.spec.name} has no column {col!r}")

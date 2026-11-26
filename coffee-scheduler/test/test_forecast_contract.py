@@ -159,6 +159,16 @@ class ForecastContractTests(unittest.TestCase):
             window = window[0]
         self.assertEqual((window.open_hour, window.close_hour), (7, 21))
 
+    def test_load_store_hours_ceils_seconds_and_microseconds(self):
+        conn = Mock()
+        conn.execute.return_value.fetchall.return_value = [
+            (5, "Monday", time(6, 0, 1), time(20, 0, 1)),
+            (5, "Tuesday", time(6, 0, 0, 1), time(20, 0, 0, 1)),
+        ]
+        windows = load_store_hours(conn)[5]
+        self.assertEqual((windows[0].open_hour, windows[0].close_hour), (7, 21))
+        self.assertEqual((windows[1].open_hour, windows[1].close_hour), (7, 21))
+
     def test_validate_set_uses_record_weekday_window(self):
         hours = {5: {
             0: StoreOpenWindow(6, 21, frozenset({0})),

@@ -9,7 +9,6 @@ import unittest
 import uuid
 from pathlib import Path
 
-
 SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
 if str(SCHEDULER_ROOT) not in sys.path:
     sys.path.insert(0, str(SCHEDULER_ROOT))
@@ -199,6 +198,10 @@ class RepositoryPaginationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             self._repo().list(offset=-1)
         self.assertIn("offset", str(caught.exception))
+
+    def test_list_rejects_offset_outside_postgresql_bigint(self):
+        with self.assertRaisesRegex(ValueError, "offset"):
+            self._repo().list(offset=1 << 63)
 
     def test_list_rejects_bool_float_and_str_pagination(self):
         for kwargs in ({"limit": True}, {"limit": 10.5}, {"limit": "10"},

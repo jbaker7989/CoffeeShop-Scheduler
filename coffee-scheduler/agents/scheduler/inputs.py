@@ -22,6 +22,7 @@ from contracts.forecast import (
     load_vocabulary,
     missing_keys,
     validate_set,
+    window_for,
 )
 from data_access.session import open_session_context
 
@@ -494,8 +495,8 @@ def assemble_solver_inputs(
     current_day = target_window[0]
     while current_day <= target_window[1]:
         for location in locations:
-            window = hours.get(location)
-            if window is None or current_day.weekday() not in window.open_weekdays:
+            window = window_for(hours, location, current_day.weekday())
+            if window is None:
                 continue
             for category in demand_categories:
                 for hour in range(window.open_hour, window.close_hour):
