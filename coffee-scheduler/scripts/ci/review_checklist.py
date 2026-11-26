@@ -16,10 +16,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
 import re
-import subprocess
 import sys
+import tokenize
+from itertools import chain
 from pathlib import Path
+
+from changed_files import changed_files
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,19 +37,12 @@ SECRET_LITERAL = re.compile(r"""=\s*["'][^"'\s]{8,}["']""")
 SCAN_SUFFIXES = (".py", ".yml", ".yaml", ".toml", ".sh", ".ini", ".sql")
 
 
-def _changed_files(base: str | None) -> list[str]:
-    cmd = ["git", "diff", "--name-only", f"{base}...HEAD"] if base else ["git", "diff", "--name-only", "HEAD"]
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise SystemExit(f"git diff failed: {result.stderr.strip()}")
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
 def _commented_code_block(lines: list[str]) -> int | None:
     """Return the 1-based line number where a 3+ line commented-out code block starts."""
     run: list[str] = []
     start = 0
-    for number, line in enumerate(lines, start=1):
+    # A final blank line flushes a comment block that reaches EOF.
+    for number, line in enumerate(chain(lines, ("",)), start=1):
         stripped = line.lstrip()
         if stripped.startswith("#") and not stripped.startswith("#!"):
             body = stripped.lstrip("#").strip()
@@ -62,13 +59,6 @@ def _commented_code_block(lines: list[str]) -> int | None:
             else:
                 return start
         run = []
-    if len(run) >= 3:
-        try:
-            ast.parse("\n".join(run))
-        except SyntaxError:
-            pass
-        else:
-            return start
     return None
 
 
@@ -78,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     failures: list[str] = []
-    for path in _changed_files(args.base):
+    for path in changed_files(ROOT, args.base):
         if not path.endswith(SCAN_SUFFIXES):
             continue
         target = ROOT / path
@@ -86,9 +76,16 @@ def main(argv: list[str] | None = None) -> int:
             continue
         lines = target.read_text(encoding="utf-8", errors="ignore").splitlines()
 
-        for number, line in enumerate(lines, start=1):
-            if TODO.search(line) and not TODO_LINK.search(line):
+        if path.endswith(".py"):
+            tokens = tokenize.generate_tokens(io.StringIO("\n".join(lines)).readline)
+            notes = ((token.start[0], token.string) for token in tokens if token.type == tokenize.COMMENT)
+        else:
+            notes = enumerate(lines, start=1)
+        for number, note in notes:
+            if TODO.search(note) and not TODO_LINK.search(note):
                 failures.append(f"{path}:{number} — TODO without a linked issue")
+
+        for number, line in enumerate(lines, start=1):
             if SECRET_NAME.search(line) and SECRET_LITERAL.search(line):
                 failures.append(f"{path}:{number} — possible hardcoded secret")
 
