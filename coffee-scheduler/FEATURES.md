@@ -55,8 +55,16 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 
 ### F6. AGENTS.md + SKILL.md authoring
 - **Status:** Partially scaffolded (stubs exist) · **Size:** M · **Priority:** P1
-- **Description:** Flesh out the root AGENTS.md (stack, layer split, data rules, test commands) and per-agent AGENTS.md files, plus the reusable SKILL.md procedures — chiefly `labor-rule-evaluation` (strictest-wins, effective dating, minor age-on-date), and `synthetic-roster-generation`, `sales-weather-join`, `standards-calibration`, `agent-card-authoring`.
-- **Expected outcome:** Agents and humans share one set of conventions; the rule-evaluation procedure is written once and reused, not duplicated per agent.
+- **Description:** Author practical, repository-consistent instructions for the root project, the scheduler, labor-compliance, demand-forecast, and staff-comms agents, plus the reusable procedures for labor-rule evaluation, synthetic roster generation, sales/weather joins, standards calibration, and agent-card authoring. Keep canonical policies in one place and link to them from agent-specific guidance.
+- **Acceptance criteria:**
+  1. **F6.ac1** — The root `AGENTS.md` documents the actual stack and layer ownership, data/PII policy, required test commands, environment-gated tests, and fail-closed/security conventions that match repository configuration.
+  2. **F6.ac2** — Each of the four runtime agent directories has an `AGENTS.md` with its owned responsibilities, explicit non-responsibilities, relevant inputs/outputs, and links to the applicable shared skills.
+  3. **F6.ac3** — Each of the five named skills exists, provides actionable procedure and safety/validation steps, and does not invent or conflict with canonical contracts, business rules, or implementation behavior.
+  4. **F6.ac4** — Relative file references introduced by the CS-010 guidance resolve from the document containing each reference, and required file inventories are checked by an offline automated test.
+  5. **F6.ac5** — Runtime configuration and test instructions name real files/commands; no CS-010 document instructs an agent to commit secrets, real PII, or synthetic data as production truth.
+- **Edge / adversarial cases:** A referenced file is renamed or missing; an agent's role is unclear or overlaps another; a skill's behavior disagrees with the implementation; a test command silently omits gated integrations; a document suggests that synthetic fixtures are customer data; an example contains a real secret or person identifier; instructions claim a component exists when it is still scaffolded.
+- **Cross-references:** `coffee-scheduler/AGENTS.md`; `agents/{scheduler,labor_compliance,demand_forecast,staff_comms}/AGENTS.md`; `skills/{labor-rule-evaluation,synthetic-roster-generation,sales-weather-join,standards-calibration,agent-card-authoring}/SKILL.md`; `test/SKILL.md`; F7; CS-001, CS-006, CS-010, CS-011, CS-013, CS-021.
+- **Expected outcome:** People and agents can follow one verified set of project conventions and reusable procedures without inventing policy or duplicating domain rules.
 
 ### F7. Agent Cards (A2A contracts)
 - **Status:** Scaffolded (stub JSON; Payroll/HCM has no directory)
