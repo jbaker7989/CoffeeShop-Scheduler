@@ -5,7 +5,8 @@
 pandas==3.1.1
 openpyxl==3.1.5
 requests==2.34.2
-psycopg[binary]==3.3.9
+# CS-061a (F61): the production auth gateway uses psycopg_pool for connection-per-call storage.
+psycopg[binary,pool]==3.3.9
 alembic==1.20.1
 # CS-014b/F9: deterministic numpy-only demand forecasting.
 numpy==2.4.6
