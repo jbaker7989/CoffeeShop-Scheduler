@@ -2180,7 +2180,7 @@ closing regression evidence.
 
 ### BUG-041 — F61/CS-061c: duplicate-invite / already-member returns HTTP 500 over the live DB (in-memory path returns 409)
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (DB↔in-memory divergence)
-- **Status:** 🐞 Open · **Type:** Error-mapping / repository-parity defect · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (2026-11-25) — `DatabaseAuthRepository.create_invitation` maps only SQLSTATE `23505` and the two documented `P0001` messages to the existing conflict path; all unrelated SQL errors still propagate. Migration `0023` qualifies ambiguous `auth_accept_invitation` column references without changing its signature, SECURITY DEFINER attributes, or grants. Unit tests prove selective translation; live pooled gateway tests prove duplicate pending/member conflicts and concurrent duplicates return 409, and valid redemption succeeds. Evidence: `test_bug041_invitation_conflicts.py` 3/3; `test_cs061c_invitation_database_integration.py` includes live conflict/concurrency/redemption cases; migration roundtrip 4/4. · **Type:** Error-mapping / repository-parity defect · **Found:** 2026-11-17 (Claude review of CS-061c)
 - **Root cause:** `auth_create_invitation` (migration `0012`) guards the common conflict cases with
   `RAISE EXCEPTION 'already a member'` and `RAISE EXCEPTION 'pending invitation exists'`, which Postgres
   raises as **SQLSTATE `P0001` (`RaiseException`)**, *not* `UniqueViolation`. But
@@ -2228,7 +2228,7 @@ closing regression evidence.
 
 ### BUG-043 — F61/CS-061c: invitation-accept rate limit is per-process (in-memory), not shared across gateway instances
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P3 · **Size:** S · **Pattern:** D3
-- **Status:** 🐞 Open · **Type:** Defense-in-depth gap · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (2026-11-25) — removed the invitation route's process-local limiter and added mandatory typed repository operations backed by a canonical-IP-only PostgreSQL table and `auth_svc`-only SECURITY DEFINER functions in migration `0022`. Atomic reservations, independent IP buckets, success-only bucket clearing, rolling-window/lockout expiry, fail-closed invalid inputs, and application-role denial are covered in memory and against separate pooled DB adapters. Evidence: throttle unit tests 8/8; live `test_cs061c_invitation_database_integration.py` 7/7; migration roundtrip 4/4. · **Type:** Defense-in-depth gap · **Found:** 2026-11-17 (Claude review of CS-061c)
 - **Root cause:** `create_app` (`api/app.py`) throttles the public `POST /invitations/accept` endpoint with
   `invitation_limiter = LoginRateLimiter()` — an **in-memory** limiter instantiated per app/worker. Unlike
   the CS-061b login throttle, which is DB-backed (`auth_record_login_attempt`/`auth_login_locked`) and
@@ -2236,9 +2236,7 @@ closing regression evidence.
   the effective brute-force limit multiplies by the worker count and resets on restart/redeploy.
 - **Impact:** weaker brute-force protection on an anonymous, token-bearing endpoint under multi-worker/
   multi-instance deployment (the production shape). Single-process dev is unaffected, which is why tests pass.
-- **Acceptance criteria (for the fix):** back the accept throttle with the DB (reuse the CS-061b
-  `auth_login_attempts` port with an `'invite'`/client-IP key) so the limit is shared and durable, matching
-  the login throttle; add a test asserting the throttle state is not process-local.
+- **Acceptance criteria (for the fix):** persist accept throttle state by canonical client IP behind a mandatory repository operation and narrowly granted database functions; do not share state across unrelated IPs or add tenant/email/token keys. Prove durable state across independent pools, atomic concurrent reservations, success-only same-IP reset, expiry boundaries, and least-privilege role enforcement through the production gateway path.
 - **Risk if unfixed:** token-guessing / enumeration on `/invitations/accept` scales with gateway replicas.
 
 ### BUG-044 — F61/CS-061c: `list_invitations` ordering differs between the DB and in-memory repositories
@@ -2525,6 +2523,8 @@ closing regression evidence.
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
 | BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
 | BUG-025 | F60 | P2 | XS | ✅ Fixed — autocommit refused + transaction-local role/tenant (no pool leak); `test_bug025_pooling_session.py` |
+| BUG-041 | F61 | P2 | XS | ✅ Fixed — known invitation SQL conflicts map to 409; live pooled route and redemption regressions |
+| BUG-043 | F61 | P3 | S | ✅ Fixed — invitation acceptance throttle persists atomically by canonical client IP in PostgreSQL |
 | BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
 | BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
 | BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |

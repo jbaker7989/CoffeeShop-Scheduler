@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import abc
 import enum
+import ipaddress
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone, timedelta
@@ -58,8 +59,22 @@ class OnboardingProvisionError(ValueError):
     """The selected jurisdiction cannot be provisioned from verified templates."""
 
 
+_MAX_INVITATION_THROTTLE_FAILURES = 100
+_MAX_INVITATION_THROTTLE_WINDOW_SECONDS = 86_400
+_MAX_INVITATION_THROTTLE_LOCKOUT_SECONDS = 86_400
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _canonical_client_ip(ip: str) -> str:
+    if not isinstance(ip, str):
+        raise ValueError("client IP must be a valid IPv4 or IPv6 address")
+    try:
+        return ipaddress.ip_address(ip).compressed
+    except ValueError:
+        raise ValueError("client IP must be a valid IPv4 or IPv6 address") from None
 
 
 @dataclass(frozen=True)
@@ -240,6 +255,14 @@ class AuthRepository(abc.ABC):
     def consume_mfa_step(self, tenant_id: str, user_id: str, step: int) -> bool: raise NotImplementedError
     @abc.abstractmethod
     def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool: raise NotImplementedError
+    @abc.abstractmethod
+    def begin_invitation_accept(
+        self, ip: str, when: datetime, max_failures: int, window_seconds: int, lockout_seconds: int,
+    ) -> bool:
+        """Atomically reserve an anonymous accept attempt; True means already locked."""
+    @abc.abstractmethod
+    def complete_invitation_accept(self, ip: str, *, succeeded: bool, when: datetime) -> None:
+        """Clear only this IP's accept bucket after a successful invitation redemption."""
     # CS-061c invitation/audit port.  These remain repository operations so policy never
     # bypasses the SECURITY DEFINER boundary in production.
     @abc.abstractmethod
@@ -279,6 +302,9 @@ class InMemoryAuthRepository(AuthRepository):
         self._revoked_jtis: set[str] = set()
         self._reset_records: dict[str, tuple[str,str,datetime,bool]] = {}
         self._attempts: dict[tuple[str,str,str], list[datetime]] = {}
+        self._invitation_failures: dict[str, list[datetime]] = {}
+        self._invitation_locked_until: dict[str, datetime] = {}
+        self._invitation_windows: dict[str, int] = {}
         self._mfa: dict[tuple[str, str], dict] = {}
         self._invitations: dict[str, InvitationRecord] = {}
         self._audit: list[AuditEntry] = []
@@ -367,6 +393,78 @@ class InMemoryAuthRepository(AuthRepository):
                     return True
             return False
 
+    @staticmethod
+    def _canonical_invitation_ip(ip: str) -> str:
+        return _canonical_client_ip(ip)
+
+    def begin_invitation_accept(
+        self, ip: str, when: datetime, max_failures: int, window_seconds: int, lockout_seconds: int,
+    ) -> bool:
+        canonical_ip = self._canonical_invitation_ip(ip)
+        if (
+            type(max_failures) is not int or not 1 <= max_failures <= _MAX_INVITATION_THROTTLE_FAILURES
+            or type(window_seconds) is not int or not 1 <= window_seconds <= _MAX_INVITATION_THROTTLE_WINDOW_SECONDS
+            or type(lockout_seconds) is not int or not 1 <= lockout_seconds <= _MAX_INVITATION_THROTTLE_LOCKOUT_SECONDS
+        ):
+            return True
+        if when.tzinfo is None or when.utcoffset() is None:
+            raise ValueError("invitation attempt time must be timezone-aware")
+        with self._hardening_lock:
+            for stale_ip, locked_until in list(self._invitation_locked_until.items()):
+                if locked_until <= when:
+                    self._invitation_locked_until.pop(stale_ip, None)
+                    self._invitation_failures.pop(stale_ip, None)
+                    self._invitation_windows.pop(stale_ip, None)
+            for stale_ip, stale_failures in list(self._invitation_failures.items()):
+                if stale_ip == canonical_ip or stale_ip in self._invitation_locked_until:
+                    continue
+                stale_window = self._invitation_windows.get(stale_ip, window_seconds)
+                active_failures = [
+                    failure_at for failure_at in stale_failures
+                    if failure_at > when - timedelta(seconds=stale_window)
+                ]
+                if active_failures:
+                    self._invitation_failures[stale_ip] = active_failures
+                else:
+                    self._invitation_failures.pop(stale_ip, None)
+                    self._invitation_windows.pop(stale_ip, None)
+            locked_until = self._invitation_locked_until.get(canonical_ip)
+            if locked_until is not None and locked_until > when:
+                return True
+            if locked_until is not None:
+                self._invitation_locked_until.pop(canonical_ip, None)
+                self._invitation_failures.pop(canonical_ip, None)
+                self._invitation_windows.pop(canonical_ip, None)
+            cutoff = when - timedelta(seconds=window_seconds)
+            failures = [
+                failure_at for failure_at in self._invitation_failures.get(canonical_ip, [])
+                if failure_at > cutoff
+            ]
+            if not failures:
+                self._invitation_failures.pop(canonical_ip, None)
+            if len(failures) >= max_failures:
+                self._invitation_failures[canonical_ip] = failures
+                self._invitation_locked_until[canonical_ip] = when + timedelta(seconds=lockout_seconds)
+                return True
+            failures.append(when)
+            self._invitation_failures[canonical_ip] = failures
+            self._invitation_windows[canonical_ip] = window_seconds
+            if len(failures) >= max_failures:
+                self._invitation_locked_until[canonical_ip] = when + timedelta(seconds=lockout_seconds)
+            return False
+
+    def complete_invitation_accept(self, ip: str, *, succeeded: bool, when: datetime) -> None:
+        canonical_ip = self._canonical_invitation_ip(ip)
+        if type(succeeded) is not bool:
+            raise ValueError("succeeded must be a boolean")
+        if when.tzinfo is None or when.utcoffset() is None:
+            raise ValueError("invitation attempt time must be timezone-aware")
+        if succeeded:
+            with self._hardening_lock:
+                self._invitation_failures.pop(canonical_ip, None)
+                self._invitation_locked_until.pop(canonical_ip, None)
+                self._invitation_windows.pop(canonical_ip, None)
+
     @classmethod
     def with_contract_fixture(
         cls,
@@ -375,7 +473,7 @@ class InMemoryAuthRepository(AuthRepository):
         user_is_active: bool = True,
         user_exists: bool = True,
         role: str = "owner",
-    ) -> "InMemoryAuthRepository":
+    ) -> InMemoryAuthRepository:
         """Seed the single ``maven-demo`` owner identity the contract tests expect.
 
         The caller supplies ``password_hash`` (``Argon2idPasswordService().hash(...)``)
@@ -727,6 +825,40 @@ class DatabaseAuthRepository(AuthRepository):
     def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool:
         with self.conn.cursor() as cur: cur.execute("SELECT auth_consume_recovery_code(%s,%s,%s)",(tenant_id,user_id,digest)); result=bool(cur.fetchone()[0])
         self.conn.commit(); return result
+
+    def begin_invitation_accept(
+        self, ip: str, when: datetime, max_failures: int, window_seconds: int, lockout_seconds: int,
+    ) -> bool:
+        ip = _canonical_client_ip(ip)
+        if (
+            type(max_failures) is not int or not 1 <= max_failures <= _MAX_INVITATION_THROTTLE_FAILURES
+            or type(window_seconds) is not int or not 1 <= window_seconds <= _MAX_INVITATION_THROTTLE_WINDOW_SECONDS
+            or type(lockout_seconds) is not int or not 1 <= lockout_seconds <= _MAX_INVITATION_THROTTLE_LOCKOUT_SECONDS
+        ):
+            return True
+        if when.tzinfo is None or when.utcoffset() is None:
+            raise ValueError("invitation attempt time must be timezone-aware")
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT auth_reserve_invitation_accept(%s::inet,%s,%s,%s,%s)",
+                (ip, when, max_failures, window_seconds, lockout_seconds),
+            )
+            locked = bool(cur.fetchone()[0])
+        self.conn.commit()
+        return locked
+
+    def complete_invitation_accept(self, ip: str, *, succeeded: bool, when: datetime) -> None:
+        ip = _canonical_client_ip(ip)
+        if type(succeeded) is not bool:
+            raise ValueError("succeeded must be a boolean")
+        if when.tzinfo is None or when.utcoffset() is None:
+            raise ValueError("invitation attempt time must be timezone-aware")
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT auth_complete_invitation_accept(%s::inet,%s,%s)",
+                (ip, succeeded, when),
+            )
+        self.conn.commit()
 
     def create_invitation(self, invitation: InvitationRecord) -> str:
         try:

@@ -7,7 +7,7 @@ import sys
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
@@ -88,6 +88,7 @@ class InvitationDatabaseIntegrationTests(unittest.TestCase):
         self.ip_a = f"203.0.113.{uuid.uuid4().int % 240 + 10}"
         self.ip_b = f"198.51.100.{uuid.uuid4().int % 240 + 10}"
         self.ip_test = f"192.0.2.{uuid.uuid4().int % 240 + 10}"
+        self.refresh_pepper = uuid.uuid4().hex * 2
         self.service_a = self._service(self.pool_a)
         self.service_b = self._service(self.pool_b)
         from fastapi.testclient import TestClient
@@ -139,7 +140,7 @@ class InvitationDatabaseIntegrationTests(unittest.TestCase):
             repository=PooledAuthRepository(pool),
             password_service=Argon2idPasswordService(),
             token_service=_build_contract_token_service(),
-            refresh_token_service=OpaqueRefreshTokenService(pepper=uuid.uuid4().hex * 2),
+            refresh_token_service=OpaqueRefreshTokenService(pepper=self.refresh_pepper),
         )
 
     def _create_invitation(self, email: str) -> dict:
@@ -153,11 +154,12 @@ class InvitationDatabaseIntegrationTests(unittest.TestCase):
 
     # spec: F61.ac7 — P0001 guard conflicts map to HTTP 409 on the production pooled path.
     def test_duplicate_pending_and_existing_member_return_conflict(self) -> None:
-        issued = self._create_invitation(f"pending-{uuid.uuid4().hex}@example.test")
+        pending_email = f"pending-{uuid.uuid4().hex}@example.test"
+        self._create_invitation(pending_email)
         duplicate = self.client_a.post(
             "/invitations",
             headers=self.owner_headers,
-            json={"email": issued["email"], "role": "staff"},
+            json={"email": pending_email, "role": "staff"},
         )
         self.assertEqual(409, duplicate.status_code, duplicate.text)
         member = self.client_a.post(
@@ -201,6 +203,29 @@ class InvitationDatabaseIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(200, accepted.status_code, accepted.text)
 
+    # spec: F61.ac8 — the actual successful route clears only its own durable IP bucket.
+    def test_successful_gateway_accept_clears_its_ip_bucket(self) -> None:
+        from auth.ratelimit import MAX_FAILED_ATTEMPTS
+
+        invitation = self._create_invitation(f"reset-{uuid.uuid4().hex}@example.test")
+        for _ in range(MAX_FAILED_ATTEMPTS - 1):
+            failed = self.client_a.post(
+                "/invitations/accept", json={"token": "not-a-token", "password": "password"},
+            )
+            self.assertEqual(401, failed.status_code, failed.text)
+
+        redeemed = self.client_a.post(
+            "/invitations/accept",
+            json={"token": invitation["token"], "password": "strong integration password"},
+        )
+        self.assertEqual(200, redeemed.status_code, redeemed.text)
+
+        # A further bad token remains eligible after success reset, rather than 429.
+        after_reset = self.client_a.post(
+            "/invitations/accept", json={"token": "not-a-token", "password": "password"},
+        )
+        self.assertEqual(401, after_reset.status_code, after_reset.text)
+
     # spec: F61.ac8 — concurrent reservations across pools cannot lose increments.
     def test_concurrent_pooled_reservations_are_serialized(self) -> None:
         from api.auth_gateway import PooledAuthRepository
@@ -217,19 +242,63 @@ class InvitationDatabaseIntegrationTests(unittest.TestCase):
         self.assertEqual(19, results.count(True))
         self.assertTrue(repos[1].begin_invitation_accept(self.ip_test, now, 5, 900, 900))
 
+    # spec: F61.ac8 — success clears only its IP; SQL boundaries match the memory model.
+    def test_pooled_success_reset_is_ip_scoped_and_boundaries_are_exact(self) -> None:
+        from api.auth_gateway import PooledAuthRepository
+
+        repo_a = PooledAuthRepository(self.pool_a)
+        repo_b = PooledAuthRepository(self.pool_b)
+        now = datetime.now(UTC)
+        ip_a = f"192.0.2.{uuid.uuid4().int % 240 + 10}"
+        ip_b = f"198.51.100.{uuid.uuid4().int % 240 + 10}"
+
+        # The threshold attempt is admitted while placing the bucket in lockout.
+        for _ in range(3):
+            self.assertFalse(repo_a.begin_invitation_accept(ip_a, now, 3, 10, 10))
+            self.assertFalse(repo_a.begin_invitation_accept(ip_b, now, 3, 10, 10))
+        self.assertTrue(repo_b.begin_invitation_accept(ip_a, now, 3, 10, 10))
+        repo_b.complete_invitation_accept(ip_a, succeeded=True, when=now)
+        self.assertFalse(repo_a.begin_invitation_accept(ip_a, now, 3, 10, 10))
+        self.assertTrue(repo_a.begin_invitation_accept(ip_b, now, 3, 10, 10))
+
+        # A locked bucket opens at the exact lockout boundary; cutoff timestamps
+        # also expire at equality, matching InMemoryAuthRepository.
+        boundary_ip = f"203.0.113.{uuid.uuid4().int % 240 + 10}"
+        self.assertFalse(repo_a.begin_invitation_accept(boundary_ip, now, 2, 10, 10))
+        self.assertFalse(repo_a.begin_invitation_accept(
+            boundary_ip, now + timedelta(seconds=1), 2, 10, 10,
+        ))
+        self.assertFalse(repo_b.begin_invitation_accept(
+            boundary_ip, now + timedelta(seconds=11), 2, 10, 10,
+        ))
+
+        invalid_configs = ((0, 10, 10), (101, 10, 10), (5, 86_401, 10), (5, 10, 86_401))
+        for config in invalid_configs:
+            invalid_ip = f"192.0.2.{uuid.uuid4().int % 240 + 10}"
+            self.assertTrue(repo_a.begin_invitation_accept(invalid_ip, now, *config))
+            with psycopg.connect(self.owner_url) as conn:
+                self.assertIsNone(conn.execute(
+                    "SELECT 1 FROM auth_invitation_accept_throttle WHERE client_ip=%s::inet",
+                    (invalid_ip,),
+                ).fetchone())
+
     # spec: F61.ac8 — application roles cannot bypass the SECURITY DEFINER boundary.
     def test_throttle_table_and_mutators_are_auth_svc_only(self) -> None:
         from api.auth_gateway import PooledAuthRepository
 
-        with psycopg.connect(self.owner_url) as conn, conn.transaction():
-            conn.execute("SET LOCAL ROLE app_rw")
-            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
-                conn.execute("SELECT * FROM auth_invitation_accept_throttle")
-            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
-                conn.execute(
-                    "SELECT auth_reserve_invitation_accept(%s::inet,%s,%s,%s)",
-                    (self.ip_test, datetime.now(UTC), 5, 900),
-                )
+        statements = (
+            ("SELECT * FROM auth_invitation_accept_throttle", ()),
+            (
+                "SELECT auth_reserve_invitation_accept(%s::inet,%s,%s,%s,%s)",
+                (self.ip_test, datetime.now(UTC), 5, 900, 900),
+            ),
+        )
+        for role in ("app_rw", "app_ro"):
+            for statement, params in statements:
+                with psycopg.connect(self.owner_url) as conn, conn.transaction():
+                    conn.execute(f"SET LOCAL ROLE {role}")
+                    with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                        conn.execute(statement, params)
         repo = PooledAuthRepository(self.pool_a)
         self.assertFalse(repo.begin_invitation_accept(self.ip_test, datetime.now(UTC), 5, 900, 900))
 

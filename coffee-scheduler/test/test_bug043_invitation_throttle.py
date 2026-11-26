@@ -51,6 +51,46 @@ class InvitationThrottleRepositoryTests(unittest.TestCase):
             "203.0.113.20", self.now + timedelta(seconds=30), 5, 60, 30,
         ))
 
+    # spec: F61.ac5 — the sliding failure window excludes timestamps at its exact cutoff.
+    def test_rolling_window_expires_oldest_failure_at_boundary(self) -> None:
+        self.assertFalse(self.repo.begin_invitation_accept("203.0.113.21", self.now, 3, 10, 10))
+        self.assertFalse(self.repo.begin_invitation_accept(
+            "203.0.113.21", self.now + timedelta(seconds=5), 3, 10, 10,
+        ))
+        boundary = self.now + timedelta(seconds=10)
+        self.assertFalse(self.repo.begin_invitation_accept("203.0.113.21", boundary, 3, 10, 10))
+        self.assertFalse(self.repo.begin_invitation_accept("203.0.113.21", boundary, 3, 10, 10))
+        self.assertTrue(self.repo.begin_invitation_accept("203.0.113.21", boundary, 3, 10, 10))
+
+    # spec: F61.ac5 — inactive in-memory buckets are reclaimed when other clients arrive.
+    def test_expired_ip_buckets_are_pruned_globally(self) -> None:
+        old_ip = "203.0.113.23"
+        current_ip = "203.0.113.24"
+        self.assertFalse(self.repo.begin_invitation_accept(old_ip, self.now, 3, 10, 10))
+        self.assertFalse(self.repo.begin_invitation_accept(
+            current_ip, self.now + timedelta(seconds=1), 3, 10, 10,
+        ))
+        self.assertFalse(self.repo.begin_invitation_accept(
+            current_ip, self.now + timedelta(seconds=10), 3, 10, 10,
+        ))
+        self.assertNotIn(old_ip, self.repo._invitation_failures)
+        self.assertNotIn(old_ip, self.repo._invitation_windows)
+
+    # spec: F61.ac5 — invalid throttle configuration cannot admit an anonymous attempt.
+    def test_invalid_throttle_configuration_fails_closed(self) -> None:
+        invalid_configs = (
+            (0, 60, 60),
+            (101, 60, 60),
+            (5, 86_401, 60),
+            (5, 60, 86_401),
+            (True, 60, 60),
+        )
+        for config in invalid_configs:
+            with self.subTest(config=config):
+                self.assertTrue(self.repo.begin_invitation_accept(
+                    "203.0.113.22", self.now, *config,
+                ))
+
     # spec: F61.ac5 — IPv6 equivalents share state; malformed addresses fail closed.
     def test_ip_is_canonicalized_and_invalid_ip_is_rejected(self) -> None:
         self.assertFalse(self.repo.begin_invitation_accept(
@@ -95,6 +135,21 @@ class InvitationThrottleGatewayTests(unittest.TestCase):
             "/invitations/accept", json={"token": invitation.token, "password": "password"},
         )
         self.assertEqual(200, accepted.status_code)
+
+    # spec: F61.ac5 — a present but invalid trusted IP must not fall back to the proxy peer.
+    def test_invalid_trusted_ip_fails_closed_without_socket_fallback(self) -> None:
+        service = TenantAuthService.for_contract_fixture()
+        app = create_app(service, fetch_stores=lambda _tenant: [])
+
+        @app.middleware("http")
+        async def inject_invalid_trusted_ip(request, call_next):
+            request.scope["client_ip"] = "0.0.0.0"
+            return await call_next(request)
+
+        response = TestClient(app, client=("203.0.113.45", 41000)).post(
+            "/invitations/accept", json={"token": "invalid", "password": "password"},
+        )
+        self.assertEqual(503, response.status_code)
 
 
 if __name__ == "__main__":

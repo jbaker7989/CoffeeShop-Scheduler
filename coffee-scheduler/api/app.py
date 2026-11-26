@@ -19,18 +19,27 @@ CS-061a contract.
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+import logging
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from auth.api import create_auth_router, BrowserCookieConfig, _set_browser_cookies
-from auth.service import AuthenticationError, InvitationError, InvitationPermissionError, Principal, TenantAuthService, TenantSuspendedError
-from auth.ratelimit import LoginAttemptKey, LoginRateLimiter, AccountLockedError
+from auth.api import BrowserCookieConfig, _set_browser_cookies, create_auth_router
+from auth.ratelimit import LoginAttemptKey
 from auth.repository import OnboardingConflictError
+from auth.service import (
+    AuthenticationError,
+    InvitationError,
+    InvitationPermissionError,
+    Principal,
+    TenantAuthService,
+    TenantSuspendedError,
+)
 
 from .auth_gateway import ACCESS_COOKIE_NAME, build_auth_service_from_env, extract_access_credential
-from .routing import TenantResolver, TenantRoutingConfig, TenantRoutingMiddleware
 from .onboarding import (
     EmailNotVerifiedError,
     InvalidSignupError,
@@ -39,7 +48,7 @@ from .onboarding import (
     ProvisioningError,
     VerificationError,
 )
-
+from .routing import TenantResolver, TenantRoutingConfig, TenantRoutingMiddleware
 
 BROWSER_REFRESH_COOKIE = "refresh_token"
 BROWSER_REFRESH_PATH = "/auth/browser"
@@ -95,7 +104,6 @@ def create_app(
             resolver=TenantResolver(routing_config, tenant_lookup),
             config=routing_config,
         )
-    invitation_limiter = LoginRateLimiter()
     onboarding = onboarding_service or OnboardingService(auth_service)
 
     # The four CS-061a auth routes + /.well-known/jwks.json. This is the single owner of
@@ -271,30 +279,44 @@ def create_app(
         response: Response,
         request: Request,
     ) -> dict[str, Any]:
-        if request.client is None:
+        if "client_ip" in request.scope:
+            trusted_client_ip = request.scope["client_ip"]
+            if not isinstance(trusted_client_ip, str) or not trusted_client_ip:
+                raise HTTPException(status_code=503, detail="temporarily unavailable")
+            ip = trusted_client_ip
+        else:
+            ip = request.client.host if request.client is not None else None
+        if ip is None:
             raise HTTPException(status_code=503, detail="temporarily unavailable")
-        ip = request.client.host
         key = LoginAttemptKey("invite", "accept", ip)
         try:
-            key.client_ip_bucket()
+            ip = key.client_ip_bucket()[1]
         except ValueError:
             raise HTTPException(
                 status_code=503,
                 detail="temporarily unavailable",
             ) from None
+        if ip in {"0.0.0.0", "::"}:
+            raise HTTPException(status_code=503, detail="temporarily unavailable")
+        attempted_at = datetime.now(UTC)
         try:
-            invitation_limiter.check_ip(key)
-            tokens = auth_service.accept_invitation(
-                body.token,
-                body.password,
-                body.display_name,
-            )
-        except AccountLockedError:
-            raise HTTPException(status_code=429, detail="authentication failed") from None
+            locked = auth_service.reserve_invitation_accept_attempt(ip, now=attempted_at)
+        except Exception:
+            logging.getLogger(__name__).exception("invitation.accept.throttle_unavailable")
+            raise HTTPException(status_code=503, detail="temporarily unavailable") from None
+        if locked:
+            raise HTTPException(status_code=429, detail="authentication failed")
+        try:
+            tokens = auth_service.accept_invitation(body.token, body.password, body.display_name)
         except InvitationError:
-            invitation_limiter.record_ip_failure(key)
             raise HTTPException(status_code=401, detail="authentication failed") from None
-        invitation_limiter.record_ip_success(key)
+        try:
+            auth_service.mark_invitation_accept_success(ip, now=datetime.now(UTC))
+        except Exception:
+            # Redemption is already committed by auth_accept_invitation. Preserve its
+            # success response if cleanup of the independent throttle row is unavailable;
+            # the stale lock expires normally and no other IP's state is affected.
+            logging.getLogger(__name__).exception("invitation.accept.throttle_cleanup_failed")
         _set_browser_cookies(response, tokens, BrowserCookieConfig())
         return {
             "access_token": tokens.access_token,

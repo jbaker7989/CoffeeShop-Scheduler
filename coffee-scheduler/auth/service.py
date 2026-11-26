@@ -49,7 +49,12 @@ from .repository import (
     InvitationRecord, AuditEntry,
 )
 from .tokens import MAX_REFRESH_TOKEN_BYTES, OpaqueRefreshTokenService
-from .ratelimit import LoginAttemptKey
+from .ratelimit import (
+    LOCKOUT_DURATION_SECONDS,
+    LOCKOUT_WINDOW_SECONDS,
+    MAX_FAILED_ATTEMPTS,
+    LoginAttemptKey,
+)
 from .reset import PasswordResetService, PasswordResetError
 from .mfa import TOTPService, MfaSecretCipher, RecoveryCodeService, MfaRequiredError, MfaEnrollmentError, MfaReplayError
 
@@ -277,6 +282,29 @@ class TenantAuthService:
         if accepted is None: raise InvitationError(_GENERIC_AUTH_FAILURE)
         self._audit(AuditEntry(accepted.tenant_id, accepted.user_id, "tenant_user", "invitation.accepted", "invitation", None, after={"display_name": display_name} if display_name else None))
         return self._issue(tenant_id=accepted.tenant_id, user_id=accepted.user_id, role=accepted.role, now=self._now())
+
+    def reserve_invitation_accept_attempt(
+        self, client_ip: str, *, now: datetime | None = None,
+    ) -> bool:
+        """Atomically reserve an anonymous invite-accept attempt in repository state."""
+        attempted_at = now or self._now()
+        return self._repo.begin_invitation_accept(
+            client_ip,
+            attempted_at,
+            MAX_FAILED_ATTEMPTS,
+            LOCKOUT_WINDOW_SECONDS,
+            LOCKOUT_DURATION_SECONDS,
+        )
+
+    def mark_invitation_accept_success(
+        self, client_ip: str, *, now: datetime | None = None,
+    ) -> None:
+        """Clear the successful client's IP bucket without touching other clients."""
+        self._repo.complete_invitation_accept(
+            client_ip,
+            succeeded=True,
+            when=now or self._now(),
+        )
 
     def list_invitations(self, principal: Principal):
         if principal.role not in ("owner", "manager"): raise InvitationPermissionError("forbidden")
