@@ -74,12 +74,12 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Expected outcome:** Every runtime boundary has a versioned, authenticated contract; one agent built in a second framework proves interoperability; the Payroll/HCM question is settled (runtime agent or n8n-only).
 
 - **Acceptance criteria:**
-  - **F7.ac1** — Each runtime agent publishes an A2A 0.3 JSON-RPC card with a callable versioned skill.
-  - **F7.ac2** — Service requests without an authorized tenant, audience and operation are rejected before domain execution.
-  - **F7.ac3** — Inventory, Prep and Loyalty are non-callable design cards and Payroll/HCM remains an F16 n8n export.
-  - **F7.ac4** — A Scheduler client decodes a deterministic F8 forecast returned by the independent ADK worker.
-  - **F7.ac5** — Staff Comms renders a versioned template preview without contacting a recipient.
-  - **F7.ac6** — Labor Compliance evaluates a typed proposal against the verified tenant scope without writing audit records.
+  - **AC1 (F7.ac1)** — Each runtime agent publishes an A2A 0.3 JSON-RPC card with a callable versioned skill.
+  - **AC2 (F7.ac2)** — Service requests without an authorized tenant, audience and operation are rejected before domain execution.
+  - **AC3 (F7.ac3)** — Inventory, Prep and Loyalty are non-callable design cards and Payroll/HCM remains an F16 n8n export.
+  - **AC4 (F7.ac4)** — A Scheduler client decodes a deterministic F8 forecast returned by the independent ADK worker.
+  - **AC5 (F7.ac5)** — Staff Comms renders a versioned template preview without contacting a recipient.
+  - **AC6 (F7.ac6)** — Labor Compliance evaluates a typed proposal against the verified tenant scope without writing audit records.
 - **Edge / adversarial cases:** Wrong protocol or credential audience, malformed messages, extra authority fields, forged tenant scope, unknown templates, missing calendar or evaluation evidence.
 - **Cross-references:** F8, F10, F12, F15, F16, F61, F78. CS-083 delivers reconciled payroll exports via n8n.
 
@@ -170,15 +170,15 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Expected outcome:** A runnable orchestration that turns a request into a schedule end to end.
 
 - **Acceptance criteria:**
-  - **F12.ac1** — A valid request executes gather, forecast, compliance, solve and present in order and returns a versioned draft.
-  - **F12.ac2** — A scheduling request rejects unsupported dates, windows and authority fields before domain work.
-  - **F12.ac3** — The solver consumes the complete validated forecast for the requested model and calendar window.
-  - **F12.ac4** — Compliance and solver inputs are scoped to the authenticated tenant even when domain identifiers overlap.
-  - **F12.ac5** — A failed solve or unavailable compliance step produces a typed terminal error without a schedule.
-  - **F12.ac6** — Transient forecast retries are bounded by a deadline and attempt limit.
-  - **F12.ac7** — An authorized resumed request only reuses validated checkpoints from its own run.
-  - **F12.ac8** — Intent routing cannot modify validated inputs or skip graph stages.
-  - **F12.ac9** — Draft generation returns a safe projection without mutating forecasts, schedules or payroll.
+  - **AC1 (F12.ac1)** — A valid request executes gather, forecast, compliance, solve and present in order and returns a versioned draft.
+  - **AC2 (F12.ac2)** — A scheduling request rejects unsupported dates, windows and authority fields before domain work.
+  - **AC3 (F12.ac3)** — The solver consumes the complete validated forecast for the requested model and calendar window.
+  - **AC4 (F12.ac4)** — Compliance and solver inputs are scoped to the authenticated tenant even when domain identifiers overlap.
+  - **AC5 (F12.ac5)** — A failed solve or unavailable compliance step produces a typed terminal error without a schedule.
+  - **AC6 (F12.ac6)** — Transient forecast retries are bounded by a deadline and attempt limit.
+  - **AC7 (F12.ac7)** — An authorized resumed request only reuses validated checkpoints from its own run.
+  - **AC8 (F12.ac8)** — Intent routing cannot modify validated inputs or skip graph stages.
+  - **AC9 (F12.ac9)** — Draft generation returns a safe projection without mutating forecasts, schedules or payroll.
 - **Edge / adversarial cases:** Incomplete forecast grid, unsupported local hours, expired claim, duplicate claim, stale revision, unknown checkpoint schema, DB failure and unacceptable solver gap.
 - **Cross-references:** F8, F9, F10, F11, F23, F30, F45, F60. CS-021 owns the statutory verification gate.
 
