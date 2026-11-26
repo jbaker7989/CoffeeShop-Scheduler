@@ -733,9 +733,22 @@ class DatabaseAuthRepository(AuthRepository):
             with self.conn.cursor() as cur:
                 cur.execute("SELECT auth_create_invitation(%s,%s,%s,%s,%s,%s)", (invitation.tenant_id, invitation.email, invitation.role, invitation.token_digest, invitation.invited_by, invitation.expires_at)); row=cur.fetchone()
         except Exception as exc:
-            # The partial pending-invite index is the concurrent backstop; normalize only
-            # its conflict for the policy layer (which maps it to HTTP 409).
-            if exc.__class__.__name__ == "UniqueViolation": raise ValueError("duplicate pending invitation") from exc
+            # The function raises P0001 for its two expected conflicts, while the
+            # partial unique index is the concurrent backstop (23505). Normalize only
+            # those known outcomes; unrelated PL/pgSQL failures remain server errors.
+            sqlstate = getattr(exc, "sqlstate", None)
+            primary_message = getattr(getattr(exc, "diag", None), "message_primary", None)
+            is_known_conflict = (
+                sqlstate == "23505"
+                or (
+                    sqlstate == "P0001"
+                    and primary_message in {"already a member", "pending invitation exists"}
+                )
+            )
+            if is_known_conflict:
+                if not self.conn.autocommit:
+                    self.conn.rollback()
+                raise ValueError("invitation conflict") from exc
             raise
         self.conn.commit(); return str(row[0])
     @staticmethod

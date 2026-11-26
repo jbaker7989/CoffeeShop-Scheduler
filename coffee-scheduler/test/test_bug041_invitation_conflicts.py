@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sys
 import unittest
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,6 +30,7 @@ class _FailingCursor:
 class _FailingConnection:
     def __init__(self, error: Exception) -> None:
         self.error = error
+        self.autocommit = True
 
     def cursor(self, **_kwargs):
         return _FailingCursor(self.error)
@@ -46,7 +47,7 @@ def _database_error(class_name: str, sqlstate: str, message: str) -> Exception:
 
 class InvitationConflictRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.invitation = InvitationRecord(
             id="00000000-0000-0000-0000-000000000010",
             tenant_id="00000000-0000-0000-0000-000000000001",
