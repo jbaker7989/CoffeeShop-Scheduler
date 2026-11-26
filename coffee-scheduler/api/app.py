@@ -87,33 +87,27 @@ def create_app(
     tenant_lookup: Callable[[str], str | None] | None = None,
     onboarding_service: OnboardingService | None = None,
 ) -> FastAPI:
-    """Build the gateway around a CS-061a ``auth_service``.
+    """Build the gateway with app-owned database accessors or caller-supplied functions."""
+    database = None
+    if fetch_stores is None or (routing_config is not None and tenant_lookup is None):
+        from .db import GatewayDatabase
 
-    ``fetch_stores`` is injectable so the auth boundary can be tested through an ASGI client
-    without a database; production defaults to the RLS-scoped ``api.db.fetch_stores`` (imported
-    lazily so the ASGI tests do not require the psycopg connection pool).
-    """
-    uses_default_database = fetch_stores is None or (routing_config is not None and tenant_lookup is None)
-    if fetch_stores is None:
-        from .db import fetch_stores as fetch_stores  # noqa: PLW0127 — lazy production default
+        database = GatewayDatabase()
+        if fetch_stores is None:
+            fetch_stores = database.fetch_stores
+        if tenant_lookup is None:
+            tenant_lookup = database.resolve_active_slug
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        # The database pool itself remains lazy: liveness and startup do not need
-        # PostgreSQL. Close only the process-wide production pool when this app
-        # owns a default DB accessor; injected adapters must not affect it.
         try:
             yield
         finally:
-            if uses_default_database:
-                from .db import pool
-
-                pool.close()
+            if database is not None:
+                database.close()
 
     app = FastAPI(lifespan=lifespan)
     if routing_config is not None:
-        if tenant_lookup is None:
-            from .db import resolve_active_slug as tenant_lookup  # noqa: PLW0127 — lazy production lookup
         app.add_middleware(
             TenantRoutingMiddleware,
             resolver=TenantResolver(routing_config, tenant_lookup),
@@ -158,7 +152,7 @@ def create_app(
         route = request.scope.get("tenant_route")
         if route is not None and principal.tenant_id != route.tenant_id:
             # This comparison is deliberately before endpoint execution/fetch_stores,
-            # therefore before the sole RLS binding in api.db.fetch_stores.
+            # therefore before the sole RLS binding in GatewayDatabase.fetch_stores.
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
         return principal
 
