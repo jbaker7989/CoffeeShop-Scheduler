@@ -20,7 +20,19 @@
 | record `model_version` | string | Must equal envelope `model_version`. |
 | record `taxonomy_version` | string | Must equal envelope `taxonomy_version`. |
 
-Each interval must satisfy `0 <= lower <= p70 <= upper`. Records are unique by `(location_id, product_category, forecast_hour)`. Store open windows are half-open: an hour at opening is included and an hour at closing is excluded.
+Each interval must satisfy `0 <= lower <= p70 <= upper`. Records are unique by `(location_id, product_category, forecast_hour)`.
+
+Store hours are keyed by location and weekday index (Monday = 0, Sunday = 6).
+Validation picks the weekday in `America/New_York`. A missing weekday window
+means the store is closed. Callers can also supply a single window per store,
+with `open_weekdays` identifying the days it applies to.
+
+The loader rounds both opening and closing times up when the minute is
+nonzero. For a store open 06:30–20:30, the resulting window is `[7, 21)`,
+so 07:00 through 20:00 are valid forecast timestamps. Exact-hour times keep
+their hour. The loader rejects windows whose rounded closing hour is at or
+before their rounded opening hour, including overnight windows. If multiple
+rows resolve to the same location and weekday, the last row read wins.
 
 `forecast_hour` is evaluated in the `America/New_York` business timezone. A timestamp that lands on the hour only in another offset is rejected; it must be an exact clock hour after conversion to the business timezone.
 

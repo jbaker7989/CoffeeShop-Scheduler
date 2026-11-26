@@ -63,6 +63,20 @@ class StoreOpenWindow:
     open_weekdays: frozenset[int]
 
 
+StoreWeekHours = Mapping[int, Mapping[int, StoreOpenWindow]]
+StoreHours = Mapping[int, StoreOpenWindow | Mapping[int, StoreOpenWindow]]
+
+
+def window_for(
+    store_hours: StoreHours, location: int, weekday: int,
+) -> StoreOpenWindow | None:
+    """Resolve the local weekday in either supported store-hours mapping."""
+    hours = store_hours.get(location)
+    if isinstance(hours, StoreOpenWindow):
+        return hours if weekday in hours.open_weekdays else None
+    return hours.get(weekday) if hours is not None else None
+
+
 @dataclass(frozen=True)
 class ForecastRecord:
     location_id: int
@@ -105,7 +119,7 @@ def validate_record(
     *,
     allowed_categories: Collection[str],
     allowed_locations: Collection[int],
-    store_hours: Mapping[int, StoreOpenWindow],
+    store_hours: StoreHours,
 ) -> None:
     """Validate one forecast record against its approved vocabulary and store hours."""
     if not isinstance(r, ForecastRecord):
@@ -139,12 +153,10 @@ def validate_record(
 
     if r.location_id not in allowed_locations:
         raise StoreHoursError(f"Unknown store location {r.location_id!r}")
-    window = store_hours.get(r.location_id)
-    if window is None:
+    if r.location_id not in store_hours:
         raise StoreHoursError(f"Store has no open window {r.location_id!r}")
-    if local.weekday() not in window.open_weekdays:
-        raise StoreHoursError(f"Store is closed for forecast hour {local!r}")
-    if not window.open_hour <= local.hour < window.close_hour:
+    window = window_for(store_hours, r.location_id, local.weekday())
+    if window is None or not window.open_hour <= local.hour < window.close_hour:
         raise StoreHoursError(f"Store is closed for forecast hour {local!r}")
 
 
@@ -153,7 +165,7 @@ def validate_set(
     *,
     allowed_categories: Collection[str],
     allowed_locations: Collection[int],
-    store_hours: Mapping[int, StoreOpenWindow],
+    store_hours: StoreHours,
 ) -> None:
     """Validate envelope versions, uniqueness, and every contained record."""
     if not isinstance(fs, ForecastSet):
@@ -334,8 +346,8 @@ def _row_value(row: object, name: str, index: int) -> object:
     return row[index]  # type: ignore[index]
 
 
-def load_store_hours(conn) -> dict[int, StoreOpenWindow]:
-    """Load store open windows, rounding a partial closing hour up to keep it exclusive."""
+def load_store_hours(conn) -> dict[int, dict[int, StoreOpenWindow]]:
+    """Load per-weekday store windows and round minute offsets up to whole hours."""
     rows = conn.execute("SELECT location_id, day_of_week, open_time, close_time FROM store_hours").fetchall()
     weekdays = {
         "monday": 0,
@@ -346,7 +358,7 @@ def load_store_hours(conn) -> dict[int, StoreOpenWindow]:
         "saturday": 5,
         "sunday": 6,
     }
-    grouped: dict[int, tuple[int, int, set[int]]] = {}
+    grouped: dict[int, dict[int, StoreOpenWindow]] = {}
     for row in rows:
         location_id = _row_value(row, "location_id", 0)
         day_name = str(_row_value(row, "day_of_week", 1)).lower()
@@ -354,11 +366,20 @@ def load_store_hours(conn) -> dict[int, StoreOpenWindow]:
         close_time = _row_value(row, "close_time", 3)
         if day_name not in weekdays or open_time is None or close_time is None:
             continue
-        close_hour = close_time.hour + (1 if close_time.minute else 0)
-        # A close such as 20:30 excludes the 20:00 forecast hour, so round up to 21.
-        current = grouped.setdefault(location_id, (open_time.hour, close_hour, set()))
-        current[2].add(weekdays[day_name])
-    return {
-        location_id: StoreOpenWindow(open_hour, close_hour, frozenset(open_weekdays))
-        for location_id, (open_hour, close_hour, open_weekdays) in grouped.items()
-    }
+        # Forecasts represent exact whole-hour instants. Any fractional part of
+        # the opening time means that hour's forecast precedes opening, so round
+        # up; a fractional close similarly keeps the containing hour open.
+        open_fraction = bool(open_time.minute or open_time.second or open_time.microsecond)
+        close_fraction = bool(close_time.minute or close_time.second or close_time.microsecond)
+        open_hour = open_time.hour + int(open_fraction)
+        close_hour = close_time.hour + int(close_fraction)
+        if close_hour <= open_hour:
+            raise StoreHoursError(
+                f"Invalid store window for location {location_id!r} on {day_name}: "
+                f"{open_time}–{close_time} must produce an opening hour before closing"
+            )
+        weekday = weekdays[day_name]
+        grouped.setdefault(location_id, {})[weekday] = StoreOpenWindow(
+            open_hour, close_hour, frozenset({weekday}),
+        )
+    return grouped

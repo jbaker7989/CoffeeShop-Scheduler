@@ -1,9 +1,8 @@
 """PostgreSQL migration reversibility integration test for F43."""
 import os
-from pathlib import Path
 import subprocess
 import unittest
-
+from pathlib import Path
 
 # spec: F43.ac3 — Migrations round-trip without leaving domain schema objects.
 EXPECTED_TABLES = {
@@ -76,16 +75,55 @@ class MigrationRoundTripTests(unittest.TestCase):
 
     def test_upgrade_downgrade_upgrade_leaves_only_alembic_metadata_at_base(self) -> None:
         self.alembic("upgrade", "head")
-        self.assertTrue(EXPECTED_TABLES <= self.public_tables())
+        self.assertTrue(self.public_tables() >= EXPECTED_TABLES)
         self.assertEqual(EXPECTED_ROLES, self.roles())
-
         self.alembic("downgrade", "base")
         self.assertFalse(EXPECTED_TABLES & self.public_tables())
         self.assertFalse(EXPECTED_ROLES & self.roles())
 
         self.alembic("upgrade", "head")
-        self.assertTrue(EXPECTED_TABLES <= self.public_tables())
+        self.assertTrue(self.public_tables() >= EXPECTED_TABLES)
         self.assertEqual(EXPECTED_ROLES, self.roles())
+
+    # spec: F43.ac3 / F61.ac8 — BUG-043 throttle state/functions reverse cleanly and re-upgrade.
+    def test_bug043_throttle_objects_round_trip(self) -> None:
+        import psycopg
+
+        self.alembic("upgrade", "head")
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            self.assertIsNotNone(conn.execute(
+                "SELECT to_regclass('public.auth_invitation_accept_throttle')"
+            ).fetchone()[0])
+            self.assertEqual(
+                {"auth_reserve_invitation_accept", "auth_complete_invitation_accept"},
+                {row[0] for row in conn.execute(
+                    "SELECT proname FROM pg_proc "
+                    "WHERE pronamespace = 'public'::regnamespace "
+                    "AND proname IN ('auth_reserve_invitation_accept', "
+                    "'auth_complete_invitation_accept')"
+                )},
+            )
+
+        self.alembic("downgrade", "0021")
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT to_regclass('public.auth_invitation_accept_throttle')"
+            ).fetchone()[0])
+            self.assertEqual(
+                0,
+                conn.execute(
+                    "SELECT count(*) FROM pg_proc "
+                    "WHERE pronamespace = 'public'::regnamespace "
+                    "AND proname IN ('auth_reserve_invitation_accept', "
+                    "'auth_complete_invitation_accept')"
+                ).fetchone()[0],
+            )
+
+        self.alembic("upgrade", "head")
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            self.assertIsNotNone(conn.execute(
+                "SELECT to_regclass('public.auth_invitation_accept_throttle')"
+            ).fetchone()[0])
 
     # spec: F34.ac3 — Coverage rules retain an effective daterange through a migration round-trip.
     def test_coverage_rules_validity_round_trips(self) -> None:
@@ -158,7 +196,7 @@ class MigrationRoundTripTests(unittest.TestCase):
             conn.execute("SET session_replication_role = replica")
             conn.execute("DELETE FROM forecasts WHERE tenant_id = %s", (fixture_tenant,))
         self.alembic("upgrade", "head")
-        self.assertEqual("0021", self.current_revision())
+        self.assertEqual("0023", self.current_revision())
         with psycopg.connect(url) as conn:
             self.assertEqual(
                 1,

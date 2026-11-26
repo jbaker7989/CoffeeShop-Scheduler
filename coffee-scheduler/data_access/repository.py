@@ -32,6 +32,26 @@ def _ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+MAX_LIMIT = 1000
+# PostgreSQL LIMIT/OFFSET expressions use bigint; reject values the database
+# cannot represent before acquiring a cursor rather than leaking an adapter/SQL error.
+MAX_OFFSET = (1 << 63) - 1
+
+
+def _bounded_int(name: str, value: object, *, minimum: int, maximum: int | None = None) -> int:
+    """Reject bools, non-ints and out-of-range values before any SQL is built.
+
+    A negative LIMIT is unlimited in PostgreSQL, so an unchecked value turns a
+    paged read into a full-table scan.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an int, got {type(value).__name__}: {value!r}")
+    if value < minimum or (maximum is not None and value > maximum):
+        bound = f"{minimum}..{maximum}" if maximum is not None else f">= {minimum}"
+        raise ValueError(f"{name} must be {bound}, got {value!r}")
+    return value
+
+
 class Repository:
     """One table's typed access surface. The connection's role (app_ro vs app_rw)
     decides what the DB permits; the repository exposes methods, the DB enforces rights."""
@@ -50,6 +70,8 @@ class Repository:
             return cur.fetchone()
 
     def list(self, *, limit: int = 100, offset: int = 0, order_by: str | None = None, **eq) -> list[dict]:
+        limit = _bounded_int("limit", limit, minimum=1, maximum=MAX_LIMIT)
+        offset = _bounded_int("offset", offset, minimum=0, maximum=MAX_OFFSET)
         for col in (*eq, *( [order_by] if order_by else [])):
             if col not in self.spec.columns:
                 raise KeyError(f"{self.spec.name} has no column {col!r}")
@@ -60,7 +82,7 @@ class Repository:
         if order_by:
             sql += f" ORDER BY {_ident(order_by)}"
         sql += " LIMIT %s OFFSET %s"
-        params = [*eq.values(), int(limit), int(offset)]
+        params = [*eq.values(), limit, offset]
         with self.conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             return cur.fetchall()

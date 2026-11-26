@@ -2180,7 +2180,7 @@ closing regression evidence.
 
 ### BUG-041 — F61/CS-061c: duplicate-invite / already-member returns HTTP 500 over the live DB (in-memory path returns 409)
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (DB↔in-memory divergence)
-- **Status:** 🐞 Open · **Type:** Error-mapping / repository-parity defect · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (2026-11-25) — `DatabaseAuthRepository.create_invitation` maps only SQLSTATE `23505` and the two documented `P0001` messages to the existing conflict path; all unrelated SQL errors still propagate. Migration `0023` qualifies ambiguous `auth_accept_invitation` column references without changing its signature, SECURITY DEFINER attributes, or grants. Unit tests prove selective translation; live pooled gateway tests prove duplicate pending/member conflicts and concurrent duplicates return 409, and valid redemption succeeds. Evidence: `test_bug041_invitation_conflicts.py` 3/3; `test_cs061c_invitation_database_integration.py` includes live conflict/concurrency/redemption cases; migration roundtrip 4/4. · **Type:** Error-mapping / repository-parity defect · **Found:** 2026-11-17 (Claude review of CS-061c)
 - **Root cause:** `auth_create_invitation` (migration `0012`) guards the common conflict cases with
   `RAISE EXCEPTION 'already a member'` and `RAISE EXCEPTION 'pending invitation exists'`, which Postgres
   raises as **SQLSTATE `P0001` (`RaiseException`)**, *not* `UniqueViolation`. But
@@ -2207,7 +2207,8 @@ closing regression evidence.
 
 ### BUG-042 — F61/CS-061c: audit-store outage converts a valid login into a 500 (a genuine auth result is lost)
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** S · **Pattern:** D3 (availability coupling)
-- **Status:** 🐞 Open · **Type:** Spec deviation / resilience defect · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (2026-11-25) — success/failure login audit is best-effort, failures are logged and counted by action, valid login tokens still issue during audit-store outage, and required invitation audit remains fail-closed; `test_f61_audit_contract.py`.
+- **Type:** Spec deviation / resilience defect · **Found:** 2026-11-17 (Claude review of CS-061c)
 - **Root cause:** `TenantAuthService._audit` (`auth/service.py`) wraps `record_audit` and, on any failure,
   logs and **re-raises**. It is invoked on the login success path (`auth.login.succeeded`) *after* the
   credential + MFA checks pass and the session is issuable. So if the audit store (the `auth_record_audit`
@@ -2227,7 +2228,7 @@ closing regression evidence.
 
 ### BUG-043 — F61/CS-061c: invitation-accept rate limit is per-process (in-memory), not shared across gateway instances
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P3 · **Size:** S · **Pattern:** D3
-- **Status:** 🐞 Open · **Type:** Defense-in-depth gap · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (2026-11-25) — removed the invitation route's process-local limiter and added mandatory typed repository operations backed by a canonical-IP-only PostgreSQL table and `auth_svc`-only SECURITY DEFINER functions in migration `0022`. Atomic reservations, independent IP buckets, success-only bucket clearing, rolling-window/lockout expiry, fail-closed invalid inputs, and application-role denial are covered in memory and against separate pooled DB adapters. Evidence: throttle unit tests 8/8; live `test_cs061c_invitation_database_integration.py` 7/7; migration roundtrip 4/4. · **Type:** Defense-in-depth gap · **Found:** 2026-11-17 (Claude review of CS-061c)
 - **Root cause:** `create_app` (`api/app.py`) throttles the public `POST /invitations/accept` endpoint with
   `invitation_limiter = LoginRateLimiter()` — an **in-memory** limiter instantiated per app/worker. Unlike
   the CS-061b login throttle, which is DB-backed (`auth_record_login_attempt`/`auth_login_locked`) and
@@ -2235,9 +2236,7 @@ closing regression evidence.
   the effective brute-force limit multiplies by the worker count and resets on restart/redeploy.
 - **Impact:** weaker brute-force protection on an anonymous, token-bearing endpoint under multi-worker/
   multi-instance deployment (the production shape). Single-process dev is unaffected, which is why tests pass.
-- **Acceptance criteria (for the fix):** back the accept throttle with the DB (reuse the CS-061b
-  `auth_login_attempts` port with an `'invite'`/client-IP key) so the limit is shared and durable, matching
-  the login throttle; add a test asserting the throttle state is not process-local.
+- **Acceptance criteria (for the fix):** persist accept throttle state by canonical client IP behind a mandatory repository operation and narrowly granted database functions; do not share state across unrelated IPs or add tenant/email/token keys. Prove durable state across independent pools, atomic concurrent reservations, success-only same-IP reset, expiry boundaries, and least-privilege role enforcement through the production gateway path.
 - **Risk if unfixed:** token-guessing / enumeration on `/invitations/accept` scales with gateway replicas.
 
 ### BUG-044 — F61/CS-061c: `list_invitations` ordering differs between the DB and in-memory repositories
@@ -2524,6 +2523,8 @@ closing regression evidence.
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
 | BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
 | BUG-025 | F60 | P2 | XS | ✅ Fixed — autocommit refused + transaction-local role/tenant (no pool leak); `test_bug025_pooling_session.py` |
+| BUG-041 | F61 | P2 | XS | ✅ Fixed — known invitation SQL conflicts map to 409; live pooled route and redemption regressions |
+| BUG-043 | F61 | P3 | S | ✅ Fixed — invitation acceptance throttle persists atomically by canonical client IP in PostgreSQL |
 | BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
 | BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
 | BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |
@@ -2531,7 +2532,7 @@ closing regression evidence.
 | BUG-051 | F61 | P2 | S | ✅ Fixed — centralized typed pooled repository delegation |
 | BUG-052 | F61 | P2 | XS | ✅ Fixed — one JWT validation per protected authorization |
 | BUG-053 | F61 | P1 | S | ✅ Fixed — logout revokes access token and presented refresh family |
-| BUG-054 | F45 | P2 | XS | 🐞 Open — validate and bound repository list pagination |
+| BUG-054 | F45 | P2 | XS | ✅ Fixed — strict bounded LIMIT and validated PostgreSQL-range OFFSET before SQL execution |
 | BUG-055 | F36/F38 | P1 | M | 🐞 Open — limit collector exposure and require TLS for remote OTLP |
 
 ### BUG-051 — F61: centralize pooled auth repository delegation
@@ -2570,7 +2571,7 @@ closing regression evidence.
 
 ### BUG-054 — F45: bound and validate repository list pagination
 - **Feature:** [F45](./FEATURES.md) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open
+- **Status:** ✅ Fixed (2026-11-25) — `limit` is a strict non-boolean integer in 1..1000 and `offset` is a strict non-boolean integer in the PostgreSQL `bigint` range; malformed values fail before cursor use. `test_data_access.py::RepositoryPaginationTests` covers adversarial values and boundaries.
 - **Description:** `Repository.list()` converts `limit` and `offset` with `int()` but does not reject negative values or cap page size. PostgreSQL treats a negative LIMIT as unlimited, so a caller can accidentally or deliberately retrieve the entire tenant table; negative offsets and lossy values also create surprising behavior.
 - **AC1:** `limit` accepts only a non-boolean integer in the inclusive range 1..1000; default remains 100.
 - **AC2:** `offset` accepts only a non-boolean integer greater than or equal to zero; default remains zero.
@@ -2673,7 +2674,7 @@ closing regression evidence.
   - The DB forecast→category domain is pinned to real categories (e.g. FK to a product-category/taxonomy table rather than `throughput_standards`, or an exclusion of the overhead row), so the database cannot store an overhead forecast; covered by a `spec: F8.ac1` regression test (Python and DB-gated).
 
 ### BUG-061 — F8/CS-012: `load_store_hours` keeps only the first weekday's window and ignores non-zero open-time minutes
-- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Correctness (latent) · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** ✅ Fixed (2026-11-25) — per-weekday windows are used by forecast validation, feature generation, and scheduler completeness; opening/closing times ceil minute, second, and microsecond fractions. Regressions cover weekday-specific hours, UTC weekday boundaries, and fractional seconds. **Type:** Correctness (latent) · **Found:** 2026-11-21 (Claude review of CS-012)
 - **Description:** `load_store_hours` builds one `StoreOpenWindow` per store via `grouped.setdefault(location_id, (open_time.hour, close_hour, set()))`, so the open/close hours come from whichever weekday row is read first and all other rows only contribute their weekday to `open_weekdays`. A store with different hours by day (e.g. shorter Sundays) is validated against a single day's window. Separately, the close time is rounded up for a non-zero minute (20:30 → 21) but the open time is floored to its hour, so a `06:30` open would wrongly admit a `06:00` pre-open forecast. Latent today because the seeded three stores share uniform, on-the-hour open times.
 - **Story:** As a forecast validator, I want each store's open window to reflect its actual per-weekday open and close times, so a forecast is accepted only within the hours that store is genuinely open on that day.
 - **Acceptance criteria:**

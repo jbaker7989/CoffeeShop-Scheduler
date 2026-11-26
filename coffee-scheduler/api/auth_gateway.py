@@ -134,6 +134,16 @@ class PooledAuthRepository(AuthRepository):
     def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool:
         return self._call("consume_recovery_code", tenant_id, user_id, digest)
 
+    def begin_invitation_accept(
+        self, ip: str, when: datetime, max_failures: int, window_seconds: int, lockout_seconds: int,
+    ) -> bool:
+        return self._call(
+            "begin_invitation_accept", ip, when, max_failures, window_seconds, lockout_seconds,
+        )
+
+    def complete_invitation_accept(self, ip: str, *, succeeded: bool, when: datetime) -> None:
+        return self._call("complete_invitation_accept", ip, succeeded=succeeded, when=when)
+
     def create_invitation(self, invitation: InvitationRecord) -> str:
         return self._call("create_invitation", invitation)
 

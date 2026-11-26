@@ -20,9 +20,10 @@ from decimal import Decimal
 
 from contracts.forecast import (
     PINNED_TAXONOMY_VERSION,
-    StoreOpenWindow,
+    StoreHours,
     load_store_hours,
     load_vocabulary,
+    window_for,
 )
 
 FEATURE_VERSION = "forecast-features-v2"
@@ -79,7 +80,7 @@ class FeatureBuildError(RuntimeError):
 
 
 def build_cell_universe(
-    store_hours: Mapping[int, StoreOpenWindow],
+    store_hours: StoreHours,
     categories: Collection[str],
     window: tuple[date, date],
 ) -> list[CellKey]:
@@ -92,10 +93,10 @@ def build_cell_universe(
     cells: list[CellKey] = []
     ordinal_days = range((end - start).days + 1)
     for location_id in sorted(store_hours):
-        window_spec = store_hours[location_id]
         for offset in ordinal_days:
             day = date.fromordinal(start.toordinal() + offset)
-            if day.weekday() not in window_spec.open_weekdays:
+            window_spec = window_for(store_hours, location_id, day.weekday())
+            if window_spec is None:
                 continue
             for hour in range(window_spec.open_hour, window_spec.close_hour):
                 for category in sorted(categories):
