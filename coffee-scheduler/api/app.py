@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -92,10 +93,24 @@ def create_app(
     without a database; production defaults to the RLS-scoped ``api.db.fetch_stores`` (imported
     lazily so the ASGI tests do not require the psycopg connection pool).
     """
+    uses_default_database = fetch_stores is None or (routing_config is not None and tenant_lookup is None)
     if fetch_stores is None:
         from .db import fetch_stores as fetch_stores  # noqa: PLW0127 — lazy production default
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # The database pool itself remains lazy: liveness and startup do not need
+        # PostgreSQL. Close only the process-wide production pool when this app
+        # owns a default DB accessor; injected adapters must not affect it.
+        try:
+            yield
+        finally:
+            if uses_default_database:
+                from .db import pool
+
+                pool.close()
+
+    app = FastAPI(lifespan=lifespan)
     if routing_config is not None:
         if tenant_lookup is None:
             from .db import resolve_active_slug as tenant_lookup  # noqa: PLW0127 — lazy production lookup
@@ -137,9 +152,9 @@ def create_app(
         try:
             principal = auth_service.authorize_access_request(token)
         except TenantSuspendedError:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden") from None
         except AuthenticationError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized") from None
         route = request.scope.get("tenant_route")
         if route is not None and principal.tenant_id != route.tenant_id:
             # This comparison is deliberately before endpoint execution/fetch_stores,
@@ -345,12 +360,10 @@ def create_app(
         access_token = extract_access_credential(request)
         refresh_token = request.cookies.get(BROWSER_REFRESH_COOKIE)
         if access_token is not None:
-            try:
+            with suppress(AuthenticationError):
                 auth_service.revoke_token(access_token, refresh_token)
-            except AuthenticationError:
-                # Logout is idempotent for expired or otherwise invalid credentials. A
-                # persistence failure is deliberately not caught and cannot masquerade as success.
-                pass
+            # Logout is idempotent for expired or otherwise invalid credentials. A
+            # persistence failure is deliberately not caught and cannot masquerade as success.
         response.delete_cookie(ACCESS_COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=True)
         response.delete_cookie(
             BROWSER_REFRESH_COOKIE, path=BROWSER_REFRESH_PATH, httponly=True, samesite="strict", secure=True

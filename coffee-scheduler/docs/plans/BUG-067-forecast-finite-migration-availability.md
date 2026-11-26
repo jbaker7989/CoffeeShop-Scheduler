@@ -1,5 +1,12 @@
 # BUG-067 — Make the BUG-065 migration available under concurrent forecast traffic
 
+> **Superseded implementation plan.** The accepted deployment decision allows revision 0021 to be amended
+> because it has not run outside disposable databases. The implemented sequence is 0021 (`NOT VALID`) plus
+> 0024 (preflight and online validation, with a committed enforcement boundary). Use the combined
+> [BUG-031/067 implementation plan](./BUG-031-067-gateway-lifecycle-and-migration-availability.md) for
+> current requirements, downgrade behavior, and regression evidence; the analysis below records the original
+> lock findings only.
+
 ## Goal
 
 Minimise the F8 finite-interval migration's exclusive-lock period and make its unavoidable metadata-lock contention a predictable, retryable deployment condition.

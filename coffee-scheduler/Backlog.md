@@ -1847,8 +1847,8 @@ closing regression evidence.
 
 ### BUG-031 — F30: API gateway connection pool is never closed (unclean shutdown)
 - **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P2 · **Size:** XS · **Pattern:** D7
-- **Status:** 🐞 Open · **Type:** Defect (resource lifecycle) · **Found:** 2026-11-16
-- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Status:** ✅ Done (2026-11-26) · **Type:** Defect (resource lifecycle) · **Found:** 2026-11-16
+- **Developer:** Codex · **Duration:** ~0.25d
 - **Description:** `api/db.py` creates a module-level `psycopg_pool.ConnectionPool` but never closes it. At
   interpreter shutdown its `__del__` tries to join the pool's worker thread, raising
   `PythonFinalizationError: cannot join thread at interpreter shutdown`. Under uvicorn the pool is also not
@@ -1856,10 +1856,14 @@ closing regression evidence.
 - **Reproduction (verified 2026-11-16):** running `test_api_foundation.py` prints
   `Exception ignored while calling deallocator <ConnectionPool.__del__>: PythonFinalizationError` after the
   suite passes.
-- **Specification (write first):** a test asserting the app closes the pool on shutdown (no finalizer error;
-  pool `.closed` after the lifespan exits).
-- **Proposed fix:** register a FastAPI `lifespan` (or shutdown handler) that calls `pool.close()`; open the
-  pool on startup rather than lazily. Keeps tests clean and avoids leaked backends.
+- **Specification:** F30.ac1–ac2 cover lazy pool startup/liveness and pool ownership through app shutdown.
+- **Resolution:** FastAPI lifespan closes `api.db.pool` in `finally` only when production DB accessors are
+  selected. Pool opening remains lazy, `/healthz` stays database-independent, and injected adapters never
+  close the shared production pool. `TestClient` lifecycle now closes the pool in the database-backed gateway
+  test as well.
+- **Verification:** `test_bug031_pool_lifecycle.py` 3/3; full non-migration suite 484 passed / 80 skipped;
+  ruff and feature/spec traceability gates pass. The legacy API foundation integration remains environment-
+  gated on a reachable gateway database and is included in the 80 skips in this run.
 - **Risk if unfixed:** leaked PgBouncer/Postgres connections across restarts; noisy finalizer errors mask real
   shutdown problems.
 
@@ -2724,7 +2728,7 @@ closing regression evidence.
 - **Resolution (merged — PR #13 `19cc927`; commits `8ed2eb1` fix, `cacffb7` test, `f053b8d` spec):** Migration `0021_bug065_forecast_finite_interval` adds the reversible, per-column `forecasts_interval_finite` CHECK (`v <> 'NaN'/'Infinity'/'-Infinity'` for each of `lower`, `p70`, `upper`), preceded by `lock_timeout` + `LOCK TABLE ... ACCESS EXCLUSIVE` and a preflight that raises an actionable error on pre-existing non-finite rows; downgrade drops only the new constraint. Regressions: `test_database_rejects_non_finite_interval_values` (NaN/±Infinity in each column, ordering-passing tuples attributed to the new constraint by name, finite boundaries accepted) and `test_migration_0021_preflight_rejects_non_finite_legacy_rows` (atomic preflight failure). Verified on disposable PostgreSQL 16.15 — focused contract suite 12/12, migration suite 3/3, upgrade→downgrade→upgrade reversible. Python `_validate_interval_value` unchanged.
 
 ### BUG-067 — F8/CS-012: BUG-065 migration is unavailable during an ordinary long-running forecast read
-- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Migration availability / deployment risk · **Found:** 2026-11-21 (independent review of merged BUG-065)
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** ✅ Done (2026-11-26) · **Type:** Migration availability / deployment risk · **Found:** 2026-11-21 (independent review of merged BUG-065)
 - **Root cause:** `db/migrations/versions/0021_bug065_forecast_finite_interval.py:79` explicitly acquires `LOCK TABLE forecasts IN ACCESS EXCLUSIVE MODE` after setting a five-second local lock timeout. `ACCESS EXCLUSIVE` conflicts with the normal `ACCESS SHARE` lock taken by a `SELECT`, so even a read-only forecast request that remains in its transaction for more than five seconds prevents the migration from beginning. The lock is deliberately held through both the preflight scan and constraint creation.
 - **Reproduction (verified on local PostgreSQL 16):** downgrade a disposable database to `0020`; in session A run `BEGIN; SELECT 1 FROM forecasts LIMIT 1; SELECT pg_sleep(7); COMMIT;`; while A is sleeping, run `alembic upgrade head` in session B. At five seconds, B exits non-zero with `psycopg.errors.LockNotAvailable: canceling statement due to lock timeout` at `LOCK TABLE forecasts IN ACCESS EXCLUSIVE MODE`; after A commits, a retry succeeds.
 - **Impact:** a deploy can fail whenever an otherwise normal report, API request, or idle-in-transaction reader overlaps the migration. This is an explicitly documented PostgreSQL maintenance-window tradeoff, not a surprise semantic defect; however, the implementation holds the strongest lock for the preflight/table scan too, increasing the unavailable interval beyond the short metadata operation PostgreSQL necessarily requires.
@@ -2733,7 +2737,15 @@ closing regression evidence.
   - Replace the whole-migration exclusive-lock strategy with a concurrency-safe rollout that installs future-write enforcement under a short bounded metadata lock, then performs the legacy check/validation under PostgreSQL's weaker validation lock. It must prevent a writer from slipping an invalid row between enforcement and validation.
   - A PostgreSQL integration regression proves a reader held longer than the configured lock timeout fails the metadata phase fast, reports a retryable lock error, and leaves the revision/constraint state atomic; after that reader releases, a retry succeeds. A separate phase-level test proves long `ACCESS SHARE` reads may coexist with the legacy scan/constraint validation where PostgreSQL permits it.
   - A concurrent writer after enforcement begins cannot commit a non-finite interval, and a legacy non-finite row still gets the named actionable preflight failure without being rewritten.
-- **Plan:** [BUG-067 plan](./docs/plans/BUG-067-forecast-finite-migration-availability.md).
+- **Resolution:** Revision 0021 now installs future-write enforcement as `NOT VALID` under a bounded metadata
+  lock; revision 0024 commits that enforcement boundary before legacy preflight, then validates under the
+  weaker PostgreSQL lock. A failed legacy preflight stays at 0023 with the constraint installed and
+  unvalidated, preserving the row and making cleanup/retry possible. Downgrading 0024 restores the 0021
+  enforcement-only state. The original standalone plan is superseded by the combined plan.
+- **Verification:** disposable PostgreSQL 16 migration suite 5/5, including lock-timeout/retry, invalid-write
+  rejection, validation alongside a held reader, legacy-row retry, downgrade/re-upgrade, and the full F43
+  upgrade/downgrade/re-upgrade test. Forecast contract tests are included in the full-suite 484-pass run.
+- **Plan:** [BUG-031/067 implementation plan](./docs/plans/BUG-031-067-gateway-lifecycle-and-migration-availability.md).
 
 ### BUG-068 — F8/CS-012: BUG-065 preflight regression cannot detect a missing per-column legacy-data check
 - **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Regression-test false negative · **Found:** 2026-11-21 (independent review of merged BUG-065)
