@@ -13,14 +13,25 @@ from pathlib import Path
 import psycopg
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.sql import SQL, Identifier, Literal
-from psycopg_pool import ConnectionPool
+
+try:
+    from psycopg_pool import ConnectionPool
+except ModuleNotFoundError:
+    ConnectionPool = None  # type: ignore[assignment,misc]
 
 SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCHEDULER_ROOT))
 
 
+_DATABASE_INTEGRATION_ENABLED = bool(os.environ.get("CS061B_DATABASE_INTEGRATION"))
+if _DATABASE_INTEGRATION_ENABLED and ConnectionPool is None:
+    raise RuntimeError(
+        "CS061B_DATABASE_INTEGRATION=1 requires psycopg_pool; install api/requirements.txt",
+    )
+
+
 @unittest.skipUnless(
-    os.environ.get("CS061B_DATABASE_INTEGRATION"),
+    _DATABASE_INTEGRATION_ENABLED,
     "set CS061B_DATABASE_INTEGRATION=1 with a disposable PostgreSQL DATABASE_URL",
 )
 class InvitationDatabaseIntegrationTests(unittest.TestCase):
