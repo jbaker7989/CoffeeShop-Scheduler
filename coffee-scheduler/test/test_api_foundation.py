@@ -41,6 +41,7 @@ try:
     import psycopg
     import psycopg_pool  # noqa: F401 — gateway data pool dependency
     from fastapi.testclient import TestClient
+
     from api.app import create_app
     from auth.service import TenantAuthService
     # DB reachability probe (the gateway reads through PgBouncer).
@@ -54,7 +55,10 @@ except Exception as exc:  # pragma: no cover - environment-dependent skip
 class ApiFoundation(unittest.TestCase):
     def _client(self):
         # Fixture CS-061a auth (no AUTH DB) + real RLS-scoped store reads (default fetch_stores).
-        return TestClient(create_app(TenantAuthService.for_contract_fixture()))
+        client = TestClient(create_app(TenantAuthService.for_contract_fixture()))
+        client.__enter__()
+        self.addCleanup(client.__exit__, None, None, None)
+        return client
 
     def _login(self, client, body=None):
         return client.post("/auth/login", json=body or LOGIN)

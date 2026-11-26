@@ -183,6 +183,9 @@ The Next.js scaffold at `coffee_shop/app/` exists but is stock `create-next-app`
 - **Status:** ✅ Done (CS-030, 2026-11-16) — `coffee_shop/` wired to a FastAPI gateway (`api/`): same-origin `/api/*` rewrite, seeded demo login → HttpOnly JWT cookie, auth-gated manager shell, dashboard lists the tenant's stores via RLS. Integration pattern documented in `docs/architecture/manager-ui-integration.md`. · **Size:** M · **Priority:** P1
 - **Description:** Claim ownership of `coffee_shop/app/` as the manager-facing surface for the scheduler. This feature owns the decisions the screens below share: Next.js → backend integration pattern (server actions vs API routes vs n8n-mediated), manager auth (single-tenant demo OK to start), the shared layout / navigation, and the convention for how each screen binds to the LangGraph state in F12. Each screen is a separate feature (F31–F35); this is the plumbing they all use.
 - **Expected outcome:** A scaffolded Next.js app a manager can sign into, with shared navigation and a documented integration pattern the screens below can build on.
+- **Operational acceptance — BUG-031:**
+  1. **AC1** — Gateway lifespan startup and `/healthz` do not open the lazy PostgreSQL pool.
+  2. **AC2** — When the gateway uses default database accessors, lifespan shutdown closes the pool, including after an exception; injected database adapters do not close the shared production pool.
 
 ### F31. Weekly schedule view
 - **Status:** Not started · **Size:** M · **Priority:** P1
