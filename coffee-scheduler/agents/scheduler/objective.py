@@ -191,10 +191,13 @@ def build_objective(
                     for employee in employees
                     for slot_index in slot_indices
                 ]
-                needed = int(required_labour_hours(
+                closing = store.partial_close_hours.get(day.weekday(), Decimal(window.close_hour))
+                available_hours = min(Decimal(1), closing - hour)
+                required_hours = required_labour_hours(
                     _records_here(inputs, store.location_id, day, hour), inputs.throughput,
                     utilisation_target=utilisation,
-                ).to_integral_value(rounding=ROUND_CEILING))
+                )
+                needed = int((required_hours / available_hours).to_integral_value(rounding=ROUND_CEILING))
                 slack = model.model.NewIntVar(0, max(needed, len(vars_here)), f"understaff_s{store.location_id}_{day}_{hour}")
                 model.model.Add(slack >= needed - sum(vars_here))
                 understaffing_slack[(store.location_id, day, hour)] = slack

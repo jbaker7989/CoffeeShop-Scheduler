@@ -1,0 +1,9 @@
+# Install in a separate environment. ADK and the gateway pin different FastAPI versions.
+google-adk[a2a]==2.15.1
+a2a-sdk[http-server]==0.3.26
+httpx==0.28.1
+PyJWT==2.13.0
+cryptography==49.0.0
+numpy==2.4.6
+psycopg[binary,pool]==3.3.9
+uvicorn==0.45.0

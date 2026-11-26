@@ -1,7 +1,39 @@
 {
   "name": "demand_forecast",
-  "version": "0.1.0",
-  "description": "",
-  "capabilities": [],
-  "auth": {}
+  "description": "Predict tenant demand for a date window.",
+  "version": "1.0.0",
+  "protocolVersion": "0.3.0",
+  "preferredTransport": "JSONRPC",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "securitySchemes": {
+    "serviceBearer": {
+      "type": "http",
+      "scheme": "bearer",
+      "bearerFormat": "JWT"
+    }
+  },
+  "security": [
+    {
+      "serviceBearer": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "predict_demand",
+      "name": "Predict demand",
+      "description": "Predict tenant demand for a date window.",
+      "tags": [
+        "demand_forecast"
+      ]
+    }
+  ]
 }

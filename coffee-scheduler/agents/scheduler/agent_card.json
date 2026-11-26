@@ -1,7 +1,39 @@
 {
   "name": "scheduler",
-  "version": "0.1.0",
-  "description": "Builds shift schedules via OR-Tools; orchestrates other agents.",
-  "capabilities": [],
-  "auth": {}
+  "description": "Generate a draft schedule.",
+  "version": "1.0.0",
+  "protocolVersion": "0.3.0",
+  "preferredTransport": "JSONRPC",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "securitySchemes": {
+    "serviceBearer": {
+      "type": "http",
+      "scheme": "bearer",
+      "bearerFormat": "JWT"
+    }
+  },
+  "security": [
+    {
+      "serviceBearer": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "generate_schedule",
+      "name": "Generate schedule",
+      "description": "Generate a draft schedule.",
+      "tags": [
+        "scheduler"
+      ]
+    }
+  ]
 }

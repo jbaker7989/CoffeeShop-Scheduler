@@ -1,7 +1,7 @@
 {
   "name": "prep",
+  "description": "Design placeholder for prep.",
   "version": "0.0.0",
-  "description": "",
-  "capabilities": [],
-  "auth": {}
+  "status": "design-only",
+  "skills": []
 }

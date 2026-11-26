@@ -73,7 +73,7 @@ class PoolIsolation(unittest.TestCase):
     def test_pool_mode_is_transaction(self):
         try:
             admin_dsn = make_conninfo(PGBOUNCER_URL, dbname="pgbouncer")
-            with psycopg.connect(admin_dsn, prepare_threshold=None) as conn:
+            with psycopg.connect(admin_dsn, prepare_threshold=None, autocommit=True) as conn:
                 rows = conn.execute("SHOW CONFIG").fetchall()
         except Exception as exc:
             self.skipTest(f"PgBouncer admin interface is unavailable: {exc}")

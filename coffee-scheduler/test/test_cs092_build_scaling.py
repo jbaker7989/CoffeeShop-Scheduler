@@ -51,7 +51,7 @@ def _inputs(days: int = 2, employees: int = 3, rest: str = "10") -> SolverInputs
                            (ForecastRecord(3, "Coffee", datetime(2026, 12, 7, 9, tzinfo=ZoneInfo("America/New_York")),
                                            Decimal(2), Decimal(2), Decimal(2), "test", "tax"),))
     rules = tuple(CoverageRuleInput(rule, None, rule, "1", "HEADCOUNT", "coverage") for rule in
-                  ("minimum crew", "key holder", "fpc", "peak skill", "break relief"))
+                  ("minimum crew", "COV-KEYHOLDER-OPEN", "COV-KEYHOLDER-CLOSE", "fpc", "peak skill", "break relief"))
     return SolverInputs((StoreInput(3, "Test", 2, 2, windows),), (), (), rules +
                         (CoverageRuleInput("COV-UTIL-TARGET", None, "utilisation", "1", "PERCENT", "coverage"),),
                         (ShiftRuleInput("SR-MIN-LEN", "min", "4", "HOURS", "shift"),
@@ -84,7 +84,7 @@ def _tiny_inputs() -> SolverInputs:
                            (ForecastRecord(3, "Coffee", datetime(2026, 12, 7, 9, tzinfo=ZoneInfo("America/New_York")),
                                            Decimal(1), Decimal(1), Decimal(1), "test", "tax"),))
     rules = tuple(CoverageRuleInput(rule, None, rule, "0", "HEADCOUNT", "coverage") for rule in
-                  ("minimum crew", "key holder", "fpc", "peak skill", "break relief"))
+                  ("minimum crew", "COV-KEYHOLDER-OPEN", "COV-KEYHOLDER-CLOSE", "fpc", "peak skill", "break relief"))
     windows = {weekday: StoreOpenWindow(8, 13, frozenset(range(7))) for weekday in range(7)}
     return SolverInputs((StoreInput(3, "Tiny", 9, 9, windows),), (), (), rules +
                         (CoverageRuleInput("COV-UTIL-TARGET", None, "utilisation", "1", "PERCENT", "coverage"),),

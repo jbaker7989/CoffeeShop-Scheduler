@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
@@ -52,6 +52,7 @@ class StoreInput:
     max_staff_on_floor: int
     stations: int
     open_windows: dict[int, StoreOpenWindow]
+    partial_close_hours: dict[int, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +198,7 @@ def _unique(table: str, rows: Iterable[Mapping[str, Any]], key_name: str) -> tup
 def build_stores(rows, hours_rows) -> tuple[StoreInput, ...]:
     stores = _unique("stores", rows, "location_id")
     by_id: dict[int, dict[int, StoreOpenWindow]] = {int(_value(r, "location_id")): {} for r in stores}
+    partial_closes: dict[int, dict[int, Decimal]] = {location: {} for location in by_id}
     weekdays = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
     for row in hours_rows:
         location = int(_value(row, "location_id"))
@@ -210,8 +212,14 @@ def build_stores(rows, hours_rows) -> tuple[StoreInput, ...]:
         ):
             raise InvalidInputError(f"store_hours key {(location, day)!r}: invalid day or times")
         opening, closing = row["open_time"], row["close_time"]
-        close_hour = closing.hour + (1 if closing.minute else 0)
-        by_id[location][weekdays[day]] = StoreOpenWindow(opening.hour, close_hour, frozenset({weekdays[day]}))
+        weekday = weekdays[day]
+        if (opening.minute or opening.second or opening.microsecond or closing.second or closing.microsecond
+                or closing.minute not in (0, 30) or opening >= closing or weekday in by_id[location]):
+            raise InvalidInputError(f"store_hours key {(location, day)!r}: unsupported operating window")
+        close_hour = closing.hour + int(bool(closing.minute))
+        by_id[location][weekday] = StoreOpenWindow(opening.hour, close_hour, frozenset({weekday}))
+        if closing.minute:
+            partial_closes[location][weekday] = Decimal(closing.hour) + Decimal("0.5")
     result = []
     for row in stores:
         location = int(row["location_id"])
@@ -224,6 +232,7 @@ def build_stores(rows, hours_rows) -> tuple[StoreInput, ...]:
                 int(row["max_staff_on_floor"]),
                 int(row["stations"]),
                 by_id[location],
+                partial_closes[location],
             )
         )
     return tuple(result)
@@ -438,7 +447,8 @@ def load_demand(conn, *, target_window, model_version: str) -> ForecastSet:
 
 
 def assemble_solver_inputs(
-    conn, *, target_window, model_version, taxonomy_version=PINNED_TAXONOMY_VERSION
+    conn, *, target_window, model_version, taxonomy_version=PINNED_TAXONOMY_VERSION,
+    forecast: ForecastSet | None = None,
 ) -> SolverInputs:
     tenant = conn.execute("SELECT current_setting('app.tenant_id', true)").fetchone()[0]
     if not tenant:
@@ -450,7 +460,9 @@ def assemble_solver_inputs(
         load_employees(conn),
         load_school_calendars(conn),
     )
-    demand = load_demand(conn, target_window=target_window, model_version=model_version)
+    demand = forecast if forecast is not None else load_demand(conn, target_window=target_window, model_version=model_version)
+    if demand.model_version != model_version:
+        raise InvalidInputError("forecast model version does not match requested model")
     if demand.taxonomy_version != taxonomy_version:
         raise InvalidInputError(
             f"forecasts key {model_version!r}: taxonomy version {demand.taxonomy_version!r} "
@@ -490,7 +502,14 @@ def assemble_solver_inputs(
                 f"employees key {employee.employee_id!r}: school_calendar_id missing from school_calendars"
             )
     hours = load_store_hours(conn)
-    demand_categories = {record.product_category for record in demand.records}
+    demand_categories = categories if forecast is not None else {record.product_category for record in demand.records}
+    if forecast is not None:
+        validate_set(demand, allowed_categories=categories, allowed_locations=locations, store_hours=hours)
+        if not demand.records or any(
+            not target_window[0] <= x.forecast_hour.astimezone(ZoneInfo(CANONICAL_TZ)).date() <= target_window[1]
+            for x in demand.records
+        ):
+            raise InvalidInputError("forecast contains no records or records outside its requested window")
     expected = []
     current_day = target_window[0]
     while current_day <= target_window[1]:
@@ -505,6 +524,8 @@ def assemble_solver_inputs(
                     )
         current_day += timedelta(days=1)
     gaps = missing_keys(demand, expected)
+    if forecast is not None and gaps:
+        raise MissingInputError("received forecast does not cover all open store-hour/category cells")
     return SolverInputs(
         stores,
         stations,

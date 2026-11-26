@@ -48,6 +48,7 @@ class AgentContractTests(unittest.TestCase):
                 self.assertIsInstance(card, AgentCard)
                 self.assertEqual((card.name, card.protocol_version), (agent, "0.3.0"))
                 self.assertEqual(len(card.skills), 1)
+                self.assertEqual(card.security, [{"serviceBearer": []}])
                 self.assertEqual(card.url, "https://agents.example.test/a2a")
         with self.assertRaises(ValueError):
             read_card("scheduler", "http://not-loopback.example.test/a2a", allow_loopback=True)
@@ -74,6 +75,11 @@ class AgentContractTests(unittest.TestCase):
             headers = {} if authorization is None else {"Authorization": f"Bearer {authorization}"}
             self.assertIn(client.post("/a2a", json=request, headers=headers).status_code, (401, 403))
         headers = {"Authorization": f"Bearer {good}"}
+        duplicate = client.post("/a2a", json=request,
+                                headers=[("Authorization", f"Bearer {good}"), ("Authorization", "Bearer invalid")])
+        self.assertEqual(duplicate.status_code, 401)
+        raw = json.dumps(request).replace('"version": 1', '"version": 1e999')
+        self.assertIn("error", client.post("/a2a", content=raw, headers=headers).json())
         self.assertIn("error", client.post("/a2a", json=message({}, protocol="9.0"), headers=headers).json())
         self.assertIn("error", client.post("/a2a", json=message({"tenant_id": str(uuid4())}), headers=headers).json())
         self.assertEqual(calls, [])
