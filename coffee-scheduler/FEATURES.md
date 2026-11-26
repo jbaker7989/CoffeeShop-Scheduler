@@ -54,7 +54,7 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 ## Phase 1 — Agent design & contracts
 
 ### F6. AGENTS.md + SKILL.md authoring
-- **Status:** Partially scaffolded (stubs exist) · **Size:** M · **Priority:** P1
+- **Status:** Done (2026-11-26) — CS-010 completed; root and four agent guides, five reusable skills, and offline documentation-contract tests are in place · **Size:** M · **Priority:** P1
 - **Description:** Author practical, repository-consistent instructions for the root project, the scheduler, labor-compliance, demand-forecast, and staff-comms agents, plus the reusable procedures for labor-rule evaluation, synthetic roster generation, sales/weather joins, standards calibration, and agent-card authoring. Keep canonical policies in one place and link to them from agent-specific guidance.
 - **Acceptance criteria:**
   1. **F6.ac1** — The root `AGENTS.md` documents the actual stack and layer ownership, data/PII policy, required test commands, environment-gated tests, and fail-closed/security conventions that match repository configuration.

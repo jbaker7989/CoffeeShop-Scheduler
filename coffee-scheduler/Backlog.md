@@ -154,8 +154,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-010 — Author AGENTS.md + SKILL.md set
 - **Feature:** [F6](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Partially scaffolded (stubs exist)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Status:** ✅ Done (2026-11-26) — F6 acceptance criteria documented; root/agent guidance and all five shared skills completed; 5 offline documentation-contract tests pass; unittest suite passes (559 run, 84 gated skips); pytest suite passes (481 passed, 84 gated skips, 135 subtests); changed-file Ruff and `git diff --check` pass.
+- **Developer:** Codex · **Started:** 2026-11-26 · **Duration:** ~1d (actual)
 - **Description:** Flesh out the shared conventions and reusable procedures.
 - **Detailed specifications:**
   - Root `AGENTS.md`: stack, layer split (n8n/LangGraph/LangChain/A2A/MCP), data rules, test commands.
