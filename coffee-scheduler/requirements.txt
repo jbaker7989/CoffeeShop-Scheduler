@@ -18,3 +18,13 @@ argon2-cffi==25.1.0
 fastapi==0.120.4
 PyJWT==2.13.0
 cryptography==49.0.0
+# CS-011/015: A2A JSON-RPC and the deterministic schedule workflow.
+a2a-sdk[http-server]==0.3.26
+httpx==0.28.1
+langchain-core==1.8.5
+langgraph==1.2.24
+langsmith==0.16.2
+uvicorn==0.45.0
+# Keep the A2A transitive Google packages compatible with the CI OTel protobuf pin.
+google-api-core==2.30.0
+proto-plus==1.28.0

@@ -13,7 +13,7 @@ EXPECTED_TABLES = {
     "calibration_log", "employees", "employee_pii", "labor_rules",
     "consent_waivers", "events", "schedules", "shifts", "shift_assignments",
     "forecasts", "rule_eval_log", "rule_eval_log_default", "transactions",
-    "transactions_default", "weather_hourly", "weather_hourly_default", "weather_daily",
+    "transactions_default", "weather_hourly", "weather_hourly_default", "weather_daily", "schedule_draft_runs",
 }
 EXPECTED_ROLES = {"app_rw", "app_ro", "secrets_rw"}
 DB_DIR = Path(__file__).resolve().parents[1] / "db"
@@ -84,6 +84,35 @@ class MigrationRoundTripTests(unittest.TestCase):
         self.alembic("upgrade", "head")
         self.assertTrue(self.public_tables() >= EXPECTED_TABLES)
         self.assertEqual(EXPECTED_ROLES, self.roles())
+
+    # spec: F43.ac3 / F12.ac7 — Downgrade removes draft data without deleting legacy checkpoints.
+    def test_schedule_draft_migration_preserves_legacy_checkpoint(self):
+        import psycopg
+
+        self.alembic("upgrade", "head")
+        tenant = "00000000-0000-0000-0000-000000000001"
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            ids = [row[0] for row in conn.execute("SELECT gen_random_uuid() FROM generate_series(1, 2)")]
+            conn.execute("""
+                INSERT INTO schedule_draft_runs (tenant_id, id, issuer, subject, request_hash, lease_until, stage)
+                VALUES (%s,%s,'fixture','fixture','fixture',clock_timestamp(),'done')
+                """, (tenant, ids[0]))
+            for agent, checkpoint in zip(ids, ('{"workflow":"schedule-draft"}', '{"legacy":true}'), strict=True):
+                conn.execute("INSERT INTO langgraph_checkpoints (tenant_id, agent_id, checkpoint) VALUES (%s,%s,%s::jsonb)",
+                             (tenant, agent, checkpoint))
+        try:
+            self.alembic("downgrade", "0024")
+            self.assertNotIn("schedule_draft_runs", self.public_tables())
+            with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+                rows = conn.execute("SELECT agent_id FROM langgraph_checkpoints WHERE agent_id = ANY(%s)", (ids,)).fetchall()
+                self.assertEqual(rows, [(ids[1],)])
+            self.alembic("upgrade", "head")
+            with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+                self.assertEqual(conn.execute("SELECT count(*) FROM schedule_draft_runs").fetchone()[0], 0)
+        finally:
+            self.alembic("upgrade", "head")
+            with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+                conn.execute("DELETE FROM langgraph_checkpoints WHERE agent_id = ANY(%s)", (ids,))
 
     # spec: F43.ac3 / F61.ac8 — BUG-043 throttle state/functions reverse cleanly and re-upgrade.
     def test_bug043_throttle_objects_round_trip(self) -> None:
@@ -192,7 +221,7 @@ class MigrationRoundTripTests(unittest.TestCase):
         with psycopg.connect(url) as conn, conn.transaction():
             conn.execute("SET session_replication_role = replica")
             conn.execute("DELETE FROM forecasts WHERE tenant_id = %s", (fixture_tenant,))
-        self.alembic("upgrade", "head")
+        self.alembic("upgrade", "0024")
         self.assertEqual("0024", self.current_revision())
         with psycopg.connect(url) as conn:
             self.assertEqual((1, True), conn.execute(

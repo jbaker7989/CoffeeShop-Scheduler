@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Rule 2 — touched test files must carry a spec tag.
     for path in changed_files(ROOT, args.base):
-        if not path.startswith("test/") or not path.endswith(".py"):
+        if not path.startswith("test/") or not Path(path).match("test_*.py"):
             continue
         if not Path(ROOT / path).exists():
             continue  # deleted file

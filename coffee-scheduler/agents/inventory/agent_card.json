@@ -1,7 +1,7 @@
 {
   "name": "inventory",
+  "description": "Design placeholder for inventory.",
   "version": "0.0.0",
-  "description": "",
-  "capabilities": [],
-  "auth": {}
+  "status": "design-only",
+  "skills": []
 }

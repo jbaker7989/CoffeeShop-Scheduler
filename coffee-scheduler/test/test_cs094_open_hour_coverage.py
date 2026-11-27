@@ -53,7 +53,8 @@ def _inputs(
         )
     rules = (
         CoverageRuleInput("COV-MIN-CREW", None, "minimum crew", str(crew), "HEADCOUNT", "coverage"),
-        CoverageRuleInput("COV-KEY-HOLDER", None, "key holder", str(key_holder), "HEADCOUNT", "coverage"),
+        CoverageRuleInput("COV-KEYHOLDER-OPEN", None, "key holder", str(key_holder), "HEADCOUNT", "coverage"),
+        CoverageRuleInput("COV-KEYHOLDER-CLOSE", None, "key holder", str(key_holder), "HEADCOUNT", "coverage"),
         CoverageRuleInput("COV-FPC", None, "fpc", str(fpc), "HEADCOUNT", "coverage"),
         CoverageRuleInput("COV-PEAK-SKILL", None, "peak skill", str(peak_skill), "HEADCOUNT", "coverage"),
         break_rule,

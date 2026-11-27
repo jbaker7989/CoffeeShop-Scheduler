@@ -19,6 +19,8 @@ class ProjectPathTests(unittest.TestCase):
             (project / "FEATURES.md").write_text("### F6. CI\n- **AC6** — inspect changed tests.\n")
             test = project / "test/test_example with space.py"
             test.write_text("")
+            helper = project / "test" / "fixtures.py"
+            helper.write_text("FIXTURE = 1\n")
             sibling = repo / "sibling.py"
             sibling.write_text("")
 
@@ -51,6 +53,7 @@ class ProjectPathTests(unittest.TestCase):
             test.write_text("# x = 1\n# y = 2\n# z = 3")
             check("review_checklist.py", "commented-out code block")
 
+            helper.write_text("FIXTURE = 2\n")
             test.write_text('# spec: F6.ac6\nmessage = "TODO marker in ordinary text"\n')
             commit("fix")
             check("check_spec_traceability.py", "", "--base", "base")

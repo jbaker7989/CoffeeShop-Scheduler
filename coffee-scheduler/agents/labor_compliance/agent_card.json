@@ -1,7 +1,39 @@
 {
   "name": "labor_compliance",
-  "version": "0.1.0",
-  "description": "",
-  "capabilities": [],
-  "auth": {}
+  "description": "Evaluate a tenant shift proposal.",
+  "version": "1.0.0",
+  "protocolVersion": "0.3.0",
+  "preferredTransport": "JSONRPC",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "securitySchemes": {
+    "serviceBearer": {
+      "type": "http",
+      "scheme": "bearer",
+      "bearerFormat": "JWT"
+    }
+  },
+  "security": [
+    {
+      "serviceBearer": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "evaluate_proposal",
+      "name": "Evaluate proposal",
+      "description": "Evaluate a tenant shift proposal.",
+      "tags": [
+        "labor_compliance"
+      ]
+    }
+  ]
 }

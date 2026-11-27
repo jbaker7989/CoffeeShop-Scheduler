@@ -8,6 +8,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import cache
 from typing import Any
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from ortools.sat.python import cp_model
@@ -24,7 +25,7 @@ from agents.scheduler.shifts import (
     build_slot_index,
     find_rule_value,
 )
-from compliance.engine import Evaluation, Proposal, Rule, ShiftSpan, Snapshot, judge, load_snapshot
+from compliance.engine import Evaluation, Proposal, ShiftSpan, Snapshot, judge, load_scoped_snapshot, load_snapshot
 from contracts.forecast import CANONICAL_TZ
 
 GROUPS = (
@@ -136,7 +137,9 @@ def build_model(
             "they would escape the daily, consecutive-day and weekly hour constraints"
         )
     rest = find_rule_value(inputs.shift_rules, RULE_MIN_REST_HOURS)
-    index = build_slot_index(slots, calendar_days=calendar_days, rest=rest)
+    partial_closes = {(store.location_id, weekday): hour
+                      for store in inputs.stores for weekday, hour in store.partial_close_hours.items()}
+    index = build_slot_index(slots, calendar_days=calendar_days, rest=rest, partial_closes=partial_closes)
     model = cp_model.CpModel()
     assumptions = {name: model.NewBoolVar(f"assume_{name}") for name in GROUPS}
     for name in GROUPS:
@@ -165,7 +168,14 @@ def build_model(
 
     stores = {store.location_id: store for store in inputs.stores}
     min_crew = _coverage_rules(inputs, "min", "crew")
-    key_holder = _coverage_rules(inputs, "key", "holder")
+    key_holder = {}
+    for edge in ("OPEN", "CLOSE"):
+        rule_id = f"COV-KEYHOLDER-{edge}"
+        rules = tuple(rule for rule in inputs.coverage_rules if rule.rule_id == rule_id)
+        if len(rules) != 1:
+            raise SolverModelError(f"coverage_rules rule {rule_id!r}: expected one rule")
+        key_holder[edge] = rules[0]
+        _coverage_value(rules[0])
     fpc = _coverage_rules(inputs, "fpc")
     peak_skill = _coverage_rules(inputs, "peak", "skill")
     break_relief = _coverage_rules(inputs, "break", "relief")
@@ -215,9 +225,12 @@ def build_model(
                         (rule for rule in fpc if _applicable(rule, store_id) and _coverage_value(rule) > 0),
                         None,
                     )
-                if required_rule is None and hour in (window.open_hour, window.close_hour - 1):
+                if required_rule is None:
                     required_rule = next(
-                        (rule for rule in key_holder if _applicable(rule, store_id) and _coverage_value(rule) > 0),
+                        (key_holder[edge] for edge, edge_hour in
+                         (("OPEN", window.open_hour), ("CLOSE", window.close_hour - 1))
+                         if hour == edge_hour and _applicable(key_holder[edge], store_id)
+                         and _coverage_value(key_holder[edge]) > 0),
                         None,
                     )
                 if required_rule is None and hour in _peak_hours(inputs, store_id, day):
@@ -261,7 +274,7 @@ def build_model(
                         for slot_index in slot_indices
                     ]
                     model.Add(sum(skilled) >= _coverage_value(rule)).OnlyEnforceIf(assumptions["coverage_peak_skill"])
-            for hour in (window.open_hour, window.close_hour - 1):
+            for edge, hour in (("OPEN", window.open_hour), ("CLOSE", window.close_hour - 1)):
                 slot_indices = covering_by_hour[hour]
                 if not slot_indices:
                     continue
@@ -270,9 +283,9 @@ def build_model(
                     for employee in employees if employee.is_key_holder
                     for slot_index in slot_indices
                 ]
-                for rule in key_holder:
-                    if _applicable(rule, store_id):
-                        model.Add(sum(key_vars) >= _coverage_value(rule)).OnlyEnforceIf(assumptions["coverage_key_holder"])
+                rule = key_holder[edge]
+                if _applicable(rule, store_id):
+                    model.Add(sum(key_vars) >= _coverage_value(rule)).OnlyEnforceIf(assumptions["coverage_key_holder"])
 
     min_shift, max_shift = _shift_lengths(inputs)
     # Honour whatever the tenant's shift_rules say; `parse_rule_value` already fails closed on a
@@ -383,46 +396,61 @@ PER_ASSIGNMENT_METRICS = frozenset({
 })
 
 
-def legality_from_compliance(conn_or_dsn: Any, inputs: SolverInputs) -> Callable[[Any, ShiftSlot], LegalityVerdict]:
-    """Adapt CS-013 for the rules one candidate assignment can actually decide.
-
-    Only `PER_ASSIGNMENT_METRICS` are evaluated. The day-scoped ones (`hours_per_day`,
-    `span_hours`) read the proposal's week, and a single-shift week is exact for them because
-    `build_model` already constrains an employee to at most one slot per day, so the day's hours
-    equal this candidate's span whatever else the week holds.
-    """
+def legality_from_compliance(
+    conn_or_dsn: Any, inputs: SolverInputs, *, tenant_id: str | None = None,
+) -> Callable[[Any, ShiftSlot], LegalityVerdict]:
+    """Build a run-scoped candidate evaluator over the authenticated tenant's snapshots."""
     dsn = conn_or_dsn if isinstance(conn_or_dsn, str) else None
-    tenant_id = "00000000-0000-0000-0000-000000000001"
-    snapshots: dict[tuple[str, str | None, int], Snapshot] = {}
-    decidable_rules: dict[tuple[str, str | None, int], tuple[Rule, ...]] = {}
+    if dsn is None:
+        scoped = conn_or_dsn.execute("SELECT current_setting('app.tenant_id', true)").fetchone()[0]
+        if tenant_id is not None and str(tenant_id) != scoped:
+            raise SolverModelError("legality session does not match tenant")
+        tenant_id = scoped
+    try:
+        tenant_id = str(UUID(str(tenant_id)))
+    except ValueError:
+        raise SolverModelError("legality requires a canonical tenant") from None
 
-    def snapshot_for(proposal: Proposal) -> tuple[Snapshot, tuple[Rule, ...]]:
-        key = (proposal.tenant_id, proposal.employer_id, proposal.employee_id)
-        if key not in snapshots:
-            snapshot = load_snapshot(proposal, dsn=dsn)
-            snapshots[key] = snapshot
-            decidable_rules[key] = tuple(rule for rule in snapshot.rules if rule.metric in PER_ASSIGNMENT_METRICS)
-        return snapshots[key], decidable_rules[key]
+    employees = {employee.employee_id: employee for employee in inputs.employees}
 
-    @cache
-    def evaluate(employee_id: int, location_id: int, day, start: Decimal, end: Decimal) -> LegalityVerdict:
-        employee = next((item for item in inputs.employees if item.employee_id == employee_id), None)
-        if employee is None:
-            raise SolverModelError(f"employee {employee_id}: absent from SolverInputs")
-        slot = ShiftSlot(location_id, day, start, end)
-        span = ShiftSpan(_slot_start(slot), _slot_end(slot))
-        proposal = Proposal(
-            tenant_id=tenant_id, location_id=location_id, employee_id=employee_id, role=employee.role,
-            start_at=span.start, end_at=span.end, breaks=[],
+    def proposal_for(employee_id, location_id, span):
+        return Proposal(
+            tenant_id=tenant_id, location_id=location_id, employee_id=employee_id,
+            role=employees[employee_id].role, start_at=span.start, end_at=span.end, breaks=[],
+            # Candidate evaluation handles only per-assignment metrics.
             week_start=inputs.target_window[0], week_shifts=[span], week_complete=True,
-            # No crew-scoped rule is evaluated here, so no crew is claimed. Asserting a complete
-            # crew we do not have is precisely the defect this replaces.
             crew=None, crew_complete=False,
         )
-        snapshot, decidable = snapshot_for(proposal)
-        evaluation: Evaluation = judge(replace(snapshot, rules=decidable), proposal)
+
+    snapshots: dict[tuple[str, str | None, int], Snapshot] = {}
+
+    def snapshot_for(proposal):
+        scope = (proposal.tenant_id, proposal.employer_id, proposal.employee_id)
+        if scope not in snapshots:
+            snapshot = load_snapshot(proposal, dsn=dsn) if dsn is not None else load_scoped_snapshot(conn_or_dsn, proposal)
+            snapshots[scope] = replace(snapshot, rules=tuple(
+                rule for rule in snapshot.rules if rule.metric in PER_ASSIGNMENT_METRICS
+            ))
+        return snapshots[scope]
+
+    if dsn is None:
+        # Snapshot access finishes while the scope is open. CP-SAT and decoding use only memory.
+        example = datetime.combine(inputs.target_window[0], time(12), ZoneInfo(CANONICAL_TZ))
+        span = ShiftSpan(example, example + timedelta(hours=1))
+        for employee in employees.values():
+            snapshot_for(proposal_for(employee.employee_id, employee.home_location_id, span))
+
+    @cache
+    def evaluate(employee_id, location_id, day, start, end):
+        if employee_id not in employees:
+            raise SolverModelError(f"employee {employee_id}: absent from SolverInputs")
+        slot = ShiftSlot(location_id, day, start, end)
+        proposal = proposal_for(employee_id, location_id, ShiftSpan(_slot_start(slot), _slot_end(slot)))
+        evaluation: Evaluation = judge(snapshot_for(proposal), proposal)
         binding = tuple((row.rule_id, row.reason) for row in evaluation.binding if row.result == "FAIL")
-        premiums = tuple((row.rule_id, row.premium_cost_usd or Decimal()) for row in evaluation.results if row.result == "PREMIUM")
+        premiums = tuple(
+            (row.rule_id, row.premium_cost_usd or Decimal()) for row in evaluation.results if row.result == "PREMIUM"
+        )
         return LegalityVerdict(not binding, binding, premiums)
 
     return lambda employee, slot: evaluate(employee.employee_id, slot.location_id, slot.day, slot.start_hour, slot.end_hour)

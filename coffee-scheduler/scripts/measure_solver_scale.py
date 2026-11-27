@@ -83,7 +83,7 @@ def synthetic_inputs(*, stores: int = 3, employees: int = 40, days: int = 7) -> 
     )
     forecast = ForecastSet("v", "tax", "measure", datetime(2026, 12, 1, tzinfo=_TZ), records)
     rules = tuple(CoverageRuleInput(rule, None, rule, "1", "HEADCOUNT", "coverage") for rule in
-                  ("minimum crew", "key holder", "fpc", "peak skill", "break relief"))
+                  ("minimum crew", "COV-KEYHOLDER-OPEN", "COV-KEYHOLDER-CLOSE", "fpc", "peak skill", "break relief"))
     rules += (CoverageRuleInput("COV-UTIL-TARGET", None, "utilisation", "1", "PERCENT", "coverage"),)
     shift_rules = (ShiftRuleInput("SR-MIN-LEN", "min", "4", "HOURS", "shift"),
                    ShiftRuleInput("SR-MAX-LEN", "max", "8", "HOURS", "shift"),

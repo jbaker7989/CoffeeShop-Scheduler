@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
+from time import monotonic
 from typing import Any
 
 from agents.scheduler.constraints import LegalityVerdict, SchedulingModel, build_model, legality_from_compliance
@@ -14,6 +15,9 @@ from agents.scheduler.objective import _cents, build_objective
 from agents.scheduler.shifts import ShiftSlot
 from agents.scheduler.solve import SolveResult, SolverStopPolicy, solve_schedule
 
+
+class RunnerDeadlineExceeded(Exception):
+    """Raised when model construction exhausts the orchestration budget."""
 
 class RunnerError(Exception):
     """Raised when a solved assignment cannot safely be decoded for publication."""
@@ -162,12 +166,25 @@ def run_schedule(
     """Assemble, model, solve, and decode one schedule without masking solve failures."""
     inputs = assemble_solver_inputs(conn, target_window=target_window, model_version=model_version)
     legality = legality or legality_from_compliance(conn, inputs)
+    return run_prepared_schedule(inputs, model_version=model_version, policy=policy, legality=legality)
+
+
+def run_prepared_schedule(
+    inputs: SolverInputs, *, model_version: str, policy: SolverStopPolicy | None, legality: Legality,
+    deadline: float | None = None,
+) -> ScheduleOutput:
     model = build_model(inputs, legality=legality)
     terms = build_objective(model, inputs)
+    if deadline is not None:
+        seconds = deadline - monotonic()
+        if seconds <= 0:
+            raise RunnerDeadlineExceeded
+        if policy is not None:
+            policy = replace(policy, max_time_seconds=min(policy.max_time_seconds, seconds))
     result = solve_schedule(model, policy=policy)
     shifts = decode_shifts(model, inputs, result, legality)
     return ScheduleOutput(
-        target_window=target_window,
+        target_window=inputs.target_window,
         model_version=model_version,
         shifts=shifts,
         economics=_economics(shifts),

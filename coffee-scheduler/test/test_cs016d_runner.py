@@ -65,7 +65,7 @@ def _inputs(*, employees=()) -> SolverInputs:
                       date(1990, 1, 1), False, None, "", False),
     )
     coverage = tuple(CoverageRuleInput(rule, None, rule, "0", "HEADCOUNT", "coverage") for rule in (
-        "minimum crew", "key holder", "fpc", "peak skill", "break relief",
+        "minimum crew", "COV-KEYHOLDER-OPEN", "COV-KEYHOLDER-CLOSE", "fpc", "peak skill", "break relief",
     )) + (CoverageRuleInput("COV-UTIL-TARGET", None, "utilisation", "1", "PERCENT", "coverage"),)
     return SolverInputs(
         (StoreInput(3, "Test", 2, 2, {0: StoreOpenWindow(8, 10, frozenset({0}))}),), (), (), coverage,

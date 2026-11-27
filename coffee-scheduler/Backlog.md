@@ -166,13 +166,13 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-011 — Author A2A Agent Cards & settle Payroll/HCM
 - **Feature:** [F7](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Scaffolded (stub JSON; no payroll_hcm dir)
+- **Status:** Implemented and validated on the CS-011/015 branch
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
-- **Description:** Replace stub cards with real, versioned A2A contracts and resolve the Payroll/HCM ambiguity.
+- **Description:** Versioned, authenticated Scheduler, Forecast, Labor Compliance and Staff Comms cards. The Scheduler invokes a separate ADK worker for deterministic forecasts. See the [operator contract](docs/sdd-cs011-cs015.md).
 - **Detailed specifications:**
   - Real cards for Scheduler, Demand Forecast, Labor Compliance, Staff Comms (capabilities, auth, versioning per `agent-card-authoring`).
   - Placeholder cards for Inventory, Prep, Loyalty.
-  - **Decide Payroll/HCM explicitly:** either create `agents/payroll_hcm/` as a runtime agent (+ LangGraph node in CS-015) **or** document it as n8n-only (no card). Record the decision.
+  - Payroll/HCM export runs through F16 n8n. CS-083 owns the reconciled artifact. Staff Comms starts with a template preview under this story; delivery and consent stay in CS-020.
   - Build one agent in a second framework to prove A2A interoperability.
 
 ### CS-012 — Demand Forecast output contract
@@ -279,14 +279,14 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-015 — LangGraph state & schedule-generation graph
 - **Feature:** [F12](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Not started
+- **Status:** Implemented and validated on the CS-011/015 branch
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Orchestration that turns a request into a schedule end to end.
 - **Detailed specifications:**
   - Nodes: gather inputs → call forecast (CS-014) → call compliance (CS-013) → run solver (CS-016) → present result.
   - LangChain wraps tools and prompt templates; LLM routes between tools, never generates numbers.
   - Define graph state schema and error/retry edges.
-  - Include the Payroll/HCM node only if CS-011 made it a runtime agent.
+  - Return a draft with bounded retries, tenant-scoped checkpoint recovery, solver quality and compliance scope. Payroll/HCM export remains in F16.
 
 ### CS-016 — CP-SAT schedule solver
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** L
@@ -1100,7 +1100,7 @@ prerequisites for others (F73 actuals feed F78 payroll and F80 MLOps; F72 availa
 - **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~4d (est.)
 - **Description:** Export reconciled, auditable pay with real hours behind the premiums.
 - **Detailed specifications:**
-  - Combine actual hours (F73), scheduled hours, and F10 premiums/OT/spread/call-in per employee/day into a per-(tenant, period) idempotent export via F16/runtime agent; settles the F7 Payroll/HCM-agent question.
+  - Combine actual hours (F73), scheduled hours, and F10 premiums/OT/spread/call-in per employee/day into a per-(tenant, period) idempotent export through the F16 n8n workflow selected in CS-011.
   - Reconcile: Σ exported hours == Σ approved `time_entries`; mismatch fails the export (fail-closed). Each premium line cites its `Labor_Rules` rule_id.
   - An unapproved punch or open period cannot be exported; a corrected punch after export forces a versioned re-export with a diff; mid-period rule changes (F28) attributed to the correct date range.
 
@@ -2884,6 +2884,8 @@ closing regression evidence.
   - Measure the full-week gap before/after at the fixed 30s budget and record it against `reports/cs093_solver_scale.md`; only then tighten `DEFAULT_MAX_RELATIVE_GAP` to the new achievable value.
   - Keep CI bounded and the `OPTIMAL ⇔ proven` invariant from CS-093 intact.
 
+- **CS-015 full-week evidence:** The Maven seed returned infeasible for December 7–13, 2026 and no incumbent within the existing 30-second solve budget for December 8–14. A separate feasible three-store week passed the real ADK and PostgreSQL path. Compare the direct solver with the same Maven inputs and isolate binding assumptions before changing cost, coverage or staffing policies.
+
 ### CS-094 — Require coverage for every open store-hour, not only for hours a slot happens to cover
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
 - **Status:** ✅ Done (2026-11-23)
@@ -2907,6 +2909,23 @@ closing regression evidence.
   - Apply `COV-KEYHOLDER-OPEN` only at the open hour and `COV-KEYHOLDER-CLOSE` only at the close hour, so differing headcounts are honoured per edge.
   - Fail closed with a typed error naming the rule id when an expected coverage rule is absent, keeping the current "missing rule" behaviour.
   - Add a test with `COV-KEYHOLDER-OPEN = 2`, `COV-KEYHOLDER-CLOSE = 1` asserting the open hour requires 2 and the close hour requires 1, which fails under the current matcher.
+
+- **CS-015 follow-up:** Opening and closing key-holder rules now bind to their own canonical ID and hour. Remaining work covers the other free-text rule matches.
+
+### BUG-074 — Half-hour closing admits shifts after the store closes
+- **Status:** Fixed on the CS-011/015 branch.
+- **Finding:** Exact clock-hour forecast buckets rounded 20:30 to a 21:00 bucket boundary, and solver slots inherited that boundary as the latest allowable shift end.
+- **Validation:** The regression requires an exact 12:30 shift limit and coverage of the open portion of the final 12:00 bucket, and half-hour staffing capacity in the objective. The real three-store integration fixture also asserts every shift ends by the configured close.
+
+### BUG-075 — Tenant sessions can reuse a named statement across PgBouncer transactions
+- **Status:** Fixed on the CS-011/015 branch.
+- **Finding:** A forecast write over PgBouncer transaction pooling raised `DuplicatePreparedStatement` after a logical connection was replaced. Scoped tenant sessions now disable named prepares.
+- **Validation:** The live workflow seeds an older forecast, reads from fresh scoped sessions, and runs through a one-backend PgBouncer pool. The mode assertion queries the PgBouncer admin console in autocommit mode.
+
+### BUG-076 — Traceability requires standalone acceptance tags on test fixture helpers
+- **Status:** Fixed on the CS-011/015 branch.
+- **Finding:** The checker applied its missing-tag rule to every Python file under `test/`, but only indexed discoverable test modules.
+- **Validation:** The nested-checkout regression edits an imported fixture helper and a tagged test. It still proves changed tests without tags fail the gate.
 
 ### CS-106 — Give each gateway app ownership of its store and routing connections
 - **Feature:** F30 (CS-030), F61 · **Priority:** P2 · **Status:** Implemented locally, pending merge
