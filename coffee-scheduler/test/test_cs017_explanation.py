@@ -45,9 +45,9 @@ class ExplanationService(unittest.TestCase):
     def explain(self, client):
         return explain_assignment(self.conn, FIXTURE_TENANT, self.shift_id, model_client=client)
 
-    # spec: F13.ac1
-    # spec: F13.ac2
-    # spec: F13.ac6
+    # spec: F13.ac1 — every cited rule id exists in the shift's evidence
+    # spec: F13.ac2 — numbers and verdicts are supported verbatim by their engine facts
+    # spec: F13.ac6 — a callable model stub drives the explanation
     def test_accepts_evidence_prose(self):
         client = Mock(return_value=CANNED)
         result = self.explain(client)
@@ -63,9 +63,9 @@ class ExplanationService(unittest.TestCase):
         self.assertNotIn(FIXTURE_TENANT, user)
         self.assertNotIn(str(self.shift_id), user)
 
-    # spec: F13.ac1
-    # spec: F13.ac2
-    # spec: F13.ac5
+    # spec: F13.ac1 — fabricated rule ids are never cited
+    # spec: F13.ac2 — unsupported numbers and verdicts are rejected
+    # spec: F13.ac5 — claims_legal_accuracy=false and unconfirmed verification are surfaced
     def test_rejects_fabricated_ids_numbers_verdicts_and_legal_claims(self):
         for malicious in (
             CANNED + "\n[BOGUS-RULE] PASS — The limit was 999 hours.",
@@ -191,9 +191,9 @@ class EvidenceDatabase(unittest.TestCase):
                 """, (tenant, schedule_id, shift_id, location))
         return shift_id
 
-    # spec: F13.ac3
-    # spec: F13.ac4
-    # spec: F13.ac7
+    # spec: F13.ac3 — reads are tenant-scoped under app_ro and fail closed
+    # spec: F13.ac4 — a shift with no logged results falls back to live judge() evidence
+    # spec: F13.ac7 — the existing engine and pinned taxonomy vocabulary are reused
     def test_rollback_reads_only_scoped_evidence_and_judges_without_a_log(self):
         foreign = uuid4()
         with self.require_local_database() as conn:

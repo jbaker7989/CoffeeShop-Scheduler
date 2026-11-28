@@ -112,11 +112,11 @@ class ScheduleApi(unittest.TestCase):
             """, (tenant, schedule_id, shift_id, LOCATION))
         return str(schedule_id), str(shift_id)
 
-    # spec: F31.ac1
-    # spec: F31.ac3
-    # spec: F31.ac4
-    # spec: F31.ac5
-    # spec: F31.ac6
+    # spec: F31.ac1 — the signed-in tenant sees only its published roster via app_ro RLS
+    # spec: F31.ac3 — assignments show employee, role, station, local times and meal-break coverage
+    # spec: F31.ac4 — store/role/status/week filters preserve scope and degrade to an empty state
+    # spec: F31.ac5 — selecting a shift shows its recorded rule ids, results and reasons
+    # spec: F31.ac6 — superseded and soft-deleted schedules are hidden
     def test_published_roster_and_rules_are_scoped_by_rls(self):
         client = self.client()
         headers = self.bearer(client)
@@ -186,9 +186,9 @@ class ScheduleApi(unittest.TestCase):
             raise Rollback()
 
 
-    # spec: F31.ac2
-    # spec: F31.ac5
-    # spec: F31.ac6
+    # spec: F31.ac2 — shift dates and clock times use the tenant's IANA timezone
+    # spec: F31.ac5 — persisted rule evidence records ids, results and reasons
+    # spec: F31.ac6 — superseded and soft-deleted schedules are hidden
     def test_persist_converts_dst_and_writes_rule_evidence_atomically(self):
         week = date(2026, 3, 2)
         with self.require_store_database() as conn, conn.transaction():
