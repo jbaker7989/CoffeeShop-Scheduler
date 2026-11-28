@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   async rewrites() {
     // CS-070 topology: browser requests stay same-origin on
-    // <tenant>.coffeescheduler.com; middleware.ts carries that public Host to
+    // <tenant>.coffeescheduler.com; proxy.ts carries that public Host to
     // this fixed, server-configured gateway origin as X-Forwarded-Host.  Never
     // derive an upstream URL from a request header.
     const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:8000";

@@ -1869,7 +1869,7 @@ closing regression evidence.
 
 ### BUG-032 — F30: Next middleware is deprecated in Next 16 and gates only `/dashboard`
 - **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P3 · **Size:** XS · **Pattern:** D9
-- **Status:** 🐞 Open · **Type:** Defect (deprecation + narrow matcher) · **Found:** 2026-11-16
+- **Status:** ✅ Fixed (2026-11-28) — `coffee_shop/middleware.ts` → `proxy.ts` (Next 16 convention; no deprecation warning; CS-070 Host forwarding preserved); matcher broadened to gate all `(manager)` routes (dashboard + schedule + future), excluding `/login`, `/session-refresh`, `/api`, `/auth`, Next internals. Redirect decision factored into pure `app/auth-route.ts`; `test/auth-route.test.mts` asserts every authenticated route 307→`/login` and public paths pass. `npm run build` clean. Codex dev / Claude validate. · **Type:** Defect (deprecation + narrow matcher) · **Found:** 2026-11-16
 - **Developer:** Unassigned · **Duration:** ~0.25d (est.)
 - **Description:** `coffee_shop/middleware.ts` triggers Next 16's `middleware-to-proxy` deprecation warning
   (middleware is renamed to `proxy.ts`), and its `config.matcher` covers only `/dashboard/:path*`. When more
@@ -2296,7 +2296,7 @@ closing regression evidence.
 
 ### BUG-046 — F69/CS-087: `restore()` / `list_including_deleted()` leave `app.show_deleted` on, leaking soft-deleted rows into the rest of the transaction
 - **Feature:** [F69](./FEATURES.md) (CS-087) · **Priority:** P3 · **Size:** XS · **Pattern:** D3 (state leak / API asymmetry)
-- **Status:** 🐞 Open · **Type:** Transaction-scoped visibility leak · **Found:** 2026-11-17 (Claude review of CS-087)
+- **Status:** ✅ Fixed (2026-11-28) — `data_access/soft_delete.py`: `restore()` and `list_including_deleted()` now scope `app.show_deleted` to the single operation via a savepoint-backed `_show_deleted_for_operation` context manager (restored on success AND on SQL error), so later reads in the same transaction keep hide-by-default. Test: `test_soft_delete_visibility.py` (4, `spec: F69`) — list/restore then a normal read still hides deleted rows; `test_soft_delete*` (7) + `test_data_access` (14) green. Codex dev / Claude validate. · **Type:** Transaction-scoped visibility leak · **Found:** 2026-11-17 (Claude review of CS-087)
 - **Root cause:** In `data_access/soft_delete.py`, `soft_delete()` saves and restores `app.show_deleted`
   (`_show_deleted_for_write` / `_restore_show_deleted_setting`), but `restore()` and `list_including_deleted()`
   call `enable_show_deleted(conn)` (`SET LOCAL app.show_deleted='on'`) and **never** restore it. `SET LOCAL`

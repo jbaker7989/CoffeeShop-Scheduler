@@ -9,8 +9,8 @@ the string-only form is only for a value-free, trusted SQL predicate.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
-
 
 # This is the one policy catalog used by the migration, helpers, guard, and tests.
 TIER_A = [
@@ -64,8 +64,7 @@ def enable_show_deleted(conn) -> None:
     conn.execute("SET LOCAL app.show_deleted = 'on'")
 
 
-def _show_deleted_for_write(conn):
-    """Temporarily bypass the SELECT policy's UPDATE visibility/WCO interaction."""
+def _save_and_enable_show_deleted(conn):
     previous = conn.execute("SELECT current_setting('app.show_deleted', true)").fetchone()[0]
     enable_show_deleted(conn)
     return previous
@@ -78,6 +77,15 @@ def _restore_show_deleted_setting(conn, previous) -> None:
         conn.execute("SELECT set_config('app.show_deleted', %s, true)", (previous,))
 
 
+@contextmanager
+def _show_deleted_for_operation(conn):
+    # A savepoint restores the setting on error, even when PostgreSQL rejects the statement.
+    with conn.transaction():
+        previous = _save_and_enable_show_deleted(conn)
+        yield
+        _restore_show_deleted_setting(conn, previous)
+
+
 def soft_delete(conn, table: str, *, tenant_id, where, actor_id) -> int:
     """Mark matching live rows deleted and return the UPDATE rowcount.
 
@@ -85,7 +93,7 @@ def soft_delete(conn, table: str, *, tenant_id, where, actor_id) -> int:
     immediately after its marker is written, so returning the row is unreliable.
     """
     predicate, predicate_params = _predicate(where)
-    previous = _show_deleted_for_write(conn)
+    previous = _save_and_enable_show_deleted(conn)
     try:
         result = conn.execute(
             f"UPDATE {_table(table)} SET deleted_at = now(), deleted_by = %s "
@@ -98,22 +106,22 @@ def soft_delete(conn, table: str, *, tenant_id, where, actor_id) -> int:
 
 
 def restore(conn, table: str, *, tenant_id, where) -> int:
-    """Restore matching deleted rows, enabling their transaction-local admin view first."""
+    """Restore matching deleted rows using a visibility override scoped to this operation."""
     predicate, predicate_params = _predicate(where)
-    enable_show_deleted(conn)
-    result = conn.execute(
-        f"UPDATE {_table(table)} SET deleted_at = NULL, deleted_by = NULL "
-        f"WHERE tenant_id = %s AND ({predicate}) AND deleted_at IS NOT NULL",
-        _params((tenant_id,), predicate_params),
-    )
-    return result.rowcount
+    with _show_deleted_for_operation(conn):
+        result = conn.execute(
+            f"UPDATE {_table(table)} SET deleted_at = NULL, deleted_by = NULL "
+            f"WHERE tenant_id = %s AND ({predicate}) AND deleted_at IS NOT NULL",
+            _params((tenant_id,), predicate_params),
+        )
+        return result.rowcount
 
 
 def list_including_deleted(conn, table: str, *, tenant_id, where="TRUE") -> list[tuple]:
-    """Read a Tier-A table including deleted rows within the current transaction."""
+    """Read a Tier-A table including deleted rows using an operation-local override."""
     predicate, predicate_params = _predicate(where)
-    enable_show_deleted(conn)
-    return conn.execute(
-        f"SELECT * FROM {_table(table)} WHERE tenant_id = %s AND ({predicate})",
-        _params((tenant_id,), predicate_params),
-    ).fetchall()
+    with _show_deleted_for_operation(conn):
+        return conn.execute(
+            f"SELECT * FROM {_table(table)} WHERE tenant_id = %s AND ({predicate})",
+            _params((tenant_id,), predicate_params),
+        ).fetchall()
