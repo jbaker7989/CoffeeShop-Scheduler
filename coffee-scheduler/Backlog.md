@@ -351,12 +351,13 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-022 — Coverage↔Law reconciliation CI check
 - **Feature:** [F26](./FEATURES.md) · **Priority:** P1 · **Size:** XS
-- **Status:** Not started
+- **Status:** Blocked on CS-021 · standalone check and synthetic tests available
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~0.5d (est.)
 - **Description:** Automated guard that the assumption-vs-law boundary stays clean (companion to CS-013c).
 - **Detailed specifications:**
   - CI/pre-commit test: any `Coverage_Rules` row marked `LAW` whose legal rule isn't `VERIFIED` fails (depends on CS-021).
   - Flag effective-date conflicts between a coverage constraint and its legal rule.
+  - Required CI activation awaits CS-021 and a passing canonical run. In `maven-demo`, `NYC-FPC-COVERAGE` is `VERIFY` and starts on 2026-01-01, leaving the earlier portion of the unbounded `COV-FPC` validity uncovered.
 
 ---
 
@@ -2416,7 +2417,7 @@ closing regression evidence.
 | CS-019 | F16 | P2 | M | Not started |
 | CS-020 | F15 | P2 | M | Not started |
 | CS-021 | F19 | P1 | M | Not started |
-| CS-022 | F26 | P1 | XS | Not started |
+| CS-022 | F26 | P1 | XS | Blocked on CS-021 — standalone check and synthetic tests available |
 | CS-023 | F27 | P2 | M | Not started |
 | CS-024 | F28 | P2 | S | Not started |
 | CS-025 | F17 | P3 | S | Not started |
