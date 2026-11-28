@@ -4,8 +4,23 @@ Install the pinned dependencies from `requirements.txt`, provide the CS-061a aut
 configuration (below), then run:
 
 ```sh
-uvicorn api.app:app --port 8000
+uvicorn api.app:app --host 127.0.0.1 --port 8000
 ```
+
+## Internal exposure and CORS (BUG-034)
+
+Bind the gateway to loopback when it shares a host with Next.js, or to a private
+interface reachable only by the Next.js service when they run separately. Browser
+traffic reaches the gateway solely through the same-origin Next.js rewrites for
+`/api/*` and `/auth/browser/*`. Keep the gateway off public listeners, ingress routes,
+and published container ports. CS-070 owns the public edge and its tenant-origin
+CORS policy.
+
+The internal gateway grants no cross-origin access by default. Same-origin requests
+and requests without an `Origin` header use the normal routes. For an explicit internal
+integration, `GATEWAY_CORS_ALLOWED_ORIGINS` accepts a comma-separated list of exact origins
+including scheme and any non-default port. The opt-in grants cover GET, POST, and DELETE
+without cross-origin cookies. Leave the variable empty for the Next.js deployment.
 
 ## Auth boundary (CS-061a, BUG-035 cutover)
 
@@ -69,7 +84,7 @@ and a short loop guard bounds recovery to a single refresh per failure. The reco
 unit-tested (`coffee_shop/test/session-recovery.test.mts`) and the server side of the sequence in
 `test_cs061a_manager_ui_compat.py`.
 
-The broader CSRF/CORS + tenant-routing policy remains a **CS-070** follow-up. The dormant
+Public-edge CSRF/CORS and tenant routing are owned by **CS-070**. The dormant
 `api.auth` demo helper and the optional `SESSION_SECRET` / `DEMO_MANAGER_*` settings remain only
 for local experimentation and are never used by the production app; the legacy `session` cookie is
 accepted nowhere.

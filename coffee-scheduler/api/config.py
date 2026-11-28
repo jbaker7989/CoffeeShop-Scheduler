@@ -13,7 +13,6 @@ import os
 
 from .routing import TenantRoutingConfig
 
-
 GATEWAY_DATABASE_URL = os.environ.get(
     "GATEWAY_DATABASE_URL",
     "postgresql://coffeeshop:coffeeshop@localhost:6432/coffeeshop",
@@ -36,6 +35,17 @@ except ValueError:
 DEMO_TENANT_SLUG = os.environ.get("DEMO_TENANT_SLUG", "maven-demo")
 DEMO_MANAGER_EMAIL = os.environ.get("DEMO_MANAGER_EMAIL", "manager@maven-demo.coffee")
 DEMO_MANAGER_PASSWORD_HASH = os.environ.get("DEMO_MANAGER_PASSWORD_HASH")
+
+
+def gateway_cors_origins_from_env() -> list[str]:
+    """Read the explicit gateway origin allowlist when an app is built."""
+    origins = [
+        origin for value in os.environ.get("GATEWAY_CORS_ALLOWED_ORIGINS", "").split(",")
+        if (origin := value.strip())
+    ]
+    if "*" in origins or "null" in origins:
+        raise ValueError("GATEWAY_CORS_ALLOWED_ORIGINS requires explicit origins")
+    return origins
 
 
 def tenant_routing_config_from_env() -> TenantRoutingConfig | None:

@@ -563,7 +563,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-031 — Weekly schedule view
 - **Feature:** [F31](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** ✅ Done (2026-11-27) — read-only weekly roster in the manager app (tenant-tz grid, station coverage, meal-break indicators, store/role/status + multi-week filters, shift→rule_eval_log panel). Foundation: migration `0026` (schedules.status CHECK draft/published/superseded), `agents/scheduler/persist.py` (solver output → schedules/shifts/shift_assignments + per-assignment rule_eval_log), demo seed. Gateway `/schedule` + `/schedule/shift/{id}/rules` (app_ro RLS). F31.ac1–ac7. Codex dev / Claude validate. Tests: `test_cs031_schedule_api.py` (6), `schedule-grid.test.mts` (4), regressions green. (Full migration round-trip is red on a pre-existing auth-migration bug — [[BUG-077]], not CS-031.)
+- **Status:** ✅ Done (2026-11-27) — read-only weekly roster in the manager app (tenant-tz grid, station coverage, meal-break indicators, store/role/status + multi-week filters, shift→rule_eval_log panel). Foundation: migration `0026` (schedules.status CHECK draft/published/superseded), `agents/scheduler/persist.py` (solver output → schedules/shifts/shift_assignments + per-assignment rule_eval_log), demo seed. Gateway `/schedule` + `/schedule/shift/{id}/rules` (app_ro RLS). F31.ac1–ac7. Codex dev / Claude validate. Tests: `test_cs031_schedule_api.py` (6), `schedule-grid.test.mts` (4), migration round-trip + regressions green in CI.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Deliver the read-only, rule-explainable weekly schedule grid.
 - **Detailed specifications:**
@@ -1722,7 +1722,7 @@ closing regression evidence.
 
 ### BUG-024 — F60: scale-safe migration gotchas (CONCURRENTLY on partitioned parents; backfill write window)
 - **Feature:** [F60](./FEATURES.md) (CS-060a) · **Priority:** P2 · **Size:** S · **Pattern:** D5
-- **Status:** 🐞 Open · **Type:** Defect (migration plan will fail / leave gaps as written)
+- **Status:** ✅ Fixed (2026-11-28) — `db/partition_migrations.py` helpers: parent index via `CREATE INDEX ON ONLY` + per-partition `CREATE INDEX CONCURRENTLY` + `ATTACH PARTITION`; backfill stamps the cutover tenant via `SET DEFAULT` + a `NOT VALID` NOT-NULL check (no NULL-tenant write window) then `VALIDATE` + `SET NOT NULL` + drop the temporary guards. Recipe corrected in `docs/architecture/saas-multi-tenancy.md` + `PLAN.md`. Test: `test_bug024_partition_migrations.py` (2 — index attach + concurrent-insert-during-backfill gets the tenant, never NULL). Codex dev / Claude validate.
 - **Developer:** Unassigned · **Found:** 2026-11-14 · **Duration:** ~0.5d (est.)
 - **Description:** CS-060a's "scale-safe" recipe has two flaws for the partitioned tables (`transactions`,
   `weather_hourly`, `rule_eval_log`):
@@ -1905,7 +1905,7 @@ closing regression evidence.
 
 ### BUG-034 — F30: API gateway has no CORS/exposure policy (must stay internal)
 - **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P3 · **Size:** XS · **Pattern:** D5 · relates to [[CS-070]]
-- **Status:** 🐞 Open · **Type:** Gap (deployment/security boundary) · **Found:** 2026-11-16
+- **Status:** ✅ Fixed (2026-11-28) — deny-by-default `CORSMiddleware` (empty allowlist from `GATEWAY_CORS_ALLOWED_ORIGINS`, rejects `*`/`null`), internal-only binding documented in `api/README.md` + `.env.example`, F30 AC3 added; public-edge CORS stays CS-070. Tests: 4 CORS regressions in `test_api_foundation.py`. Codex dev / Claude validate. · **Type:** Gap (deployment/security boundary) · **Found:** 2026-11-16
 - **Description:** The gateway sets the `session` cookie and is reachable directly on its port. The design is
   **same-origin only** (browser → Next → rewrite → gateway), so the gateway must never be internet-exposed; it
   currently has no CORS policy and no binding guidance, so a misconfigured deployment could expose it directly
@@ -2425,7 +2425,7 @@ closing regression evidence.
 | CS-028 | F21 | P3 | L | Design-only |
 | CS-029 | F22 | P3 | L | Design-only |
 | CS-030 | F30 | P1 | M | ✅ Done |
-| CS-031 | F31 | P1 | M | ✅ Done — weekly roster view + persist foundation (round-trip blocked by pre-existing BUG-077) |
+| CS-031 | F31 | P1 | M | ✅ Done — weekly roster view + persist foundation |
 | CS-032 | F32 | P2 | M | Not started |
 | CS-033 | F33 | P2 | M | Not started |
 | CS-034 | F34 | P1 | M | ✅ Done — `rules_admin.py` + 18 tests (F34 AC1–AC8, BUG-014–018 fixed); caveat: missing `unittest.main()` → BUG-019 |
@@ -2527,7 +2527,7 @@ closing regression evidence.
 | BUG-021 | F60 | P2 | S | ✅ Fixed (`0007` + `ensure_partition_rls`) — partition children RLS/FORCE; isolation gate green |
 | BUG-022 | F60 | P2 | XS | ✅ Fixed — `app_current_tenant()` fail-closed; catalog-driven test proves 0 rows (not a cast 500) across all 42 tenant_isolation tables |
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
-| BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
+| BUG-024 | F60 | P2 | S | ✅ Fixed — partition_migrations helpers (ON ONLY + CONCURRENTLY + ATTACH; no NULL-tenant window) |
 | BUG-025 | F60 | P2 | XS | ✅ Fixed — autocommit refused + transaction-local role/tenant (no pool leak); `test_bug025_pooling_session.py` |
 | BUG-041 | F61 | P2 | XS | ✅ Fixed — known invitation SQL conflicts map to 409; live pooled route and redemption regressions |
 | BUG-043 | F61 | P3 | S | ✅ Fixed — invitation acceptance throttle persists atomically by canonical client IP in PostgreSQL |
@@ -2933,7 +2933,7 @@ closing regression evidence.
 
 ### BUG-077 — Migration `downgrade base` fails: role `auth_svc` cannot be dropped (reversibility regression)
 - **Feature:** [F43](./FEATURES.md).ac3 / [F61](./FEATURES.md) (CS-061a/b/c) · **Priority:** P1 · **Size:** S · **Pattern:** D4 · relates to [[BUG-040]]
-- **Status:** 🐞 Open · **Type:** Migration reversibility regression (pre-existing on `main`) · **Found:** 2026-11-27 (Claude independent validation during CS-031)
+- **Status:** ❌ Not a bug — RETRACTED (2026-11-28). The `downgrade base` failure was a **local artifact**: PostgreSQL roles are cluster-global, so running the round-trip against a scratch database on the shared local server shared the `auth_svc` role (held by the contaminated `coffeeshop` DB), making the role appear undroppable. On an isolated database the round-trip passes — confirmed by CI (`Migration round-trip ✓` on PRs #42/#43, clean container). No reversibility defect exists. · **Type:** Migration reversibility regression (pre-existing on `main`) · **Found:** 2026-11-27 (Claude independent validation during CS-031)
 - **Developer:** Unassigned · **Duration:** ~0.5d (est.)
 - **Description:** `alembic downgrade base` aborts with `psycopg.errors.DependentObjectsStillExist: role
   "auth_svc" cannot be dropped because some objects depend on it`, so `test_migrations_roundtrip.py`

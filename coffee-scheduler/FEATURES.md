@@ -222,6 +222,8 @@ The Next.js scaffold at `coffee_shop/app/` exists but is stock `create-next-app`
 - **Operational acceptance — BUG-031:**
   1. **AC1** — Gateway lifespan startup and `/healthz` do not open the lazy PostgreSQL pool.
   2. **AC2** — When the gateway uses default database accessors, lifespan shutdown closes the pool, including after an exception; each app owns its pool and can allocate a fresh one on restart.
+- **Exposure acceptance — BUG-034:**
+  3. **AC3** — The internal gateway denies cross-origin preflights and sends no cross-origin grants by default. Same-origin requests through Next continue to work.
 
 ### F31. Weekly schedule view
 - **Status:** ✅ Done (CS-031, 2026-11-27) — read-only weekly roster in the manager shell: tenant-timezone grid with station coverage and meal-break indicators, store/role/status/multi-week filters, and a shift→`rule_eval_log` panel. Backed by `agents/scheduler/persist.py` (solver output → `schedules`/`shifts`/`shift_assignments`/`rule_eval_log`), migration `0026` (`schedules.status` CHECK), and gateway `/schedule` + `/schedule/shift/{id}/rules` under `app_ro` RLS. · **Size:** M · **Priority:** P1
