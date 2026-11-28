@@ -2497,6 +2497,8 @@ closing regression evidence.
 | CS-084 | F79 | P2 | M | Not started — employee PII encryption, read-audit & retention |
 | CS-085 | F80 | P2 | M | Not started — forecast accuracy & drift monitoring |
 | CS-086 | F80 | P2 | M | Not started — gated retraining, model registry & rollback |
+| CS-088 | F11 | P1 | S | ✅ Done — guaranteed weekly hours are a soft, cents-priced fairness term |
+| CS-089 | F11 | P1 | S | ✅ Done — one authoritative ISO Monday-start workweek |
 
 ### Defects (found 2026-11-12)
 
