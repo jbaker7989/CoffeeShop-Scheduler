@@ -275,24 +275,11 @@ Grafana dashboards (F40) gain a `tenant` template variable so panels filter by t
 
 ### 9.1 Backfill script
 
-One-shot migration (`scripts/backfill_tenant_id.py`):
+Migration `0001` created the schema with `tenant_id` in place. For a future online column
+add to a populated table, resolve or create the cutover tenant before following §14.6.
 
-1. Insert Maven demo tenant:
-   ```sql
-   INSERT INTO tenants (id, slug, name, status, plan, jurisdiction)
-   VALUES ('00000000-0000-0000-0000-000000000001', 'maven-demo', 'Maven Roasters (demo)', 'active', 'pro', 'NY-STATE');
-   ```
-
-2. Update every existing row in every domain table:
-   ```sql
-   UPDATE employees SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
-   UPDATE labor_rules SET tenant_id = '...' WHERE tenant_id IS NULL;
-   -- ... repeated for every domain table
-   ```
-
-3. Set `tenant_id` to `NOT NULL` on each table after backfill.
-
-4. Idempotency: the WHERE clause ensures re-running is safe.
+For a Maven demo cutover, use the tenant resolved by slug `maven-demo`
+(`00000000-0000-0000-0000-000000000001`).
 
 ### 9.2 ETL update
 
@@ -425,8 +412,35 @@ The sections above cover the data model, auth, onboarding, billing, observabilit
 - Carry the existing single-tenant PII discipline (SSN/address split to `private/`, DOB-not-age) forward **per tenant**.
 
 ### 14.6 Scale-safe migration (→ F60, F44)
-- The naïve single-statement backfill in §9.1 will lock and bloat large/partitioned tables (`transactions`, `rule_eval_log`, `weather_hourly` per F47). Use: **batched** backfill (chunked by PK, throttled), `CREATE INDEX CONCURRENTLY`, and add `NOT NULL` via `ADD CONSTRAINT … NOT VALID` → `VALIDATE CONSTRAINT` (non-blocking). Snapshot every table before cutover.
-- Revisit the partition key for tenant skew — `(tenant_id, date)` composite, or keep `date` partitioning with a leading-`tenant_id` index — so hot tenants don't dominate a partition.
+
+Snapshot the tables before cutover. For a future tenant-column migration on `transactions`,
+`rule_eval_log`, or `weather_hourly`, use the [partition migration helpers](../../db/partition_migrations.py)
+on a direct psycopg connection in autocommit mode. Keep the DDL install, backfill batches,
+validation, and final metadata change in separate transactions.
+
+1. **Guard new writes.** Call `begin_tenant_backfill` on the parent. In one transaction it adds
+   the nullable column, sets a temporary cutover tenant default, and installs
+   `CHECK (tenant_id IS NOT NULL) NOT VALID`. The default stamps inserts that omit
+   `tenant_id`, including direct partition inserts. The check rejects explicit NULLs
+   immediately and allows existing NULLs to remain until backfilled. Updates to those legacy
+   rows must supply a tenant or wait for their batch.
+2. **Backfill in throttled batches.** Walk each partition in primary-key ranges and commit each
+   batch. Include `WHERE tenant_id IS NULL` so a restarted batch preserves rows already
+   assigned a tenant. Before removing the default, confirm that every writer supplies `tenant_id`.
+3. **Validate and finish.** Call `validate_tenant_backfill` to scan for remaining NULLs and
+   commit validation. Then call `finish_tenant_backfill` to set the real `NOT NULL` using the
+   validated check, then remove the temporary default and check in the same transaction.
+4. **Build the composite index.** Use `create_parent_index` to run `CREATE INDEX … ON ONLY`
+   on the partitioned parent. Build an index with the same columns and order on each leaf,
+   including the default partition, with `create_leaf_index_concurrently` outside any
+   transaction block. Attach each leaf index with `attach_partition_index`. For a nested
+   hierarchy, create index metadata on each partitioned level and attach bottom-up. Coordinate
+   partition creation with the migration and check that the parent index is valid before cutover.
+   If a concurrent build fails, inspect the leaf index and remove an invalid leftover before
+   retrying. PostgreSQL rejects `CREATE INDEX CONCURRENTLY` on partitioned parents.
+
+Revisit the partition key for tenant skew. A composite partition key such as `(tenant_id, date)`
+or a date partition with a leading-`tenant_id` index can help with tenant-skewed queries.
 
 ### 14.7 DB-level noisy-neighbor controls (→ F60, F66)
 - Per-tenant/role `statement_timeout`, `work_mem` caps, connection limits, and a fair-share solver-job queue, so one tenant's heavy query or schedule run can't exhaust the shared pool or CPU. §1's "one tenant can't starve another" must hold at the **database** tier, not just in n8n.

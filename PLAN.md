@@ -218,7 +218,7 @@ Every feature that reads or writes business data picks up a `tenant_id` dimensio
 
 Sequenced as a single cutover, not a parallel run (parallel run adds ops complexity without a clear benefit for a single synthetic dataset):
 
-1. **Schema migration.** Add `tenants` table; add `tenant_id` column (nullable) to every domain table; **backfill in throttled batches** (chunked by PK — a single `UPDATE … WHERE tenant_id IS NULL` locks and bloats the big partitioned tables `transactions`/`rule_eval_log`/`weather_hourly`); build composite indexes with `CREATE INDEX CONCURRENTLY`; add `NOT NULL` via `ADD CONSTRAINT … NOT VALID` then `VALIDATE CONSTRAINT` (non-blocking); then `ALTER TABLE … FORCE ROW LEVEL SECURITY`; create policies (with `WITH CHECK`). Snapshot every table before starting.
+1. **Schema migration.** Migration `0001` created the tenant-aware schema. For future online tenant-column adds, snapshot each table first. Install the column, temporary cutover-tenant default, and `NOT VALID` non-null check together. Backfill in throttled primary-key batches, validate the check, set `NOT NULL`, and remove the temporary default and check. On partitioned tables such as `transactions`, `rule_eval_log`, and `weather_hourly`, create the composite index with `CREATE INDEX … ON ONLY` on the parent, build each leaf index concurrently, and attach it. Follow the [staged migration recipe](coffee-scheduler/docs/architecture/saas-multi-tenancy.md#146-scale-safe-migration--f60-f44), then enable and force RLS with policies that include `WITH CHECK`.
 2. **Backfill tenant row.** Insert the demo tenant (`slug = maven-demo`, `name = "Maven Roasters (demo)"`, `plan = 'pro'`, `jurisdiction = 'NY-STATE+NYC'`).
 3. **Application code update.** Every repo, every agent, every UI route gains the tenant dimension. Deploy as a single release behind a feature flag that locks the app to one tenant until F68's isolation tests pass.
 4. **Run F68 isolation tests.** With the flag off (single-tenant mode), tests attempt cross-tenant reads/writes and must fail at the DB level (RLS), not just the app layer.
@@ -421,7 +421,7 @@ Closes the gaps a completeness review surfaced. These are **acceptance criteria 
 - Agent prompt context built only from the current tenant's data; no tenant data into shared caches or model fine-tuning. Carry the existing single-tenant PII discipline forward per tenant.
 
 ### 15.6 Scale-safe migration (→ F60, F44) — ✓ folded into §7 step 1
-Batched backfill, `CREATE INDEX CONCURRENTLY`, `NOT NULL` via `NOT VALID`→`VALIDATE`, pre-cutover snapshot; revisit partitioning for tenant skew (`(tenant_id, date)` or date-partition + leading-`tenant_id` index).
+Use the guarded backfill and concurrent leaf index builds in §7. Revisit partitioning for tenant skew using `(tenant_id, date)` or date partitioning with a leading-`tenant_id` index.
 
 ### 15.7 DB-level noisy-neighbor controls (→ F60, F66)
 Per-tenant/role `statement_timeout`, `work_mem` caps, connection limits, and a fair-share solver-job queue, so one tenant can't exhaust the shared pool or CPU. Extends §12's "per-tenant solver contention" risk down to the database tier.

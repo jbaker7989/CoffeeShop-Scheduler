@@ -1,21 +1,22 @@
 """CS-030 gateway tests using the in-memory auth fixture and seeded store reads."""
+import os
 import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
-if str(SCHEDULER_ROOT) not in sys.path:
-    sys.path.insert(0, str(SCHEDULER_ROOT))
 
 import jwt
 import psycopg
 from fastapi.testclient import TestClient
 from psycopg_pool import ConnectionPool
 
-from api.app import create_app
-from api.config import GATEWAY_DATABASE_URL
-from auth.service import TenantAuthService
+SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
+if str(SCHEDULER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCHEDULER_ROOT))
+
+from api.app import create_app  # noqa: E402
+from api.config import GATEWAY_DATABASE_URL  # noqa: E402
+from auth.service import TenantAuthService  # noqa: E402
 
 LOGIN = {
     "tenant_slug": "maven-demo",
@@ -48,6 +49,62 @@ class ApiFoundation(unittest.TestCase):
         r = self._client().get("/healthz")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["status"], "ok")
+
+    # spec: F30.ac3 — Browser preflights from a foreign origin fail by default.
+    def test_gateway_denies_cross_origin_by_default(self):
+        with patch.dict(os.environ):
+            os.environ.pop("GATEWAY_CORS_ALLOWED_ORIGINS", None)
+            client = self._client()
+        origin = {"Origin": "https://outside.example"}
+        preflight = client.options("/auth/login", headers={
+            **origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        })
+        self.assertEqual(preflight.status_code, 400)
+        for response in (preflight, client.get("/healthz", headers=origin)):
+            self.assertNotIn("Access-Control-Allow-Origin", response.headers)
+            self.assertNotIn("Access-Control-Allow-Credentials", response.headers)
+
+    # spec: F30.ac3 — Same-origin browser traffic and requests without Origin still work.
+    def test_same_origin_login_works_with_default_cors(self):
+        with patch.dict(os.environ, {"GATEWAY_CORS_ALLOWED_ORIGINS": ""}):
+            client = self._client()
+        response = client.post("/auth/login", json=LOGIN, headers={"Origin": str(client.base_url)})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("access_token", response.json())
+        self.assertEqual(client.get("/healthz").status_code, 200)
+
+    # spec: F30.ac3 — Only configured origins receive an opt-in grant.
+    def test_gateway_cors_allows_only_configured_origins(self):
+        with patch.dict(os.environ, {
+            "GATEWAY_CORS_ALLOWED_ORIGINS": " https://allowed.example, https://also-allowed.example ",
+        }):
+            client = self._client()
+        for origin, status in (
+            ("https://allowed.example", 200),
+            ("https://also-allowed.example", 200),
+            ("https://outside.example", 400),
+        ):
+            with self.subTest(origin=origin):
+                response = client.options("/auth/login", headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "content-type",
+                })
+                self.assertEqual(response.status_code, status)
+                self.assertEqual(
+                    response.headers.get("Access-Control-Allow-Origin"),
+                    origin if status == 200 else None,
+                )
+
+    # spec: F30.ac3 — A wildcard must never turn the internal gateway into a public CORS endpoint.
+    def test_gateway_cors_rejects_wildcard_configuration(self):
+        with (
+            patch.dict(os.environ, {"GATEWAY_CORS_ALLOWED_ORIGINS": "*"}),
+            self.assertRaisesRegex(ValueError, "GATEWAY_CORS_ALLOWED_ORIGINS"),
+        ):
+            self._client()
 
     # spec: F30.ac / BUG-035 — valid credentials return a CS-061a token pair and set no session cookie.
     def test_login_success_returns_cs061a_tokens(self):
