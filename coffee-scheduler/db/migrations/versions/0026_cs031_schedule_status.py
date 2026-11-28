@@ -12,9 +12,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Preserve legacy imports. PostgreSQL enforces this check on all inserts and updates.
+    # NOT VALID exempts rows that already exist; it still enforces every new insert and
+    # update, so 'legacy-import' (written by scripts/etl_excel_to_postgres.py) must be listed.
     op.create_check_constraint(
-        "schedules_status_check", "schedules", "status IN ('draft', 'published', 'superseded')", postgresql_not_valid=True
+        "schedules_status_check",
+        "schedules",
+        "status IN ('draft', 'published', 'superseded', 'legacy-import')",
+        postgresql_not_valid=True,
     )
 
 
