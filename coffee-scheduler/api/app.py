@@ -92,20 +92,25 @@ def create_app(
     onboarding_service: OnboardingService | None = None,
 ) -> FastAPI:
     """Build the gateway with app-owned database accessors or caller-supplied functions."""
-    from .db import GatewayDatabase
+    # BUG-031: api.db is imported only when the app must own the pool, so callers that inject
+    # fetch_stores/tenant_lookup can build the gateway without a database module present.
+    database = None
+    if fetch_stores is None or (routing_config is not None and tenant_lookup is None):
+        from .db import GatewayDatabase
 
-    database = GatewayDatabase()
-    if fetch_stores is None:
-        fetch_stores = database.fetch_stores
-    if tenant_lookup is None:
-        tenant_lookup = database.resolve_active_slug
+        database = GatewayDatabase()
+        if fetch_stores is None:
+            fetch_stores = database.fetch_stores
+        if tenant_lookup is None:
+            tenant_lookup = database.resolve_active_slug
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         try:
             yield
         finally:
-            database.close()
+            if database is not None:
+                database.close()
 
     app = FastAPI(lifespan=lifespan)
     if routing_config is not None:
