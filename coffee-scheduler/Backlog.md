@@ -364,7 +364,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-017 — Schedule explanation layer
 - **Feature:** [F13](./FEATURES.md) · **Priority:** P2 · **Size:** S
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-27) — `agents/explanation/` read-only layer: `gather_evidence` reads a shift's `rule_eval_log` under `app_ro` RLS (live `judge()` fallback when the log is empty; taxonomy category names), and `explain_assignment` uses a **closed-vocabulary** grounding — the model may only select/order pre-computed `[rule_id] result — reason` fact lines; any non-verbatim line (invented rule_id/number/verdict) fails validation and falls back to deterministic rendering, so it cannot hallucinate. Anthropic seam (`claude-sonnet-5-5`, injected/stubbed, deterministic fallback with no API key); endpoint `GET /schedule/shift/{id}/explain` (owner/manager). Never claims legal accuracy. F13.ac1–ac7. Codex dev / Claude validate. Tests: `test_cs017_explanation.py` (7, incl. adversarial + judge-fallback + no-key), no real API call.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
 - **Description:** Plain-language, rule-cited explanations of schedule decisions.
 - **Detailed specifications:**
@@ -563,7 +563,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-031 — Weekly schedule view
 - **Feature:** [F31](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-27) — read-only weekly roster in the manager app (tenant-tz grid, station coverage, meal-break indicators, store/role/status + multi-week filters, shift→rule_eval_log panel). Foundation: migration `0026` (schedules.status CHECK draft/published/superseded), `agents/scheduler/persist.py` (solver output → schedules/shifts/shift_assignments + per-assignment rule_eval_log), demo seed. Gateway `/schedule` + `/schedule/shift/{id}/rules` (app_ro RLS). F31.ac1–ac7. Codex dev / Claude validate. Tests: `test_cs031_schedule_api.py` (6), `schedule-grid.test.mts` (4), regressions green. (Full migration round-trip is red on a pre-existing auth-migration bug — [[BUG-077]], not CS-031.)
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Deliver the read-only, rule-explainable weekly schedule grid.
 - **Detailed specifications:**
@@ -2408,7 +2408,7 @@ closing regression evidence.
 | CS-016b | F11 | P1 | M | ✅ Done |
 | CS-016c | F11 | P1 | S | ✅ Done (2026-11-23) |
 | CS-016d | F11 | P1 | M | ✅ Done (2026-11-24) |
-| CS-017 | F13 | P2 | S | Not started |
+| CS-017 | F13 | P2 | S | ✅ Done — grounded (closed-vocabulary) explanation layer + /explain endpoint |
 | CS-018 | F14 | P2 | L | Not started (umbrella) |
 | CS-018a | F14 | P2 | M | Not started |
 | CS-018b | F14 | P2 | M | Not started |
@@ -2425,7 +2425,7 @@ closing regression evidence.
 | CS-028 | F21 | P3 | L | Design-only |
 | CS-029 | F22 | P3 | L | Design-only |
 | CS-030 | F30 | P1 | M | ✅ Done |
-| CS-031 | F31 | P1 | M | Not started |
+| CS-031 | F31 | P1 | M | ✅ Done — weekly roster view + persist foundation (round-trip blocked by pre-existing BUG-077) |
 | CS-032 | F32 | P2 | M | Not started |
 | CS-033 | F33 | P2 | M | Not started |
 | CS-034 | F34 | P1 | M | ✅ Done — `rules_admin.py` + 18 tests (F34 AC1–AC8, BUG-014–018 fixed); caveat: missing `unittest.main()` → BUG-019 |
@@ -2926,6 +2926,32 @@ closing regression evidence.
 - **Status:** Fixed on the CS-011/015 branch.
 - **Finding:** The checker applied its missing-tag rule to every Python file under `test/`, but only indexed discoverable test modules.
 - **Validation:** The nested-checkout regression edits an imported fixture helper and a tagged test. It still proves changed tests without tags fail the gate.
+
+### BUG-077 — Migration `downgrade base` fails: role `auth_svc` cannot be dropped (reversibility regression)
+- **Feature:** [F43](./FEATURES.md).ac3 / [F61](./FEATURES.md) (CS-061a/b/c) · **Priority:** P1 · **Size:** S · **Pattern:** D4 · relates to [[BUG-040]]
+- **Status:** 🐞 Open · **Type:** Migration reversibility regression (pre-existing on `main`) · **Found:** 2026-11-27 (Claude independent validation during CS-031)
+- **Developer:** Unassigned · **Duration:** ~0.5d (est.)
+- **Description:** `alembic downgrade base` aborts with `psycopg.errors.DependentObjectsStillExist: role
+  "auth_svc" cannot be dropped because some objects depend on it`, so `test_migrations_roundtrip.py`
+  (`test_upgrade_downgrade_upgrade_leaves_only_alembic_metadata_at_base` and
+  `test_coverage_rules_validity_round_trips`) **fails** — violating F43.ac3 (every migration round-trips).
+  Migration `0010`'s own downgrade correctly drops its functions then `DROP OWNED BY auth_svc` + `DROP ROLE
+  auth_svc`, so a **later** auth migration (one of `0011`–`0022`, which also reference `auth_svc`) creates an
+  object that still depends on `auth_svc` — a function it owns, or an EXECUTE grant — that its own downgrade
+  does not clean, so by the time the chain reaches `0010` the role is still undroppable.
+- **Reproduction (verified 2026-11-27):** on a **fresh** scratch database with **only** the `main` chain
+  (`alembic upgrade 0025`, i.e. Codex's `0026` excluded) → `alembic downgrade base` raises the error above.
+  Reproduces identically with `0026` applied, confirming it is **pre-existing and not CS-031's doing**.
+- **Specification (write first):** a test asserting `upgrade head → downgrade base` succeeds on a clean DB
+  with **no** residual roles (`app_rw`, `app_ro`, `secrets_rw`, `auth_svc`) — i.e. extend the existing
+  round-trip role check to include `auth_svc` so the regression is pinned.
+- **Proposed fix:** make each auth migration's downgrade fully reverse its `auth_svc` footprint (drop the
+  functions it created and revoke its grants), and/or add a defensive `DROP OWNED BY auth_svc` immediately
+  before the `DROP ROLE auth_svc` in `0010` (mirroring the `0001` role-drop fix / BUG-040). Identify the
+  specific later migration (`0011`–`0022`) that leaks the dependency and fix it at the source.
+- **Risk if unfixed:** `test_migrations_roundtrip.py` stays red; no migration past the auth stack can be
+  rolled back to base (recovery runbook / CS-043 reversibility guarantee broken); each new migration that
+  depends on `auth_svc` compounds it.
 
 ### CS-106 — Give each gateway app ownership of its store and routing connections
 - **Feature:** F30 (CS-030), F61 · **Priority:** P2 · **Status:** Implemented locally, pending merge

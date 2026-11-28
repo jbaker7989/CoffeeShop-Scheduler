@@ -44,7 +44,10 @@ export default async function ManagerLayout({ children }: { children: ReactNode 
             Coffee Scheduler
           </a>
           <nav aria-label="Manager navigation" className="order-3 flex w-full gap-1 sm:order-none sm:w-auto">
-            {["Schedule", "Rules", "Forecast"].map((label) => (
+            <a className="rounded-md px-2.5 py-1.5 text-sm font-medium text-[#284b2e] hover:bg-[#eff4eb]" href="/schedule">
+              Schedule
+            </a>
+            {["Rules", "Forecast"].map((label) => (
               <span className="rounded-md px-2.5 py-1.5 text-sm text-[#778176]" key={label}>{label}</span>
             ))}
           </nav>

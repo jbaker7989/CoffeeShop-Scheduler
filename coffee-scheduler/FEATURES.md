@@ -183,9 +183,19 @@ Features yet to be built for the Predictive Smart Shift Scheduler (build target 
 - **Cross-references:** F8, F9, F10, F11, F23, F30, F45, F60. CS-021 owns the statutory verification gate.
 
 ### F13. Schedule explanation layer
-- **Status:** Not started · **Size:** S · **Priority:** P2
-- **Description:** LLM-generated plain-language explanations of schedule decisions ("why this person at this time", "why no minor on close"), each citing the specific rule or constraint that forced it, drawing on F10's output.
-- **Expected outcome:** Trust and transparency for managers; makes the deterministic engine legible.
+- **Status:** Done · **Size:** S · **Priority:** P2
+- **Description:** Owners and managers can request a plain-language explanation of an assignment's compliance evidence. Explanations cite the engine's rule results and reasons for that shift.
+- **Acceptance criteria**
+  - **AC1 (F13.ac1)** — Every cited rule ID exists in the requested shift's evidence.
+  - **AC2 (F13.ac2)** — Every number and verdict in the explanation is supported verbatim by its cited engine fact.
+  - **AC3 (F13.ac3)** — The authenticated endpoint reads under the caller's tenant-scoped `app_ro` role and fails closed for missing or foreign shifts.
+  - **AC4 (F13.ac4)** — A shift with no logged results gets live evidence from `judge()` or an insufficient-evidence response if no facts are available.
+  - **AC5 (F13.ac5)** — Every response surfaces `claims_legal_accuracy=false` and flags rule verification as unconfirmed.
+  - **AC6 (F13.ac6)** — A callable model stub can drive the explanation, and the evidence fallback works with no API key.
+  - **AC7 (F13.ac7)** — The explanation layer uses the existing compliance engine and the pinned taxonomy vocabulary.
+- **Edge / adversarial cases:** Fabricated IDs, numbers, verdicts, and legal claims trigger the evidence fallback. A missing API key, empty rule log, or shift with no usable compliance inputs produces a safe response.
+- **Cross-references:** F10 and `rule_eval_log` for engine results, F29/CS-009 for taxonomy, F31/CS-031 for the weekly schedule, and F60/F61 for tenant isolation and authentication.
+- **Expected outcome:** Managers can see the compliance evidence for a shift and the rules that produced it.
 
 ### F14. Call-out & swap workflow
 - **Status:** Not started · **Size:** L · **Priority:** P2
@@ -212,9 +222,19 @@ The Next.js scaffold at `coffee_shop/app/` exists but is stock `create-next-app`
   2. **AC2** — When the gateway uses default database accessors, lifespan shutdown closes the pool, including after an exception; each app owns its pool and can allocate a fresh one on restart.
 
 ### F31. Weekly schedule view
-- **Status:** Not started · **Size:** M · **Priority:** P1
-- **Description:** Per-store, per-day weekly grid showing shift assignments, station coverage and meal-break timing. Hover (or click) on any shift surfaces the rule IDs and `Rule_Eval_Log` reasons that placed it there (from F10). Read-only — edits go through the solver (F11) or the call-out flow (F32). Must handle multi-week navigation and filter by store / role / status. Backed by F12's LangGraph state for the active week.
-- **Expected outcome:** A manager can open a store's week, see who works when, and on hover learn exactly which rule made that placement.
+- **Status:** Implemented · **Size:** M · **Priority:** P1
+- **Description:** Managers and owners can read a store's published weekly roster, station coverage, and meal-break coverage. Selecting an assignment shows its recorded compliance results and reasons.
+- **Acceptance criteria**
+  - **AC1** — The verified owner or manager sees only the signed-in tenant's published roster for the requested location and week through an `app_ro` RLS session.
+  - **AC2** — Shift dates, clock times, and dayparts use the tenant's IANA timezone, including shifts near midnight UTC.
+  - **AC3** — The grid shows each assignment's employee, role, station, local start and end, and meal-break coverage, plus each station's staffing against its expected role.
+  - **AC4** — Store, role, status, and week controls preserve tenant and week scope and show a graceful empty state when a week has no published roster.
+  - **AC5** — Selecting a shift shows its recorded rule IDs, results, and reasons.
+  - **AC6** — Superseded and soft-deleted schedules are hidden.
+  - **AC7** — Schedule endpoints accept only read requests.
+- **Edge cases:** Missing or forged credentials, routed-tenant mismatch, unknown location, empty week, uncovered station, and orphan or unassigned station IDs.
+- **Cross-references:** CS-031, F10, F30, and the `schedules`, `shifts`, `shift_assignments`, `stations`, and `rule_eval_log` tables.
+- **Expected outcome:** A manager can inspect who is scheduled, where they work, and which compliance rules were evaluated.
 
 ### F32. Call-out approval
 - **Status:** Not started · **Size:** M · **Priority:** P2
