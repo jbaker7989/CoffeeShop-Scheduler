@@ -27,6 +27,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from agents.explanation.grounding import ShiftNotFound
@@ -45,6 +46,7 @@ from auth.service import (
 )
 
 from .auth_gateway import ACCESS_COOKIE_NAME, build_auth_service_from_env, extract_access_credential
+from .config import gateway_cors_origins_from_env
 from .onboarding import (
     EmailNotVerifiedError,
     InvalidSignupError,
@@ -119,6 +121,12 @@ def create_app(
             resolver=TenantResolver(routing_config, tenant_lookup),
             config=routing_config,
         )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=gateway_cors_origins_from_env(),
+        allow_methods=["DELETE", "GET", "POST"],
+        allow_headers=["Authorization"],
+    )
     onboarding = onboarding_service or OnboardingService(auth_service)
 
     # The four CS-061a auth routes + /.well-known/jwks.json. This is the single owner of
