@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
@@ -17,7 +18,10 @@ from a2a.types import AgentCard, Message, SendMessageRequest, SendMessageRespons
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from opentelemetry.trace import SpanKind
 from pydantic import ValidationError
+
+from otel.boundary import boundary_span, incoming_context, inject_trace, mark_error
 
 PROTOCOL = "0.3.0"
 MAX_REQUEST_BYTES = 64 * 1024
@@ -129,8 +133,12 @@ def strict_json(raw: bytes) -> object:
     return json.loads(raw, object_pairs_hook=unique, parse_constant=invalid, parse_float=finite_float)
 
 
+class _RPCErrorResponse(JSONResponse):
+    """A JSON-RPC error can have a successful HTTP status."""
+
+
 def _rpc_error(request_id, code: int, reason: str, *, transient: bool = False):
-    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": {
+    return _RPCErrorResponse({"jsonrpc": "2.0", "id": request_id, "error": {
         "code": code, "message": reason, "data": {"transient": transient},
     }})
 
@@ -157,6 +165,16 @@ def create_agent_app(
 
     @app.post("/a2a")
     async def invoke(request: Request):
+        with boundary_span(
+            "a2a.message.receive", SpanKind.SERVER, agent, "message/send",
+            parent=incoming_context(request.headers),
+        ) as span:
+            response = await dispatch(request)
+            if response.status_code >= 400 or isinstance(response, _RPCErrorResponse):
+                mark_error(span)
+            return response
+
+    async def dispatch(request: Request):
         try:
             authorization = request.headers.getlist("authorization")
             if len(authorization) != 1:
@@ -220,6 +238,18 @@ def create_agent_app(
     return app
 
 
+@contextmanager
+def _post_stream(url, body, headers, timeout):
+    with (
+        boundary_span("http.client.post", SpanKind.CLIENT, "agent-peer", "post") as span,
+        httpx.Client(trust_env=False, follow_redirects=False, timeout=timeout) as client,
+        client.stream("POST", url, json=body, headers=headers) as reply,
+    ):
+        yield reply
+        if reply.status_code >= 400:
+            mark_error(span)
+
+
 class AgentClient:
     """Caller on a configured JSON-RPC endpoint with bounded response bytes."""
 
@@ -228,6 +258,10 @@ class AgentClient:
         self.url = url
 
     def send(self, data: dict, token: str, *, timeout: float) -> dict:
+        with boundary_span("a2a.message.send", SpanKind.CLIENT, "agent-peer", "message/send"):
+            return self._send(data, token, timeout=timeout)
+
+    def _send(self, data: dict, token: str, *, timeout: float) -> dict:
         request_id = str(uuid4())
         body = {"jsonrpc": "2.0", "id": request_id, "method": "message/send", "params": {
             "message": {"kind": "message", "messageId": request_id, "role": "user",
@@ -236,10 +270,11 @@ class AgentClient:
         }}
         try:
             deadline = monotonic() + timeout
-            with (
-                httpx.Client(trust_env=False, follow_redirects=False, timeout=timeout) as client,
-                client.stream("POST", self.url, json=body, headers={"Authorization": f"Bearer {token}"}) as reply,
-            ):
+            headers = {"Authorization": f"Bearer {token}"}
+            # Propagate the RPC parent across the wire. The local HTTP transport
+            # span is a child of the RPC client span alongside the remote server.
+            inject_trace(headers)
+            with _post_stream(self.url, body, headers, timeout) as reply:
                 if reply.status_code in (429, 502, 503, 504):
                     raise AgentError("forecast_unavailable", transient=True)
                 if reply.status_code in (401, 403):

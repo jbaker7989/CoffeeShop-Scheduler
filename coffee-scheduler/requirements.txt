@@ -30,3 +30,5 @@ google-api-core==2.30.0
 proto-plus==1.28.0
 # CS-017/F13: grounded per-shift explanations.
 anthropic==0.104.1
+# Runtime boundary instrumentation uses the API; the existing OTel bootstrap owns the SDK and exporters.
+opentelemetry-api==1.29.0

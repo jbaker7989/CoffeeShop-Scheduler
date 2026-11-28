@@ -679,7 +679,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-041 — CI observability gate
 - **Feature:** [F41](./FEATURES.md) · **Priority:** P2 · **Size:** S
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-28) — F41.ac1–ac7. Per-test in-memory span-exporter harness (isolated `TracerProvider`+`InMemorySpanExporter`, no global provider mutation); exporter-backed boundary tests for HTTP/A2A/DB/tool asserting the exact span name/kind/parent (not a global non-empty list) + error-status visibility + safe attributes (no creds/PII/SQL/URLs/high-cardinality); a fail-closed **AST** changed-call-site gate (`scripts/ci/check_observability.py` + `observability_boundaries.json` registry with owner/reason exemptions) that rejects a new raw external call outside a registered adapter — proven by an uninstrumented-fixture self-test that FAILS and a registered one that PASSES; dedicated network-isolated `observability-contract` CI job in `ci.yml`. Telemetry failure never becomes business failure. Codex dev / independent Claude review (clean) / Claude test. Tests: `test_cs041_observability.py` (13), checker PASS. Verified green in a clean pinned venv.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
 - **Description:** Prevent uninstrumented external execution paths from merging.
 - **Detailed specifications:**
@@ -2435,7 +2435,7 @@ closing regression evidence.
 | CS-038 | F38 | P2 | S | ✅ Done — pinned OTel Collector config + `docker-compose.observability.yml`; AC1–AC11 verified, 12/12 tests |
 | CS-039 | F39 | P2 | M | Not started |
 | CS-040 | F40 | P2 | S | Not started |
-| CS-041 | F41 | P2 | S | Not started |
+| CS-041 | F41 | P2 | S | ✅ Done — observability CI gate (exporter boundary tests + fail-closed AST call-site checker) |
 | CS-042 | F42 | P0 | M | ✅ Done — requirements pinned, `.env.example`, `docs/data-platform.md`, roles decision, `load_snapshot` proof |
 | CS-043 | F43 | P0 | S | ✅ Done — compose+PgBouncer, reversible migration, backup/restore drill (F43 AC1–AC5 verified) |
 | CS-044 | F44 | P0 | M | ✅ Done — `scripts/etl_excel_to_postgres.py`; idempotent, 11 tests pass |
