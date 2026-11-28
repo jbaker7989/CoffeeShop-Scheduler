@@ -41,7 +41,7 @@ def _employee(maximum: int = 100) -> EmployeeInput:
 
 def _inputs(start: date, end: date, *, maximum: int = 100) -> SolverInputs:
     rules = tuple(CoverageRuleInput(name, None, name, "0", "HEADCOUNT", "coverage") for name in
-                  ("minimum crew", "key holder", "fpc", "peak skill", "break relief"))
+                  ("minimum crew", "COV-KEYHOLDER-OPEN", "COV-KEYHOLDER-CLOSE", "fpc", "peak skill", "break relief"))
     return SolverInputs(
         (StoreInput(3, "Test", 9, 9, {}),), (), (), rules +
         (CoverageRuleInput("COV-UTIL-TARGET", None, "utilisation", "1", "PERCENT", "coverage"),),
@@ -110,7 +110,9 @@ class WorkweekTests(unittest.TestCase):
             return Evaluation((), (), True)
 
         with patch.object(constraints, "load_snapshot", return_value=_snapshot()), patch.object(constraints, "judge", side_effect=judge):
-            verdict = constraints.legality_from_compliance("dsn", inputs)(
+            verdict = constraints.legality_from_compliance(
+                "dsn", inputs, tenant_id="00000000-0000-0000-0000-000000000001"
+            )(
                 inputs.employees[0], ShiftSlot(3, MONDAY + timedelta(days=2), Decimal("8"), Decimal("10"))
             )
         self.assertTrue(verdict.allowed)

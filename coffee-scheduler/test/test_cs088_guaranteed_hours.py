@@ -33,7 +33,7 @@ MONDAY = date(2026, 12, 7)
 
 def _inputs(employee: EmployeeInput, start: date, end: date) -> SolverInputs:
     rules = tuple(CoverageRuleInput(name, None, name, "0", "HEADCOUNT", "coverage") for name in
-                  ("minimum crew", "key holder", "fpc", "peak skill", "break relief"))
+                  ("minimum crew", "COV-KEYHOLDER-OPEN", "COV-KEYHOLDER-CLOSE", "fpc", "peak skill", "break relief"))
     return SolverInputs(
         (StoreInput(3, "Test", 9, 9, {}),), (), (), rules +
         (CoverageRuleInput("COV-UTIL-TARGET", None, "utilisation", "1", "PERCENT", "coverage"),),
