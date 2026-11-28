@@ -28,3 +28,5 @@ uvicorn==0.45.0
 # Keep the A2A transitive Google packages compatible with the CI OTel protobuf pin.
 google-api-core==2.30.0
 proto-plus==1.28.0
+# CS-017/F13: grounded per-shift explanations.
+anthropic==0.104.1

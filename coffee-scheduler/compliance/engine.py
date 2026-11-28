@@ -227,16 +227,23 @@ def vocab_key(metric, operator, unit) -> tuple[str, str, str]:
 
 
 def evaluate(proposal: Proposal, *, snapshot: Snapshot | None = None, persist: bool = False,
-             clock: datetime | None = None, dsn: str | None = None, log: MemoryLog | None = None) -> Evaluation:
+             clock: datetime | None = None, dsn: str | None = None, log: MemoryLog | None = None,
+             conn=None) -> Evaluation:
     if proposal.breaks is None:
         raise ComplianceConfigError("breaks is required; pass [] when no break is scheduled")
     _validate_proposal_times(proposal)
     if snapshot is None:
-        snapshot = load_snapshot(proposal, dsn=dsn)
+        snapshot = load_snapshot(proposal, dsn=dsn) if conn is None else load_scoped_snapshot(conn, proposal)
     evaluation = judge(snapshot, proposal)
     if persist:
         when = clock or datetime.now(ZoneInfo("UTC"))
-        _persist(proposal, evaluation, when, dsn=dsn, log=log)
+        if conn is not None:
+            if log is not None or dsn is not None:
+                raise ValueError("conn cannot be combined with dsn or log")
+            _require_scoped_session(conn, proposal, roles=("app_rw",))
+            _write_rule_evals(conn, proposal, [_log_row(proposal, result, when) for result in evaluation.results])
+        else:
+            _persist(proposal, evaluation, when, dsn=dsn, log=log)
     return evaluation
 
 
@@ -326,14 +333,18 @@ def load_snapshot(proposal: Proposal, *, dsn: str | None = None) -> Snapshot:
 
 def load_scoped_snapshot(conn, proposal: Proposal) -> Snapshot:
     """Read with the caller's transaction-local RLS context."""
+    _require_scoped_session(conn, proposal, roles=("app_ro", "app_rw"))
+    return _read_snapshot(conn, proposal)
+
+
+def _require_scoped_session(conn, proposal: Proposal, *, roles: tuple[str, ...]) -> None:
     if conn.autocommit or conn.info.transaction_status != 2:
         raise ComplianceUnavailable("compliance requires an active scoped transaction")
     role, tenant = conn.execute(
         "SELECT current_user, current_setting('app.tenant_id', true)"
     ).fetchone()
-    if role not in ("app_ro", "app_rw") or tenant != proposal.tenant_id:
-        raise ComplianceUnavailable("compliance session does not match the proposal tenant")
-    return _read_snapshot(conn, proposal)
+    if role not in roles or tenant != proposal.tenant_id:
+        raise ComplianceUnavailable("compliance session does not match the proposal tenant or role")
 
 
 def prepare_session(conn, tenant_id: str) -> None:
@@ -445,21 +456,25 @@ def _persist(proposal, evaluation, when, *, dsn, log):
     url = dsn or os.environ.get("DATABASE_URL") or "postgresql://coffeeshop:coffeeshop@localhost:5432/coffeeshop"
     with psycopg.connect(url) as conn, conn.transaction():
         prepare_session(conn, proposal.tenant_id)
-        if proposal.shift_id is not None:
-            found = conn.execute(
-                "SELECT 1 FROM shifts WHERE shift_id = %s", (proposal.shift_id,)
-            ).fetchone()
-            if found is None:
-                raise ShiftNotPersisted(proposal.shift_id)
-        for row in rows:
-            conn.execute(
-                """INSERT INTO rule_eval_log
-                       (tenant_id, schedule_id, shift_id, employee_id, rule_id, result,
-                        premium_cost_usd, evaluated_at, agent, notes)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (row["tenant_id"], row["schedule_id"], row["shift_id"], row["employee_id"], row["rule_id"],
-                 row["result"], row["premium_cost_usd"], row["evaluated_at"], row["agent"], row["notes"]),
-            )
+        _write_rule_evals(conn, proposal, rows)
+
+
+def _write_rule_evals(conn, proposal, rows):
+    if proposal.shift_id is not None:
+        found = conn.execute(
+            "SELECT 1 FROM shifts WHERE shift_id = %s", (proposal.shift_id,)
+        ).fetchone()
+        if found is None:
+            raise ShiftNotPersisted(proposal.shift_id)
+    for row in rows:
+        conn.execute(
+            """INSERT INTO rule_eval_log
+                   (tenant_id, schedule_id, shift_id, employee_id, rule_id, result,
+                    premium_cost_usd, evaluated_at, agent, notes)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (row["tenant_id"], row["schedule_id"], row["shift_id"], row["employee_id"], row["rule_id"],
+             row["result"], row["premium_cost_usd"], row["evaluated_at"], row["agent"], row["notes"]),
+        )
 
 
 def _log_row(proposal, result, when) -> dict:

@@ -36,6 +36,8 @@ class ScheduledShift:
     labour_cost_cents: int
     premium_cents: int
     premium_rule_ids: tuple[str, ...]
+    station_id: str | None = None
+    is_meal_break_covered: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
