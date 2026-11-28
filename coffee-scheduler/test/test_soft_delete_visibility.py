@@ -13,9 +13,10 @@ TENANT = "00000000-0000-0000-0000-000000000001"
 
 try:
     import psycopg
-    from data_access import list_including_deleted, open_session_context, restore, soft_delete
     from psycopg import Rollback
     from psycopg.errors import UndefinedColumn
+
+    from data_access import list_including_deleted, open_session_context, restore, soft_delete
 except ImportError:  # pragma: no cover - environment-dependent skip
     psycopg = None
 
