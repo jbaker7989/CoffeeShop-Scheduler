@@ -10,7 +10,7 @@ exists for Starlette to shadow.
 CS-070 resolves tenant context from the validated public authority/path before authentication;
 the reconciled access-token tenant must then match that immutable route.  Request body, query,
 cookie, forwarding, or JWT claims cannot select or override the routed tenant.  Protected reads
-then open the ``app_rw`` RLS transaction with that resolved-and-bound identity.
+then open an RLS transaction with that resolved-and-bound identity.
 
 CS-030 compatibility: the Next.js manager shell still authenticates with the legacy ``session``
 cookie; migrating it to the CS-061a browser ``access_token`` cookie is CS-070 (frontend session
@@ -22,10 +22,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, date, datetime
+from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from auth.api import BrowserCookieConfig, _set_browser_cookies, create_auth_router
@@ -88,23 +89,20 @@ def create_app(
     onboarding_service: OnboardingService | None = None,
 ) -> FastAPI:
     """Build the gateway with app-owned database accessors or caller-supplied functions."""
-    database = None
-    if fetch_stores is None or (routing_config is not None and tenant_lookup is None):
-        from .db import GatewayDatabase
+    from .db import GatewayDatabase
 
-        database = GatewayDatabase()
-        if fetch_stores is None:
-            fetch_stores = database.fetch_stores
-        if tenant_lookup is None:
-            tenant_lookup = database.resolve_active_slug
+    database = GatewayDatabase()
+    if fetch_stores is None:
+        fetch_stores = database.fetch_stores
+    if tenant_lookup is None:
+        tenant_lookup = database.resolve_active_slug
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         try:
             yield
         finally:
-            if database is not None:
-                database.close()
+            database.close()
 
     app = FastAPI(lifespan=lifespan)
     if routing_config is not None:
@@ -151,8 +149,7 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized") from None
         route = request.scope.get("tenant_route")
         if route is not None and principal.tenant_id != route.tenant_id:
-            # This comparison is deliberately before endpoint execution/fetch_stores,
-            # therefore before the sole RLS binding in GatewayDatabase.fetch_stores.
+            # Match the signed principal to the route before any endpoint opens its RLS session.
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
         return principal
 
@@ -348,6 +345,21 @@ def create_app(
     def stores(principal: Principal = Depends(current_principal)) -> dict[str, list[dict]]:
         # tenant_id is the reconciled claim, never request input; fetch_stores opens app_rw RLS.
         return {"stores": fetch_stores(principal.tenant_id)}
+
+    @app.get("/schedule", dependencies=[Depends(require_email_verified)])
+    def schedule(
+        location_id: Annotated[int, Query(ge=-(2**31), le=2**31 - 1)],
+        week_start: date | None = None,
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> dict[str, Any]:
+        return database.fetch_schedule(principal.tenant_id, location_id=location_id, week_start=week_start)
+
+    @app.get("/schedule/shift/{shift_id}/rules", dependencies=[Depends(require_email_verified)])
+    def shift_rules(
+        shift_id: UUID,
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> dict[str, list[dict]]:
+        return {"rules": database.fetch_shift_rule_evals(principal.tenant_id, shift_id)}
 
     @app.post("/auth/logout")
     def logout(request: Request, response: Response) -> dict[str, bool]:

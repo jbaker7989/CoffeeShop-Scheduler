@@ -212,9 +212,19 @@ The Next.js scaffold at `coffee_shop/app/` exists but is stock `create-next-app`
   2. **AC2** — When the gateway uses default database accessors, lifespan shutdown closes the pool, including after an exception; each app owns its pool and can allocate a fresh one on restart.
 
 ### F31. Weekly schedule view
-- **Status:** Not started · **Size:** M · **Priority:** P1
-- **Description:** Per-store, per-day weekly grid showing shift assignments, station coverage and meal-break timing. Hover (or click) on any shift surfaces the rule IDs and `Rule_Eval_Log` reasons that placed it there (from F10). Read-only — edits go through the solver (F11) or the call-out flow (F32). Must handle multi-week navigation and filter by store / role / status. Backed by F12's LangGraph state for the active week.
-- **Expected outcome:** A manager can open a store's week, see who works when, and on hover learn exactly which rule made that placement.
+- **Status:** Implemented · **Size:** M · **Priority:** P1
+- **Description:** Managers and owners can read a store's published weekly roster, station coverage, and meal-break coverage. Selecting an assignment shows its recorded compliance results and reasons.
+- **Acceptance criteria**
+  - **AC1** — The verified owner or manager sees only the signed-in tenant's published roster for the requested location and week through an `app_ro` RLS session.
+  - **AC2** — Shift dates, clock times, and dayparts use the tenant's IANA timezone, including shifts near midnight UTC.
+  - **AC3** — The grid shows each assignment's employee, role, station, local start and end, and meal-break coverage, plus each station's staffing against its expected role.
+  - **AC4** — Store, role, status, and week controls preserve tenant and week scope and show a graceful empty state when a week has no published roster.
+  - **AC5** — Selecting a shift shows its recorded rule IDs, results, and reasons.
+  - **AC6** — Superseded and soft-deleted schedules are hidden.
+  - **AC7** — Schedule endpoints accept only read requests.
+- **Edge cases:** Missing or forged credentials, routed-tenant mismatch, unknown location, empty week, uncovered station, and orphan or unassigned station IDs.
+- **Cross-references:** CS-031, F10, F30, and the `schedules`, `shifts`, `shift_assignments`, `stations`, and `rule_eval_log` tables.
+- **Expected outcome:** A manager can inspect who is scheduled, where they work, and which compliance rules were evaluated.
 
 ### F32. Call-out approval
 - **Status:** Not started · **Size:** M · **Priority:** P2

@@ -17,9 +17,25 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "coffee-scheduler"))
 
 from compliance.engine import (  # noqa: E402
-    SUPPORTED, Break, ComplianceConfigError, ComplianceUnavailable, CoverageConflict,
-    CrewMember, DayFacts, Employee, MemoryLog, Proposal, Rule, ShiftNotPersisted,
-    ShiftSpan, Snapshot, Waiver, evaluate, prepare_session, reconcile_coverage, vocab_key,
+    SUPPORTED,
+    Break,
+    ComplianceConfigError,
+    ComplianceUnavailable,
+    CoverageConflict,
+    CrewMember,
+    DayFacts,
+    Employee,
+    MemoryLog,
+    Proposal,
+    Rule,
+    ShiftNotPersisted,
+    ShiftSpan,
+    Snapshot,
+    Waiver,
+    evaluate,
+    prepare_session,
+    reconcile_coverage,
+    vocab_key,
 )
 
 NY = ZoneInfo("America/New_York")
@@ -551,7 +567,7 @@ class PostgresIsolation(unittest.TestCase):
         try:
             with psycopg.connect(DSN) as conn:
                 conn.execute(
-                    "INSERT INTO schedules (tenant_id, schedule_id, location_id, week_start, status) VALUES (%s,%s,5,%s,'test')",
+                    "INSERT INTO schedules (tenant_id, schedule_id, location_id, week_start, status) VALUES (%s,%s,5,%s,'draft')",
                     (TENANT, sid, start.date()),
                 )
                 conn.execute(
