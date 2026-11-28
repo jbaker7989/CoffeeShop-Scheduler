@@ -107,7 +107,8 @@ def build_slot_grid(inputs: SolverInputs) -> tuple[ShiftSlot, ...]:
             window = store.open_windows.get(day.weekday())
             if window is None or day.weekday() not in window.open_weekdays:
                 continue
-            opening, closing = Decimal(window.open_hour), Decimal(window.close_hour)
+            opening = Decimal(window.open_hour)
+            closing = store.partial_close_hours.get(day.weekday(), Decimal(window.close_hour))
             start = opening
             while start + minimum <= closing:
                 length = minimum
@@ -139,7 +140,8 @@ def _elapsed_minutes(start: datetime, end: datetime, *, description: str) -> int
 
 
 def build_slot_index(
-    slots: tuple[ShiftSlot, ...], *, calendar_days: tuple[date, ...], rest: Decimal
+    slots: tuple[ShiftSlot, ...], *, calendar_days: tuple[date, ...], rest: Decimal,
+    partial_closes: dict[tuple[int, int], Decimal] | None = None,
 ) -> SlotIndex:
     """Build all slot lookups once, using elapsed rather than wall-clock time."""
     if not calendar_days:
@@ -154,6 +156,7 @@ def build_slot_index(
     by_day: dict[date, list[int]] = {}
     by_store_day_hour: dict[tuple[int, date, int], list[int]] = {}
     by_week: dict[tuple[int, int], list[int]] = {}
+    closes = partial_closes or {}
     for index, slot in enumerate(slots):
         start = _slot_datetime(slot.day, slot.start_hour)
         end = _slot_datetime(slot.day, slot.end_hour)
@@ -168,6 +171,10 @@ def build_slot_index(
         by_week.setdefault(workweek(slot.day), []).append(index)
         first_hour = int(slot.start_hour.to_integral_value(rounding=ROUND_CEILING))
         last_hour = int((slot.end_hour - 1).to_integral_value(rounding=ROUND_FLOOR))
+        close = closes.get((slot.location_id, slot.day.weekday()))
+        if close is not None and slot.end_hour == close:
+            # The final clock-hour bucket covers only the portion the store is open.
+            last_hour = int(close)
         for hour in range(first_hour, last_hour + 1):
             by_store_day_hour.setdefault((slot.location_id, slot.day, hour), []).append(index)
     return SlotIndex(

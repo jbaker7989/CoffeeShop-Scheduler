@@ -154,8 +154,8 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-010 — Author AGENTS.md + SKILL.md set
 - **Feature:** [F6](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Partially scaffolded (stubs exist)
-- **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
+- **Status:** ✅ Done (2026-11-26) — F6 acceptance criteria documented; root/agent guidance and all five shared skills completed; 5 offline documentation-contract tests pass; unittest suite passes (559 run, 84 gated skips); pytest suite passes (481 passed, 84 gated skips, 135 subtests); changed-file Ruff and `git diff --check` pass.
+- **Developer:** Codex · **Started:** 2026-11-26 · **Duration:** ~1d (actual)
 - **Description:** Flesh out the shared conventions and reusable procedures.
 - **Detailed specifications:**
   - Root `AGENTS.md`: stack, layer split (n8n/LangGraph/LangChain/A2A/MCP), data rules, test commands.
@@ -166,13 +166,13 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-011 — Author A2A Agent Cards & settle Payroll/HCM
 - **Feature:** [F7](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Scaffolded (stub JSON; no payroll_hcm dir)
+- **Status:** Implemented and validated on the CS-011/015 branch
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
-- **Description:** Replace stub cards with real, versioned A2A contracts and resolve the Payroll/HCM ambiguity.
+- **Description:** Versioned, authenticated Scheduler, Forecast, Labor Compliance and Staff Comms cards. The Scheduler invokes a separate ADK worker for deterministic forecasts. See the [operator contract](docs/sdd-cs011-cs015.md).
 - **Detailed specifications:**
   - Real cards for Scheduler, Demand Forecast, Labor Compliance, Staff Comms (capabilities, auth, versioning per `agent-card-authoring`).
   - Placeholder cards for Inventory, Prep, Loyalty.
-  - **Decide Payroll/HCM explicitly:** either create `agents/payroll_hcm/` as a runtime agent (+ LangGraph node in CS-015) **or** document it as n8n-only (no card). Record the decision.
+  - Payroll/HCM export runs through F16 n8n. CS-083 owns the reconciled artifact. Staff Comms starts with a template preview under this story; delivery and consent stay in CS-020.
   - Build one agent in a second framework to prove A2A interoperability.
 
 ### CS-012 — Demand Forecast output contract
@@ -229,7 +229,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-014 — Demand forecast model
 - **Feature:** [F9](./FEATURES.md) · **Priority:** P1 · **Size:** L
-- **Status:** Blocked (on CS-001, CS-008, CS-012)
+- **Status:** ✅ Done (2026-11-23) — delivered via CS-014a/b/c (feature store `0019`, trained-model registry `0020`, WAPE acceptance gate); the forecaster is consumable by CS-016.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~8d (est.)
 - **Description:** Train and validate the statistical/ML forecaster that drives staffing need per hour.
 - **Detailed specifications:**
@@ -279,18 +279,18 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-015 — LangGraph state & schedule-generation graph
 - **Feature:** [F12](./FEATURES.md) · **Priority:** P1 · **Size:** M
-- **Status:** Not started
+- **Status:** Implemented and validated on the CS-011/015 branch
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~3d (est.)
 - **Description:** Orchestration that turns a request into a schedule end to end.
 - **Detailed specifications:**
   - Nodes: gather inputs → call forecast (CS-014) → call compliance (CS-013) → run solver (CS-016) → present result.
   - LangChain wraps tools and prompt templates; LLM routes between tools, never generates numbers.
   - Define graph state schema and error/retry edges.
-  - Include the Payroll/HCM node only if CS-011 made it a runtime agent.
+  - Return a draft with bounded retries, tenant-scoped checkpoint recovery, solver quality and compliance scope. Payroll/HCM export remains in F16.
 
 ### CS-016 — CP-SAT schedule solver
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** L
-- **Status:** Blocked (on CS-002, CS-005, CS-014, CS-013)
+- **Status:** ✅ Done (2026-11-24) — delivered via CS-016a/b/c/d (typed input adapters, CP-SAT hard constraints, objective, runner/output); emits a legal, cost-aware weekly schedule.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~8d (est.)
 - **Description:** The deterministic heart: emits a legal, cost-aware weekly schedule.
 - **Detailed specifications:**
@@ -1100,7 +1100,7 @@ prerequisites for others (F73 actuals feed F78 payroll and F80 MLOps; F72 availa
 - **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~4d (est.)
 - **Description:** Export reconciled, auditable pay with real hours behind the premiums.
 - **Detailed specifications:**
-  - Combine actual hours (F73), scheduled hours, and F10 premiums/OT/spread/call-in per employee/day into a per-(tenant, period) idempotent export via F16/runtime agent; settles the F7 Payroll/HCM-agent question.
+  - Combine actual hours (F73), scheduled hours, and F10 premiums/OT/spread/call-in per employee/day into a per-(tenant, period) idempotent export through the F16 n8n workflow selected in CS-011.
   - Reconcile: Σ exported hours == Σ approved `time_entries`; mismatch fails the export (fail-closed). Each premium line cites its `Labor_Rules` rule_id.
   - An unapproved punch or open period cannot be exported; a corrected punch after export forces a versioned re-export with a diff; mid-period rule changes (F28) attributed to the correct date range.
 
@@ -1847,8 +1847,8 @@ closing regression evidence.
 
 ### BUG-031 — F30: API gateway connection pool is never closed (unclean shutdown)
 - **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P2 · **Size:** XS · **Pattern:** D7
-- **Status:** 🐞 Open · **Type:** Defect (resource lifecycle) · **Found:** 2026-11-16
-- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Status:** ✅ Done (2026-11-26) · **Type:** Defect (resource lifecycle) · **Found:** 2026-11-16
+- **Developer:** Codex · **Duration:** ~0.25d
 - **Description:** `api/db.py` creates a module-level `psycopg_pool.ConnectionPool` but never closes it. At
   interpreter shutdown its `__del__` tries to join the pool's worker thread, raising
   `PythonFinalizationError: cannot join thread at interpreter shutdown`. Under uvicorn the pool is also not
@@ -1856,10 +1856,14 @@ closing regression evidence.
 - **Reproduction (verified 2026-11-16):** running `test_api_foundation.py` prints
   `Exception ignored while calling deallocator <ConnectionPool.__del__>: PythonFinalizationError` after the
   suite passes.
-- **Specification (write first):** a test asserting the app closes the pool on shutdown (no finalizer error;
-  pool `.closed` after the lifespan exits).
-- **Proposed fix:** register a FastAPI `lifespan` (or shutdown handler) that calls `pool.close()`; open the
-  pool on startup rather than lazily. Keeps tests clean and avoids leaked backends.
+- **Specification:** F30.ac1–ac2 cover lazy pool startup/liveness and pool ownership through app shutdown.
+- **Resolution:** FastAPI lifespan closes `api.db.pool` in `finally` only when production DB accessors are
+  selected. Pool opening remains lazy, `/healthz` stays database-independent, and injected adapters never
+  close the shared production pool. `TestClient` lifecycle now closes the pool in the database-backed gateway
+  test as well.
+- **Verification:** `test_bug031_pool_lifecycle.py` 3/3; full non-migration suite 484 passed / 80 skipped;
+  ruff and feature/spec traceability gates pass. The legacy API foundation integration remains environment-
+  gated on a reachable gateway database and is included in the 80 skips in this run.
 - **Risk if unfixed:** leaked PgBouncer/Postgres connections across restarts; noisy finalizer errors mask real
   shutdown problems.
 
@@ -1880,8 +1884,8 @@ closing regression evidence.
 
 ### BUG-033 — F30: demo manager password falls back to a known default when env is unset
 - **Feature:** [F30](./FEATURES.md) (CS-030) · **Priority:** P2 · **Size:** XS · **Pattern:** D2
-- **Status:** 🐞 Open · **Type:** Defect (insecure default) · **Found:** 2026-11-16
-- **Developer:** Unassigned · **Duration:** ~0.25d (est.)
+- **Status:** ✅ Done (2026-11-24; superseded by CS-061a / BUG-035) · **Type:** Defect (insecure default; retired auth path) · **Found:** 2026-11-16
+- **Developer:** Codex · **Duration:** ~0.5d
 - **Description:** `api/config.py` hashes a hard-coded default password (`demo-pass-change-me`) when neither
   `DEMO_MANAGER_PASSWORD_HASH` nor `DEMO_MANAGER_PASSWORD` is set, so the demo runs out of the box. A
   deployment that forgets to set them ships a **publicly known** manager credential.
@@ -1890,6 +1894,13 @@ closing regression evidence.
 - **Proposed fix:** require `DEMO_MANAGER_PASSWORD_HASH` (raise at startup) whenever `COOKIE_SECURE=true` /
   non-dev; keep the convenience default for local dev only, behind a loud log warning. (Superseded once CS-061
   provides real `tenant_users` auth.)
+- **Resolution:** CS-061a replaced and removed the production CS-030 demo login. The production `/auth/login`
+  route is owned by `auth.api` and uses the tenant-auth service; legacy `DEMO_MANAGER_*` values are optional
+  dormant-helper configuration only. `api.config` contains neither a known default password nor a generated
+  password hash. Closeout plan: [BUG-033 demo auth closeout](./docs/plans/BUG-033-demo-auth-closeout.md).
+- **Verification:** `test_bug033_demo_auth_closeout.py` (3 tests), `test_cs061a_gateway_integration.py` (13 tests),
+  and `test_f61_auth_deployment_contract.py` (2 tests) all pass. Regressions cover no default secret, no legacy
+  login route, and fail-closed CS-061a startup despite legacy credential variables.
 - **Risk if unfixed:** a known-password manager login reachable in any non-local deployment.
 
 ### BUG-034 — F30: API gateway has no CORS/exposure policy (must stay internal)
@@ -2173,7 +2184,7 @@ closing regression evidence.
 
 ### BUG-041 — F61/CS-061c: duplicate-invite / already-member returns HTTP 500 over the live DB (in-memory path returns 409)
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** XS · **Pattern:** D2 (DB↔in-memory divergence)
-- **Status:** 🐞 Open · **Type:** Error-mapping / repository-parity defect · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (2026-11-25) — `DatabaseAuthRepository.create_invitation` maps only SQLSTATE `23505` and the two documented `P0001` messages to the existing conflict path; all unrelated SQL errors still propagate. Migration `0023` qualifies ambiguous `auth_accept_invitation` column references without changing its signature, SECURITY DEFINER attributes, or grants. Unit tests prove selective translation; live pooled gateway tests prove duplicate pending/member conflicts and concurrent duplicates return 409, and valid redemption succeeds. Evidence: `test_bug041_invitation_conflicts.py` 3/3; `test_cs061c_invitation_database_integration.py` includes live conflict/concurrency/redemption cases; migration roundtrip 4/4. · **Type:** Error-mapping / repository-parity defect · **Found:** 2026-11-17 (Claude review of CS-061c)
 - **Root cause:** `auth_create_invitation` (migration `0012`) guards the common conflict cases with
   `RAISE EXCEPTION 'already a member'` and `RAISE EXCEPTION 'pending invitation exists'`, which Postgres
   raises as **SQLSTATE `P0001` (`RaiseException`)**, *not* `UniqueViolation`. But
@@ -2200,7 +2211,8 @@ closing regression evidence.
 
 ### BUG-042 — F61/CS-061c: audit-store outage converts a valid login into a 500 (a genuine auth result is lost)
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P2 · **Size:** S · **Pattern:** D3 (availability coupling)
-- **Status:** 🐞 Open · **Type:** Spec deviation / resilience defect · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (2026-11-25) — success/failure login audit is best-effort, failures are logged and counted by action, valid login tokens still issue during audit-store outage, and required invitation audit remains fail-closed; `test_f61_audit_contract.py`.
+- **Type:** Spec deviation / resilience defect · **Found:** 2026-11-17 (Claude review of CS-061c)
 - **Root cause:** `TenantAuthService._audit` (`auth/service.py`) wraps `record_audit` and, on any failure,
   logs and **re-raises**. It is invoked on the login success path (`auth.login.succeeded`) *after* the
   credential + MFA checks pass and the session is issuable. So if the audit store (the `auth_record_audit`
@@ -2220,7 +2232,7 @@ closing regression evidence.
 
 ### BUG-043 — F61/CS-061c: invitation-accept rate limit is per-process (in-memory), not shared across gateway instances
 - **Feature:** [F61](./FEATURES.md) (CS-061c) · **Priority:** P3 · **Size:** S · **Pattern:** D3
-- **Status:** 🐞 Open · **Type:** Defense-in-depth gap · **Found:** 2026-11-17 (Claude review of CS-061c)
+- **Status:** ✅ Fixed (2026-11-25) — removed the invitation route's process-local limiter and added mandatory typed repository operations backed by a canonical-IP-only PostgreSQL table and `auth_svc`-only SECURITY DEFINER functions in migration `0022`. Atomic reservations, independent IP buckets, success-only bucket clearing, rolling-window/lockout expiry, fail-closed invalid inputs, and application-role denial are covered in memory and against separate pooled DB adapters. Evidence: throttle unit tests 8/8; live `test_cs061c_invitation_database_integration.py` 7/7; migration roundtrip 4/4. · **Type:** Defense-in-depth gap · **Found:** 2026-11-17 (Claude review of CS-061c)
 - **Root cause:** `create_app` (`api/app.py`) throttles the public `POST /invitations/accept` endpoint with
   `invitation_limiter = LoginRateLimiter()` — an **in-memory** limiter instantiated per app/worker. Unlike
   the CS-061b login throttle, which is DB-backed (`auth_record_login_attempt`/`auth_login_locked`) and
@@ -2228,9 +2240,7 @@ closing regression evidence.
   the effective brute-force limit multiplies by the worker count and resets on restart/redeploy.
 - **Impact:** weaker brute-force protection on an anonymous, token-bearing endpoint under multi-worker/
   multi-instance deployment (the production shape). Single-process dev is unaffected, which is why tests pass.
-- **Acceptance criteria (for the fix):** back the accept throttle with the DB (reuse the CS-061b
-  `auth_login_attempts` port with an `'invite'`/client-IP key) so the limit is shared and durable, matching
-  the login throttle; add a test asserting the throttle state is not process-local.
+- **Acceptance criteria (for the fix):** persist accept throttle state by canonical client IP behind a mandatory repository operation and narrowly granted database functions; do not share state across unrelated IPs or add tenant/email/token keys. Prove durable state across independent pools, atomic concurrent reservations, success-only same-IP reset, expiry boundaries, and least-privilege role enforcement through the production gateway path.
 - **Risk if unfixed:** token-guessing / enumeration on `/invitations/accept` scales with gateway replicas.
 
 ### BUG-044 — F61/CS-061c: `list_invitations` ordering differs between the DB and in-memory repositories
@@ -2381,21 +2391,21 @@ closing regression evidence.
 | CS-007 | F25 | P0 | S | ✅ Done (merged into CS-004) |
 | CS-008 | F5 | P1 | M | ✅ Done |
 | CS-009 | F29 | P1 | XS | ✅ Done |
-| CS-010 | F6 | P1 | M | Partial |
-| CS-011 | F7 | P1 | M | Scaffolded |
+| CS-010 | F6 | P1 | M | ✅ Done |
+| CS-011 | F7 | P1 | M | ✅ Done (CS-011/015 merged) |
 | CS-012 | F8 | P1 | S | ✅ Done |
 | CS-013 | F10 | P1 | L | ✅ Done — `compliance/engine.py`; 27 tests pass (claims_legal_accuracy gated on CS-021) |
 | CS-013a | F10 | P1 | S | ✅ Done — append-only `rule_eval_log` write path |
 | CS-013b | F10 | P1 | S | ✅ Done — half-open waiver expiry on shift date |
 | CS-013c | F10/F26 | P1 | XS | ✅ Done — coverage↔law fail-closed reconciliation (VERIFIED-gate stays with CS-021/022) |
-| CS-014 | F9 | P1 | L | Blocked (umbrella) |
-| CS-014a | F9 | P1 | M | Blocked |
+| CS-014 | F9 | P1 | L | ✅ Done (via CS-014a/b/c) |
+| CS-014a | F9 | P1 | M | ✅ Done |
 | CS-014b | F9 | P1 | M | ✅ Done (2026-11-21) |
-| CS-014c | F9 | P1 | S | Blocked — MAPE gate failed on real-data holdout |
-| CS-015 | F12 | P1 | M | Not started |
-| CS-016 | F11 | P1 | L | Blocked (umbrella) |
-| CS-016a | F11 | P1 | M | Blocked |
-| CS-016b | F11 | P1 | M | Blocked |
+| CS-014c | F9 | P1 | S | ✅ Done — WAPE acceptance gate passes |
+| CS-015 | F12 | P1 | M | ✅ Done (CS-011/015 merged) |
+| CS-016 | F11 | P1 | L | ✅ Done (via CS-016a/b/c/d) |
+| CS-016a | F11 | P1 | M | ✅ Done |
+| CS-016b | F11 | P1 | M | ✅ Done |
 | CS-016c | F11 | P1 | S | ✅ Done (2026-11-23) |
 | CS-016d | F11 | P1 | M | ✅ Done (2026-11-24) |
 | CS-017 | F13 | P2 | S | Not started |
@@ -2414,13 +2424,13 @@ closing regression evidence.
 | CS-027 | F20 | P3 | L | Design-only |
 | CS-028 | F21 | P3 | L | Design-only |
 | CS-029 | F22 | P3 | L | Design-only |
-| CS-030 | F30 | P1 | M | Not started |
+| CS-030 | F30 | P1 | M | ✅ Done |
 | CS-031 | F31 | P1 | M | Not started |
 | CS-032 | F32 | P2 | M | Not started |
 | CS-033 | F33 | P2 | M | Not started |
 | CS-034 | F34 | P1 | M | ✅ Done — `rules_admin.py` + 18 tests (F34 AC1–AC8, BUG-014–018 fixed); caveat: missing `unittest.main()` → BUG-019 |
 | CS-035 | F35 | P2 | S | Not started |
-| CS-036 | F36 | P2 | M | Not started |
+| CS-036 | F36 | P2 | M | ✅ Done |
 | CS-037 | F37 | P2 | M | Not started |
 | CS-038 | F38 | P2 | S | ✅ Done — pinned OTel Collector config + `docker-compose.observability.yml`; AC1–AC11 verified, 12/12 tests |
 | CS-039 | F39 | P2 | M | Not started |
@@ -2510,13 +2520,15 @@ closing regression evidence.
 | BUG-016 | F34 | P2 | S | ✅ Fixed — effective-dated version addressing |
 | BUG-017 | F34 | P3 | XS | ✅ Fixed — explicit transaction contract and timezone validation |
 | BUG-018 | F34 | P2 | S | ✅ Fixed — verified evidence gate and no read-path URL networking |
-| BUG-019 | F34 | P2 | XS | 🐞 Open — `test_rules_admin.py` missing `unittest.main()`; runs 0 tests as a script |
+| BUG-019 | F34 | P2 | XS | ✅ Fixed — `test_rules_admin.py` now runs its tests |
 | BUG-020 | F60 | P1 | S | ✅ Fixed (`0004`) — tenants ENABLE RLS + self-policy; app roles see only own tenant; 4 tests |
-| BUG-021 | F60 | P2 | S | 🐞 Open — default partitions lack RLS/FORCE (latent; mitigated only by grant absence) |
+| BUG-021 | F60 | P2 | S | ✅ Fixed (`0007` + `ensure_partition_rls`) — partition children RLS/FORCE; isolation gate green |
 | BUG-022 | F60 | P2 | XS | ✅ Fixed — `app_current_tenant()` fail-closed; catalog-driven test proves 0 rows (not a cast 500) across all 42 tenant_isolation tables |
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
 | BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
 | BUG-025 | F60 | P2 | XS | ✅ Fixed — autocommit refused + transaction-local role/tenant (no pool leak); `test_bug025_pooling_session.py` |
+| BUG-041 | F61 | P2 | XS | ✅ Fixed — known invitation SQL conflicts map to 409; live pooled route and redemption regressions |
+| BUG-043 | F61 | P3 | S | ✅ Fixed — invitation acceptance throttle persists atomically by canonical client IP in PostgreSQL |
 | BUG-047 | F61 | P2 | XS | ✅ Fixed — invitation accept failures/clears are isolated by canonical client-IP bucket |
 | BUG-048 | F61 | P1 | XS | ✅ Fixed — arbitrary-claims signer exists only in test support |
 | BUG-049 | F61 | P2 | XS | ✅ Fixed — enforce required repository methods at adapter instantiation |
@@ -2524,8 +2536,8 @@ closing regression evidence.
 | BUG-051 | F61 | P2 | S | ✅ Fixed — centralized typed pooled repository delegation |
 | BUG-052 | F61 | P2 | XS | ✅ Fixed — one JWT validation per protected authorization |
 | BUG-053 | F61 | P1 | S | ✅ Fixed — logout revokes access token and presented refresh family |
-| BUG-054 | F45 | P2 | XS | 🐞 Open — validate and bound repository list pagination |
-| BUG-055 | F36/F38 | P1 | M | 🐞 Open — limit collector exposure and require TLS for remote OTLP |
+| BUG-054 | F45 | P2 | XS | ✅ Fixed — strict bounded LIMIT and validated PostgreSQL-range OFFSET before SQL execution |
+| BUG-055 | F36/F38 | P1 | M | ✅ Fixed — loopback-only plaintext + fail-closed TLS/mTLS for remote OTLP |
 
 ### BUG-051 — F61: centralize pooled auth repository delegation
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** S
@@ -2563,7 +2575,7 @@ closing regression evidence.
 
 ### BUG-054 — F45: bound and validate repository list pagination
 - **Feature:** [F45](./FEATURES.md) · **Priority:** P2 · **Size:** XS
-- **Status:** 🐞 Open
+- **Status:** ✅ Fixed (2026-11-25) — `limit` is a strict non-boolean integer in 1..1000 and `offset` is a strict non-boolean integer in the PostgreSQL `bigint` range; malformed values fail before cursor use. `test_data_access.py::RepositoryPaginationTests` covers adversarial values and boundaries.
 - **Description:** `Repository.list()` converts `limit` and `offset` with `int()` but does not reject negative values or cap page size. PostgreSQL treats a negative LIMIT as unlimited, so a caller can accidentally or deliberately retrieve the entire tenant table; negative offsets and lossy values also create surprising behavior.
 - **AC1:** `limit` accepts only a non-boolean integer in the inclusive range 1..1000; default remains 100.
 - **AC2:** `offset` accepts only a non-boolean integer greater than or equal to zero; default remains zero.
@@ -2666,7 +2678,7 @@ closing regression evidence.
   - The DB forecast→category domain is pinned to real categories (e.g. FK to a product-category/taxonomy table rather than `throughput_standards`, or an exclusion of the overhead row), so the database cannot store an overhead forecast; covered by a `spec: F8.ac1` regression test (Python and DB-gated).
 
 ### BUG-061 — F8/CS-012: `load_store_hours` keeps only the first weekday's window and ignores non-zero open-time minutes
-- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Correctness (latent) · **Found:** 2026-11-21 (Claude review of CS-012)
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** ✅ Fixed (2026-11-25) — per-weekday windows are used by forecast validation, feature generation, and scheduler completeness; opening/closing times ceil minute, second, and microsecond fractions. Regressions cover weekday-specific hours, UTC weekday boundaries, and fractional seconds. **Type:** Correctness (latent) · **Found:** 2026-11-21 (Claude review of CS-012)
 - **Description:** `load_store_hours` builds one `StoreOpenWindow` per store via `grouped.setdefault(location_id, (open_time.hour, close_hour, set()))`, so the open/close hours come from whichever weekday row is read first and all other rows only contribute their weekday to `open_weekdays`. A store with different hours by day (e.g. shorter Sundays) is validated against a single day's window. Separately, the close time is rounded up for a non-zero minute (20:30 → 21) but the open time is floored to its hour, so a `06:30` open would wrongly admit a `06:00` pre-open forecast. Latent today because the seeded three stores share uniform, on-the-hour open times.
 - **Story:** As a forecast validator, I want each store's open window to reflect its actual per-weekday open and close times, so a forecast is accepted only within the hours that store is genuinely open on that day.
 - **Acceptance criteria:**
@@ -2716,7 +2728,7 @@ closing regression evidence.
 - **Resolution (merged — PR #13 `19cc927`; commits `8ed2eb1` fix, `cacffb7` test, `f053b8d` spec):** Migration `0021_bug065_forecast_finite_interval` adds the reversible, per-column `forecasts_interval_finite` CHECK (`v <> 'NaN'/'Infinity'/'-Infinity'` for each of `lower`, `p70`, `upper`), preceded by `lock_timeout` + `LOCK TABLE ... ACCESS EXCLUSIVE` and a preflight that raises an actionable error on pre-existing non-finite rows; downgrade drops only the new constraint. Regressions: `test_database_rejects_non_finite_interval_values` (NaN/±Infinity in each column, ordering-passing tuples attributed to the new constraint by name, finite boundaries accepted) and `test_migration_0021_preflight_rejects_non_finite_legacy_rows` (atomic preflight failure). Verified on disposable PostgreSQL 16.15 — focused contract suite 12/12, migration suite 3/3, upgrade→downgrade→upgrade reversible. Python `_validate_interval_value` unchanged.
 
 ### BUG-067 — F8/CS-012: BUG-065 migration is unavailable during an ordinary long-running forecast read
-- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** 🐞 Open · **Type:** Migration availability / deployment risk · **Found:** 2026-11-21 (independent review of merged BUG-065)
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** S · **Status:** ✅ Done (2026-11-26) · **Type:** Migration availability / deployment risk · **Found:** 2026-11-21 (independent review of merged BUG-065)
 - **Root cause:** `db/migrations/versions/0021_bug065_forecast_finite_interval.py:79` explicitly acquires `LOCK TABLE forecasts IN ACCESS EXCLUSIVE MODE` after setting a five-second local lock timeout. `ACCESS EXCLUSIVE` conflicts with the normal `ACCESS SHARE` lock taken by a `SELECT`, so even a read-only forecast request that remains in its transaction for more than five seconds prevents the migration from beginning. The lock is deliberately held through both the preflight scan and constraint creation.
 - **Reproduction (verified on local PostgreSQL 16):** downgrade a disposable database to `0020`; in session A run `BEGIN; SELECT 1 FROM forecasts LIMIT 1; SELECT pg_sleep(7); COMMIT;`; while A is sleeping, run `alembic upgrade head` in session B. At five seconds, B exits non-zero with `psycopg.errors.LockNotAvailable: canceling statement due to lock timeout` at `LOCK TABLE forecasts IN ACCESS EXCLUSIVE MODE`; after A commits, a retry succeeds.
 - **Impact:** a deploy can fail whenever an otherwise normal report, API request, or idle-in-transaction reader overlaps the migration. This is an explicitly documented PostgreSQL maintenance-window tradeoff, not a surprise semantic defect; however, the implementation holds the strongest lock for the preflight/table scan too, increasing the unavailable interval beyond the short metadata operation PostgreSQL necessarily requires.
@@ -2725,7 +2737,15 @@ closing regression evidence.
   - Replace the whole-migration exclusive-lock strategy with a concurrency-safe rollout that installs future-write enforcement under a short bounded metadata lock, then performs the legacy check/validation under PostgreSQL's weaker validation lock. It must prevent a writer from slipping an invalid row between enforcement and validation.
   - A PostgreSQL integration regression proves a reader held longer than the configured lock timeout fails the metadata phase fast, reports a retryable lock error, and leaves the revision/constraint state atomic; after that reader releases, a retry succeeds. A separate phase-level test proves long `ACCESS SHARE` reads may coexist with the legacy scan/constraint validation where PostgreSQL permits it.
   - A concurrent writer after enforcement begins cannot commit a non-finite interval, and a legacy non-finite row still gets the named actionable preflight failure without being rewritten.
-- **Plan:** [BUG-067 plan](./docs/plans/BUG-067-forecast-finite-migration-availability.md).
+- **Resolution:** Revision 0021 now installs future-write enforcement as `NOT VALID` under a bounded metadata
+  lock; revision 0024 commits that enforcement boundary before legacy preflight, then validates under the
+  weaker PostgreSQL lock. A failed legacy preflight stays at 0023 with the constraint installed and
+  unvalidated, preserving the row and making cleanup/retry possible. Downgrading 0024 restores the 0021
+  enforcement-only state. The original standalone plan is superseded by the combined plan.
+- **Verification:** disposable PostgreSQL 16 migration suite 5/5, including lock-timeout/retry, invalid-write
+  rejection, validation alongside a held reader, legacy-row retry, downgrade/re-upgrade, and the full F43
+  upgrade/downgrade/re-upgrade test. Forecast contract tests are included in the full-suite 484-pass run.
+- **Plan:** [BUG-031/067 implementation plan](./docs/plans/BUG-031-067-gateway-lifecycle-and-migration-availability.md).
 
 ### BUG-068 — F8/CS-012: BUG-065 preflight regression cannot detect a missing per-column legacy-data check
 - **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P3 · **Size:** XS · **Status:** 🐞 Open · **Type:** Regression-test false negative · **Found:** 2026-11-21 (independent review of merged BUG-065)
@@ -2739,7 +2759,7 @@ closing regression evidence.
   - Include the ordering-passing `(0, 1, Infinity)` case to prove an `upper`-only value gets the actionable preflight rather than a downstream generic CHECK failure; clean every committed fixture and finish at head.
 - **Plan:** [BUG-068 plan](./docs/plans/BUG-068-forecast-preflight-test-matrix.md).
 ### BUG-066 — F8/CS-012: malformed forecast payload types escape as built-in exceptions
-- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** XS · **Status:** 🐞 Open · **Type:** Input-validation / error-contract gap · **Found:** 2026-11-21 (review of CS-012)
+- **Feature:** [F8](./FEATURES.md) (CS-012) · **Priority:** P2 · **Size:** XS · **Status:** ✅ Done (2026-11-24, PR #34) · **Type:** Input-validation / error-contract gap · **Found:** 2026-11-21 (review of CS-012)
 - **Root cause:** `record_from_dict` and `from_json` in `contracts/forecast.py` construct the dataclasses from JSON values without validating their structure or scalar types. `validate_set` then assumes those types: for example, it calls `.strip()` on envelope versions and performs set membership on `product_category`. Valid JSON with `taxonomy_version: null` therefore raises `AttributeError`; a category array raises `TypeError` because lists are unhashable. `records` with the wrong shape or required keys that are absent can similarly leak `AttributeError` or `KeyError`.
 - **Impact:** A malformed forecast from an upstream model or persisted interchange payload can escape the contract-error boundary. Consumers that translate `ForecastContractError` into a client/data-quality response instead surface an unhandled exception or abort a batch with an unrelated error, obscuring which field is invalid.
 - **Reproduction:** Parse a structurally JSON-valid envelope with `taxonomy_version: null`, then call `validate_set`; it reaches `.strip()` and raises `AttributeError` instead of a forecast-contract error. A record with `product_category: []` reaches set membership and raises `TypeError`.
@@ -2748,6 +2768,7 @@ closing regression evidence.
   - `from_json`/`record_from_dict` reject non-object envelopes or records, missing required fields, a non-array `records` field, and wrong JSON scalar types with a documented typed payload error (a `ForecastContractError` subclass).
   - `validate_set` also validates field types for directly constructed dataclasses before calling string methods, collection membership, Decimal comparisons, or datetime operations; malformed values never leak raw `AttributeError` or `TypeError`.
   - Regressions cover null/numeric versions, an array category, a non-object record, missing required fields, and a non-array `records` value; canonical valid JSON and database-row round trips remain accepted.
+- **Resolution:** `InvalidForecastPayload`, a `ForecastContractError` subtype, now reports invalid envelope/record structures, required-field omissions, scalar-type mismatches, invalid timestamps, and malformed decimal input. Direct dataclass validation checks types before string operations, vocabulary membership, and uniqueness-key construction. Focused `test_forecast_contract.py` passes **15 tests**, including canonical JSON and database row round trips; CI PR #34 completed with `Test suite` and `Migration round-trip` passing, alongside lint, review, spec lint, traceability, and test-first guard.
 - **Plan:** [BUG-066 plan](./docs/plans/BUG-066-forecast-payload-types.md).
 
 ### BUG-069
@@ -2865,6 +2886,8 @@ closing regression evidence.
   - Measure the full-week gap before/after at the fixed 30s budget and record it against `reports/cs093_solver_scale.md`; only then tighten `DEFAULT_MAX_RELATIVE_GAP` to the new achievable value.
   - Keep CI bounded and the `OPTIMAL ⇔ proven` invariant from CS-093 intact.
 
+- **CS-015 full-week evidence:** The Maven seed returned infeasible for December 7–13, 2026 and no incumbent within the existing 30-second solve budget for December 8–14. A separate feasible three-store week passed the real ADK and PostgreSQL path. Compare the direct solver with the same Maven inputs and isolate binding assumptions before changing cost, coverage or staffing policies.
+
 ### CS-094 — Require coverage for every open store-hour, not only for hours a slot happens to cover
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
 - **Status:** ✅ Done (2026-11-23)
@@ -2888,3 +2911,33 @@ closing regression evidence.
   - Apply `COV-KEYHOLDER-OPEN` only at the open hour and `COV-KEYHOLDER-CLOSE` only at the close hour, so differing headcounts are honoured per edge.
   - Fail closed with a typed error naming the rule id when an expected coverage rule is absent, keeping the current "missing rule" behaviour.
   - Add a test with `COV-KEYHOLDER-OPEN = 2`, `COV-KEYHOLDER-CLOSE = 1` asserting the open hour requires 2 and the close hour requires 1, which fails under the current matcher.
+
+- **CS-015 follow-up:** Opening and closing key-holder rules now bind to their own canonical ID and hour. Remaining work covers the other free-text rule matches.
+
+### BUG-074 — Half-hour closing admits shifts after the store closes
+- **Status:** Fixed on the CS-011/015 branch.
+- **Finding:** Exact clock-hour forecast buckets rounded 20:30 to a 21:00 bucket boundary, and solver slots inherited that boundary as the latest allowable shift end.
+- **Validation:** The regression requires an exact 12:30 shift limit and coverage of the open portion of the final 12:00 bucket, and half-hour staffing capacity in the objective. The real three-store integration fixture also asserts every shift ends by the configured close.
+
+### BUG-075 — Tenant sessions can reuse a named statement across PgBouncer transactions
+- **Status:** Fixed on the CS-011/015 branch.
+- **Finding:** A forecast write over PgBouncer transaction pooling raised `DuplicatePreparedStatement` after a logical connection was replaced. Scoped tenant sessions now disable named prepares.
+- **Validation:** The live workflow seeds an older forecast, reads from fresh scoped sessions, and runs through a one-backend PgBouncer pool. The mode assertion queries the PgBouncer admin console in autocommit mode.
+
+### BUG-076 — Traceability requires standalone acceptance tags on test fixture helpers
+- **Status:** Fixed on the CS-011/015 branch.
+- **Finding:** The checker applied its missing-tag rule to every Python file under `test/`, but only indexed discoverable test modules.
+- **Validation:** The nested-checkout regression edits an imported fixture helper and a tagged test. It still proves changed tests without tags fail the gate.
+
+### CS-106 — Give each gateway app ownership of its store and routing connections
+- **Feature:** F30 (CS-030), F61 · **Priority:** P2 · **Status:** Implemented locally, pending merge
+- **Story:** As a gateway operator, I can restart an application or stop one of two applications in the same process while authenticated store reads keep working.
+- **Acceptance:** A second lifespan of the same app can query stores. Stopping a second app leaves the first app's pool usable. Startup and health checks allocate no connections. Fully injected adapters allocate no pool.
+- **Maintenance:** Share the exact-name cookie counting rule between access and refresh handlers. Remove the unused unfiltered tenant lookup. Run gateway tests that use no database even when PostgreSQL is offline.
+- **Plan and regression coverage:** [CS-106 gateway maintenance](docs/plans/CS-106-gateway-maintenance.md).
+
+### CS-107 — Make changed-file CI checks inspect the scheduler project
+- **Feature:** F6 · **Priority:** P2 · **Status:** Implemented locally, pending merge
+- **Finding:** Both CI scripts receive `coffee-scheduler/test/...` from Git. Traceability expects `test/...` and the review checklist prepends a second `coffee-scheduler/`, silently skipping files.
+- **Acceptance:** From a nested checkout, both gates reject a deliberately untagged test with an unlinked task comment. After correction both pass. Sibling paths are excluded. Both local changes and PR comparison ranges are covered.
+- **Implementation:** Share one project-relative, NUL-delimited diff reader. Inspect Python task markers in comment tokens so the checker can scan its own source.

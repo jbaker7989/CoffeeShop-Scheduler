@@ -14,7 +14,7 @@ class PlatformConfigTests(unittest.TestCase):
         requirements = (SCHEDULER_ROOT / "requirements.txt").read_text()
 
         self.assertIn("alembic==1.20.1", requirements)
-        self.assertIn("psycopg[binary]==3.3.9", requirements)
+        self.assertIn("psycopg[binary,pool]==3.3.9", requirements)
 
     # spec: F42.ac2 — Example environment distinguishes connection URLs and excludes secrets.
     def test_env_example_documents_connection_urls_and_secret_boundary(self):

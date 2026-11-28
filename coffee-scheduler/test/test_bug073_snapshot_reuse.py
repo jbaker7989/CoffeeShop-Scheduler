@@ -63,15 +63,15 @@ class SnapshotReuseTests(unittest.TestCase):
             return _snapshot(proposal.employee_id)
 
         with patch.object(constraints, "load_snapshot", side_effect=loader):
-            adapter = constraints.legality_from_compliance("dsn-a", _inputs())
+            adapter = constraints.legality_from_compliance("dsn-a", _inputs(), tenant_id=TENANT)
             first = adapter(_employee(1), ShiftSlot(3, DAY, Decimal("8"), Decimal("10")))
             second = adapter(_employee(1), ShiftSlot(5, DAY + timedelta(days=1), Decimal("10"), Decimal("12")))
             other = adapter(_employee(2), ShiftSlot(3, DAY, Decimal("8"), Decimal("10")))
             self.assertEqual(calls, [(1, "dsn-a"), (2, "dsn-a")])
-            uncached_first = constraints.legality_from_compliance("dsn-a", _inputs())(
+            uncached_first = constraints.legality_from_compliance("dsn-a", _inputs(), tenant_id=TENANT)(
                 _employee(1), ShiftSlot(3, DAY, Decimal("8"), Decimal("10"))
             )
-            uncached_second = constraints.legality_from_compliance("dsn-a", _inputs())(
+            uncached_second = constraints.legality_from_compliance("dsn-a", _inputs(), tenant_id=TENANT)(
                 _employee(1), ShiftSlot(5, DAY + timedelta(days=1), Decimal("10"), Decimal("12"))
             )
         self.assertEqual(first, second)
@@ -88,8 +88,8 @@ class SnapshotReuseTests(unittest.TestCase):
             return _snapshot(proposal.employee_id)
 
         with patch.object(constraints, "load_snapshot", side_effect=loader):
-            first = constraints.legality_from_compliance("dsn-a", _inputs())
-            second = constraints.legality_from_compliance("dsn-b", _inputs())
+            first = constraints.legality_from_compliance("dsn-a", _inputs(), tenant_id=TENANT)
+            second = constraints.legality_from_compliance("dsn-b", _inputs(), tenant_id=TENANT)
             self.assertTrue(first(_employee(1), ShiftSlot(3, DAY, Decimal("8"), Decimal("10"))).allowed)
             self.assertTrue(second(_employee(1), ShiftSlot(3, DAY, Decimal("8"), Decimal("10"))).allowed)
         self.assertEqual(calls, ["dsn-a", "dsn-b"])
@@ -110,7 +110,7 @@ class SnapshotReuseTests(unittest.TestCase):
 
         with patch.object(constraints, "Proposal", side_effect=proposal_with_scope), \
                 patch.object(constraints, "load_snapshot", side_effect=loader):
-            adapter = constraints.legality_from_compliance("dsn-a", _inputs())
+            adapter = constraints.legality_from_compliance("dsn-a", _inputs(), tenant_id=TENANT)
             adapter(_employee(1), ShiftSlot(3, DAY, Decimal("8"), Decimal("10")))
             adapter(_employee(1), ShiftSlot(5, DAY, Decimal("8"), Decimal("10")))
         self.assertEqual(calls, [("tenant-a", "employer-a"), ("tenant-b", "employer-b")])
@@ -166,7 +166,7 @@ class SnapshotReuseDatabaseTests(unittest.TestCase):
                     return original(proposal, dsn=dsn)
 
                 with patch.object(constraints, "load_snapshot", side_effect=counted):
-                    adapter = constraints.legality_from_compliance(DSN, inputs)
+                    adapter = constraints.legality_from_compliance(DSN, inputs, tenant_id=TENANT)
                     before = adapter(employee, ShiftSlot(3, DAY, Decimal("8"), Decimal("10")))
                     after = adapter(employee, ShiftSlot(5, DAY, Decimal("10"), Decimal("12")))
                 self.assertEqual(calls, 1)

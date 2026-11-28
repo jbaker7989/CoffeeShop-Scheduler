@@ -48,14 +48,16 @@ def open_session_context(conn, *, role: str, tenant_id) -> None:
 
 
 @contextlib.contextmanager
-def tenant_session(dsn: str | None = None, *, role: str, tenant_id):
+def tenant_session(dsn: str | None = None, *, role: str, tenant_id, repeatable_read: bool = False):
     """Connect, open a transaction, apply the role + tenant context, yield the conn.
 
     Commits on clean exit, rolls back on error. The connection is non-autocommit so
     `SET LOCAL` persists for the whole unit of work.
     """
     url = dsn or os.environ.get("DATABASE_URL") or "postgresql://coffeeshop:coffeeshop@localhost:5432/coffeeshop"
-    with psycopg.connect(url) as conn:  # psycopg3 default: autocommit=False
-        with conn.transaction():
-            open_session_context(conn, role=role, tenant_id=tenant_id)
-            yield conn
+    # Named statements cannot follow a logical connection across transaction-pool backends.
+    with psycopg.connect(url, prepare_threshold=None, connect_timeout=5) as conn, conn.transaction():
+        if repeatable_read:
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        open_session_context(conn, role=role, tenant_id=tenant_id)
+        yield conn

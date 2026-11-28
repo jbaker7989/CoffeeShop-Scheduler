@@ -1,9 +1,8 @@
 """PostgreSQL migration reversibility integration test for F43."""
 import os
-from pathlib import Path
 import subprocess
 import unittest
-
+from pathlib import Path
 
 # spec: F43.ac3 — Migrations round-trip without leaving domain schema objects.
 EXPECTED_TABLES = {
@@ -14,7 +13,7 @@ EXPECTED_TABLES = {
     "calibration_log", "employees", "employee_pii", "labor_rules",
     "consent_waivers", "events", "schedules", "shifts", "shift_assignments",
     "forecasts", "rule_eval_log", "rule_eval_log_default", "transactions",
-    "transactions_default", "weather_hourly", "weather_hourly_default", "weather_daily",
+    "transactions_default", "weather_hourly", "weather_hourly_default", "weather_daily", "schedule_draft_runs",
 }
 EXPECTED_ROLES = {"app_rw", "app_ro", "secrets_rw"}
 DB_DIR = Path(__file__).resolve().parents[1] / "db"
@@ -76,16 +75,84 @@ class MigrationRoundTripTests(unittest.TestCase):
 
     def test_upgrade_downgrade_upgrade_leaves_only_alembic_metadata_at_base(self) -> None:
         self.alembic("upgrade", "head")
-        self.assertTrue(EXPECTED_TABLES <= self.public_tables())
+        self.assertTrue(self.public_tables() >= EXPECTED_TABLES)
         self.assertEqual(EXPECTED_ROLES, self.roles())
-
         self.alembic("downgrade", "base")
         self.assertFalse(EXPECTED_TABLES & self.public_tables())
         self.assertFalse(EXPECTED_ROLES & self.roles())
 
         self.alembic("upgrade", "head")
-        self.assertTrue(EXPECTED_TABLES <= self.public_tables())
+        self.assertTrue(self.public_tables() >= EXPECTED_TABLES)
         self.assertEqual(EXPECTED_ROLES, self.roles())
+
+    # spec: F43.ac3 / F12.ac7 — Downgrade removes draft data without deleting legacy checkpoints.
+    def test_schedule_draft_migration_preserves_legacy_checkpoint(self):
+        import psycopg
+
+        self.alembic("upgrade", "head")
+        tenant = "00000000-0000-0000-0000-000000000001"
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            ids = [row[0] for row in conn.execute("SELECT gen_random_uuid() FROM generate_series(1, 2)")]
+            conn.execute("""
+                INSERT INTO schedule_draft_runs (tenant_id, id, issuer, subject, request_hash, lease_until, stage)
+                VALUES (%s,%s,'fixture','fixture','fixture',clock_timestamp(),'done')
+                """, (tenant, ids[0]))
+            for agent, checkpoint in zip(ids, ('{"workflow":"schedule-draft"}', '{"legacy":true}'), strict=True):
+                conn.execute("INSERT INTO langgraph_checkpoints (tenant_id, agent_id, checkpoint) VALUES (%s,%s,%s::jsonb)",
+                             (tenant, agent, checkpoint))
+        try:
+            self.alembic("downgrade", "0024")
+            self.assertNotIn("schedule_draft_runs", self.public_tables())
+            with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+                rows = conn.execute("SELECT agent_id FROM langgraph_checkpoints WHERE agent_id = ANY(%s)", (ids,)).fetchall()
+                self.assertEqual(rows, [(ids[1],)])
+            self.alembic("upgrade", "head")
+            with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+                self.assertEqual(conn.execute("SELECT count(*) FROM schedule_draft_runs").fetchone()[0], 0)
+        finally:
+            self.alembic("upgrade", "head")
+            with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+                conn.execute("DELETE FROM langgraph_checkpoints WHERE agent_id = ANY(%s)", (ids,))
+
+    # spec: F43.ac3 / F61.ac8 — BUG-043 throttle state/functions reverse cleanly and re-upgrade.
+    def test_bug043_throttle_objects_round_trip(self) -> None:
+        import psycopg
+
+        self.alembic("upgrade", "head")
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            self.assertIsNotNone(conn.execute(
+                "SELECT to_regclass('public.auth_invitation_accept_throttle')"
+            ).fetchone()[0])
+            self.assertEqual(
+                {"auth_reserve_invitation_accept", "auth_complete_invitation_accept"},
+                {row[0] for row in conn.execute(
+                    "SELECT proname FROM pg_proc "
+                    "WHERE pronamespace = 'public'::regnamespace "
+                    "AND proname IN ('auth_reserve_invitation_accept', "
+                    "'auth_complete_invitation_accept')"
+                )},
+            )
+
+        self.alembic("downgrade", "0021")
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT to_regclass('public.auth_invitation_accept_throttle')"
+            ).fetchone()[0])
+            self.assertEqual(
+                0,
+                conn.execute(
+                    "SELECT count(*) FROM pg_proc "
+                    "WHERE pronamespace = 'public'::regnamespace "
+                    "AND proname IN ('auth_reserve_invitation_accept', "
+                    "'auth_complete_invitation_accept')"
+                ).fetchone()[0],
+            )
+
+        self.alembic("upgrade", "head")
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            self.assertIsNotNone(conn.execute(
+                "SELECT to_regclass('public.auth_invitation_accept_throttle')"
+            ).fetchone()[0])
 
     # spec: F34.ac3 — Coverage rules retain an effective daterange through a migration round-trip.
     def test_coverage_rules_validity_round_trips(self) -> None:
@@ -101,10 +168,8 @@ class MigrationRoundTripTests(unittest.TestCase):
         self.assertEqual("daterange", self.coverage_rules_validity_type())
 
 
-    # spec: F8.ac3 / BUG-065 — migration 0021 preflights legacy non-finite rows and
-    # fails atomically (Alembic stays at 0020, the row is untouched) rather than adding
-    # the constraint or silently rewriting forecast values.
-    def test_migration_0021_preflight_rejects_non_finite_legacy_rows(self) -> None:
+    # spec: F8.ac3 / BUG-065 / BUG-067 — the later validation preflight preserves legacy rows.
+    def test_migration_0024_preflight_rejects_non_finite_legacy_rows(self) -> None:
         import psycopg
 
         url = os.environ["DATABASE_URL"]
@@ -128,21 +193,20 @@ class MigrationRoundTripTests(unittest.TestCase):
                 (fixture_tenant,),
             )
 
-        # Upgrading to 0021 must fail with the actionable preflight message.
+        # 0021 installs future-write enforcement without scanning. The 0024 preflight
+        # must fail with an actionable diagnostic and leave the data untouched.
         completed = self._run_alembic("upgrade", "head")
-        self.assertNotEqual(completed.returncode, 0, "0021 upgrade should fail on a non-finite legacy row")
+        self.assertNotEqual(completed.returncode, 0, "0024 validation should fail on a non-finite legacy row")
         self.assertIn("BUG-065 preflight", completed.stdout + completed.stderr)
 
-        # The migration transaction rolled back atomically: still at 0020, no finite
-        # constraint, and the offending row is unchanged (not rewritten).
-        self.assertEqual("0020", self.current_revision())
+        # 0021-0023 committed independently; failed 0024 leaves the enforcement
+        # constraint installed but unvalidated, and does not rewrite the bad row.
+        self.assertEqual("0023", self.current_revision())
         with psycopg.connect(url) as conn:
-            self.assertEqual(
-                0,
-                conn.execute(
-                    "SELECT count(*) FROM pg_constraint WHERE conname = 'forecasts_interval_finite'"
-                ).fetchone()[0],
-            )
+            self.assertEqual((1, True), conn.execute(
+                "SELECT count(*), bool_and(NOT convalidated) FROM pg_constraint "
+                "WHERE conname = 'forecasts_interval_finite'"
+            ).fetchone())
             self.assertEqual(
                 1,
                 conn.execute(
@@ -157,15 +221,81 @@ class MigrationRoundTripTests(unittest.TestCase):
         with psycopg.connect(url) as conn, conn.transaction():
             conn.execute("SET session_replication_role = replica")
             conn.execute("DELETE FROM forecasts WHERE tenant_id = %s", (fixture_tenant,))
-        self.alembic("upgrade", "head")
-        self.assertEqual("0021", self.current_revision())
+        self.alembic("upgrade", "0024")
+        self.assertEqual("0024", self.current_revision())
         with psycopg.connect(url) as conn:
-            self.assertEqual(
-                1,
+            self.assertEqual((1, True), conn.execute(
+                "SELECT count(*), bool_and(convalidated) FROM pg_constraint "
+                "WHERE conname = 'forecasts_interval_finite'"
+            ).fetchone())
+
+    # spec: F8.ac3 / BUG-067 — only bounded metadata-lock install contends with long reads;
+    # online validation succeeds while the same ordinary read lock remains held.
+    def test_bug067_short_install_lock_and_online_validation(self) -> None:
+        import time
+
+        import psycopg
+        from psycopg.errors import CheckViolation
+
+        url = os.environ["DATABASE_URL"]
+        self.alembic("upgrade", "head")
+        self.alembic("downgrade", "0020")
+
+        reader = psycopg.connect(url)
+        reader.execute("BEGIN")
+        reader.execute("SELECT count(*) FROM forecasts").fetchone()
+        started = time.monotonic()
+        blocked = self._run_alembic("upgrade", "0021")
+        elapsed = time.monotonic() - started
+        self.assertNotEqual(0, blocked.returncode, blocked.stdout + blocked.stderr)
+        self.assertIn("lock timeout", (blocked.stdout + blocked.stderr).lower())
+        self.assertLess(elapsed, 12, "metadata lock wait must remain bounded")
+        self.assertEqual("0020", self.current_revision())
+        reader.rollback()
+        reader.close()
+
+        self.alembic("upgrade", "0021")
+        with psycopg.connect(url) as conn:
+            self.assertEqual(False, conn.execute(
+                "SELECT convalidated FROM pg_constraint WHERE conname = 'forecasts_interval_finite'"
+            ).fetchone()[0])
+
+        # NOT VALID still enforces every new row immediately.
+        with psycopg.connect(url, autocommit=True) as conn:
+            conn.execute("SET session_replication_role = replica")
+            with self.assertRaises(CheckViolation) as raised:
                 conn.execute(
-                    "SELECT count(*) FROM pg_constraint WHERE conname = 'forecasts_interval_finite'"
-                ).fetchone()[0],
-            )
+                    "INSERT INTO forecasts (tenant_id, location_id, product_category, "
+                    "forecast_hour, p70, lower, upper, model_version, taxonomy_version) VALUES "
+                    "('00000000-0000-0000-0000-0000000000ab', 1, 'Coffee', now(), "
+                    "'Infinity'::numeric, 0, 'Infinity'::numeric, 'bug067-write', 'bug067-write')"
+                )
+            self.assertIn("forecasts_interval_finite", str(raised.exception))
+
+        self.alembic("upgrade", "0023")
+        reader = psycopg.connect(url)
+        reader.execute("BEGIN")
+        reader.execute("SELECT count(*) FROM forecasts").fetchone()
+        # VALIDATE's SHARE UPDATE EXCLUSIVE lock is compatible with ACCESS SHARE.
+        validated = self._run_alembic("upgrade", "0024")
+        self.assertEqual(0, validated.returncode, validated.stdout + validated.stderr)
+        reader.rollback()
+        reader.close()
+        self.assertEqual("0024", self.current_revision())
+        with psycopg.connect(url) as conn:
+            self.assertEqual(True, conn.execute(
+                "SELECT convalidated FROM pg_constraint WHERE conname = 'forecasts_interval_finite'"
+            ).fetchone()[0])
+        self.alembic("downgrade", "0023")
+        with psycopg.connect(url) as conn:
+            self.assertEqual(False, conn.execute(
+                "SELECT convalidated FROM pg_constraint WHERE conname = 'forecasts_interval_finite'"
+            ).fetchone()[0])
+        self.alembic("upgrade", "0024")
+        with psycopg.connect(url) as conn:
+            self.assertEqual(True, conn.execute(
+                "SELECT convalidated FROM pg_constraint WHERE conname = 'forecasts_interval_finite'"
+            ).fetchone()[0])
 
 
 if __name__ == "__main__":

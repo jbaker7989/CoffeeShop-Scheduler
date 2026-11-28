@@ -19,24 +19,28 @@ Design:
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from fastapi import Request
 
+from auth.api import BrowserCookieConfig, cookie_pair_count
 from auth.jwt import RS256KeyRing, RS256TokenService
+from auth.mfa import MfaSecretCipher
 from auth.passwords import Argon2idPasswordService
 from auth.repository import (
-    AuthRepository,
     AcceptedInvite,
+    AuditEntry,
+    AuthRepository,
     ConsumeResult,
     DatabaseAuthRepository,
+    InvitationRecord,
     RefreshTokenRecord,
     TenantMembershipRecord,
     TenantUserRecord,
-    InvitationRecord,
-    AuditEntry,
 )
+from auth.reset import PasswordResetService
 from auth.service import (
     AUTH_DATABASE_URL_ENV,
     AUTH_JWT_AUDIENCE_ENV,
@@ -45,9 +49,6 @@ from auth.service import (
     _positive_env_int,
 )
 from auth.tokens import OpaqueRefreshTokenService
-from auth.reset import PasswordResetService
-from auth.mfa import MfaSecretCipher
-
 
 _AUTH_CREDENTIAL_TABLES = ("tenant_users", "auth_refresh_tokens")
 
@@ -134,6 +135,16 @@ class PooledAuthRepository(AuthRepository):
     def consume_recovery_code(self, tenant_id: str, user_id: str, digest: str) -> bool:
         return self._call("consume_recovery_code", tenant_id, user_id, digest)
 
+    def begin_invitation_accept(
+        self, ip: str, when: datetime, max_failures: int, window_seconds: int, lockout_seconds: int,
+    ) -> bool:
+        return self._call(
+            "begin_invitation_accept", ip, when, max_failures, window_seconds, lockout_seconds,
+        )
+
+    def complete_invitation_accept(self, ip: str, *, succeeded: bool, when: datetime) -> None:
+        return self._call("complete_invitation_accept", ip, succeeded=succeeded, when=when)
+
     def create_invitation(self, invitation: InvitationRecord) -> str:
         return self._call("create_invitation", invitation)
 
@@ -191,30 +202,29 @@ def _validate_auth_database_principal(pool: Any) -> None:
     if pool.closed:
         pool.open(wait=True)
     try:
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT r.rolsuper, r.rolbypassrls, "
-                    "pg_has_role(current_user, 'auth_svc', 'MEMBER') "
-                    "FROM pg_roles AS r WHERE r.rolname = current_user"
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT r.rolsuper, r.rolbypassrls, "
+                "pg_has_role(current_user, 'auth_svc', 'MEMBER') "
+                "FROM pg_roles AS r WHERE r.rolname = current_user"
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise GatewayAuthConfigError("authenticated database role could not be inspected")
+            is_superuser, bypasses_rls, has_auth_service_membership = row
+            if is_superuser or bypasses_rls or not has_auth_service_membership:
+                raise GatewayAuthConfigError(
+                    "AUTH_DATABASE_URL must authenticate as a non-superuser, non-BYPASSRLS auth_svc member"
                 )
-                row = cur.fetchone()
-                if row is None:
-                    raise GatewayAuthConfigError("authenticated database role could not be inspected")
-                is_superuser, bypasses_rls, has_auth_service_membership = row
-                if is_superuser or bypasses_rls or not has_auth_service_membership:
+            for table in _AUTH_CREDENTIAL_TABLES:
+                cur.execute(
+                    "SELECT has_table_privilege(current_user, %s, 'SELECT, INSERT, UPDATE, DELETE')",
+                    (table,),
+                )
+                if cur.fetchone()[0]:
                     raise GatewayAuthConfigError(
-                        "AUTH_DATABASE_URL must authenticate as a non-superuser, non-BYPASSRLS auth_svc member"
+                        "AUTH_DATABASE_URL principal must use auth_* functions, not direct credential-table privileges"
                     )
-                for table in _AUTH_CREDENTIAL_TABLES:
-                    cur.execute(
-                        "SELECT has_table_privilege(current_user, %s, 'SELECT, INSERT, UPDATE, DELETE')",
-                        (table,),
-                    )
-                    if cur.fetchone()[0]:
-                        raise GatewayAuthConfigError(
-                            "AUTH_DATABASE_URL principal must use auth_* functions, not direct credential-table privileges"
-                        )
     except GatewayAuthConfigError:
         raise
     except Exception as exc:
@@ -274,20 +284,7 @@ def build_auth_service_from_env(
     )
 
 
-# Cookie name the browser transport uses for the short-lived access credential (Path=/), so the
-# gateway can read it on protected requests. Mirrors auth.api.BrowserCookieConfig.access_name.
-ACCESS_COOKIE_NAME = "access_token"
-
-
-def _cookie_pair_count(request: Request, name: str) -> int:
-    """Count an exact cookie name across the raw Cookie headers (FastAPI collapses duplicates)."""
-    count = 0
-    for header in request.headers.getlist("cookie"):
-        for pair in header.split(";"):
-            cookie_name, separator, _ = pair.strip().partition("=")
-            if separator and cookie_name == name:
-                count += 1
-    return count
+ACCESS_COOKIE_NAME = BrowserCookieConfig.access_name
 
 
 def extract_access_credential(request: Request) -> str | None:
@@ -299,7 +296,7 @@ def extract_access_credential(request: Request) -> str | None:
     """
     auth_headers = request.headers.getlist("authorization")
     has_bearer = len(auth_headers) >= 1
-    cookie_count = _cookie_pair_count(request, ACCESS_COOKIE_NAME)
+    cookie_count = cookie_pair_count(request, ACCESS_COOKIE_NAME)
 
     if has_bearer and cookie_count >= 1:
         return None  # ambiguous: two transports at once

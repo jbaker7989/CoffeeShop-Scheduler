@@ -1,7 +1,7 @@
 {
   "name": "loyalty",
+  "description": "Design placeholder for loyalty.",
   "version": "0.0.0",
-  "description": "",
-  "capabilities": [],
-  "auth": {}
+  "status": "design-only",
+  "skills": []
 }

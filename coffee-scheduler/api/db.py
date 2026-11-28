@@ -3,26 +3,16 @@
 Tenant lookup intentionally runs as the DSN's owner role.  Tenant-scoped reads
 switch to ``app_rw`` inside a transaction through the shared RLS session helper.
 """
+
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+from threading import Lock
 
 from psycopg_pool import ConnectionPool
 
 from data_access.session import open_session_context
 
 from .config import GATEWAY_DATABASE_URL
-
-
-# PgBouncer is in transaction-pooling mode: psycopg auto-prepared statements
-# would otherwise be tied to a different backend connection on a later request.
-pool = ConnectionPool(
-    conninfo=GATEWAY_DATABASE_URL,
-    kwargs={"prepare_threshold": None},
-    min_size=1,
-    open=False,
-)
 
 _STORE_COLUMNS = (
     "location_id",
@@ -34,47 +24,44 @@ _STORE_COLUMNS = (
 )
 
 
-@contextmanager
-def _pooled_connection() -> Iterator:
-    """Open the module pool on first use and return one connection."""
-    if pool.closed:
-        pool.open()
-    with pool.connection() as conn:
-        yield conn
+class GatewayDatabase:
+    """Own the store and routing connections for one application."""
 
+    def __init__(self) -> None:
+        self._pool: ConnectionPool | None = None
+        self._lock = Lock()
 
-def resolve_tenant_id(slug: str) -> str | None:
-    """Resolve a public tenant slug using the owner connection for login only."""
-    with _pooled_connection() as conn:
-        # Do not SET LOCAL ROLE here: app_rw is deliberately unable to read tenants.
-        with conn.transaction():
-            row = conn.execute("SELECT id FROM tenants WHERE slug=%s", (slug,)).fetchone()
-    return str(row[0]) if row else None
+    def _pool_for_request(self) -> ConnectionPool:
+        with self._lock:
+            if self._pool is None:
+                # PgBouncer can assign a different backend for each transaction.
+                pool = ConnectionPool(
+                    conninfo=GATEWAY_DATABASE_URL, kwargs={"prepare_threshold": None}, min_size=1, open=False
+                )
+                pool.open()
+                self._pool = pool
+            return self._pool
 
+    def close(self) -> None:
+        with self._lock:
+            if self._pool is not None:
+                self._pool.close()
+                self._pool = None
 
-def resolve_active_slug(slug: str) -> str | None:
-    """Return only tenants that are routable at the public edge.
-
-    ``trial`` is deliberately routable even though CS-061b's separate
-    ``auth_access_state`` policy currently permits only ``active`` tenants; that
-    reconciliation is tracked separately.  Callers receive no status detail.
-    """
-    with _pooled_connection() as conn:
-        with conn.transaction():
+    def resolve_active_slug(self, slug: str) -> str | None:
+        """Resolve active and trial tenants for public routing."""
+        with self._pool_for_request().connection() as conn, conn.transaction():
             row = conn.execute(
                 "SELECT id FROM tenants WHERE slug=%s AND status IN ('active', 'trial')",
                 (slug,),
             ).fetchone()
-    return str(row[0]) if row else None
+        return str(row[0]) if row else None
 
-
-def fetch_stores(tenant_id: str) -> list[dict]:
-    """Return stores visible to the signed-in tenant under RLS."""
-    with _pooled_connection() as conn:
-        with conn.transaction():
+    def fetch_stores(self, tenant_id: str) -> list[dict]:
+        """Return stores visible to the signed-in tenant under RLS."""
+        with self._pool_for_request().connection() as conn, conn.transaction():
             open_session_context(conn, role="app_rw", tenant_id=tenant_id)
             rows = conn.execute(
-                "SELECT location_id, store_location, max_staff_on_floor, stations, profile_type, basis "
-                "FROM stores"
+                "SELECT location_id, store_location, max_staff_on_floor, stations, profile_type, basis FROM stores"
             ).fetchall()
-    return [dict(zip(_STORE_COLUMNS, row, strict=True)) for row in rows]
+        return [dict(zip(_STORE_COLUMNS, row, strict=True)) for row in rows]

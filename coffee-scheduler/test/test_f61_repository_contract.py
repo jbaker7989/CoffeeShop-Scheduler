@@ -22,6 +22,8 @@ _CORE_ABSTRACT_METHODS = (
     "list_invitations",
     "revoke_invitation",
     "record_audit",
+    "begin_invitation_accept",
+    "complete_invitation_accept",
 )
 
 

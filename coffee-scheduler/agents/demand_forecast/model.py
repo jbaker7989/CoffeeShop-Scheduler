@@ -424,7 +424,11 @@ def predict(conn, model_version, *, target_window, feature_version=None, rows=No
                        lower=_to_money(lower), upper=_to_money(upper), model_version=model_version,
                        taxonomy_version=model["taxonomy_version"]))
     forecast_set = ForecastSet(CONTRACT_VERSION, model["taxonomy_version"], model_version, datetime.now(UTC), tuple(records))
-    validate_set(forecast_set, allowed_categories=load_vocabulary(conn), allowed_locations={3, 5, 8}, store_hours=load_store_hours(conn))
+    validate_set(
+        forecast_set, allowed_categories=load_vocabulary(conn, taxonomy_version=model["taxonomy_version"]),
+        allowed_locations={row[0] for row in conn.execute("SELECT location_id FROM stores").fetchall()},
+        store_hours=load_store_hours(conn),
+    )
     return forecast_set
 
 

@@ -6,9 +6,10 @@ import os
 import sys
 import unittest
 from dataclasses import fields
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 SCHEDULER_ROOT = Path(__file__).resolve().parents[1]
@@ -18,9 +19,11 @@ if str(SCHEDULER_ROOT) not in sys.path:
 from contracts.forecast import (  # noqa: E402
     CONTRACT_VERSION,
     DuplicateRecordError,
+    ForecastContractError,
     ForecastRecord,
     ForecastSet,
     IntervalError,
+    InvalidForecastPayload,
     StoreHoursError,
     StoreOpenWindow,
     TimezoneError,
@@ -28,6 +31,7 @@ from contracts.forecast import (  # noqa: E402
     VersionMismatchError,
     from_json,
     from_row,
+    load_store_hours,
     load_vocabulary,
     missing_keys,
     record_from_dict,
@@ -97,6 +101,105 @@ except Exception as exc:  # pragma: no cover - environment-dependent skip
 
 
 class ForecastContractTests(unittest.TestCase):
+    # spec: F8.ac1/ac2 — malformed but valid JSON fails in the documented contract family.
+    def test_malformed_envelope_shapes_and_types_are_typed_errors(self):
+        for payload in ("null", "[]", "{}", json.dumps({"contract_version": None}),
+                        json.dumps({"contract_version": CONTRACT_VERSION, "taxonomy_version": "t",
+                                    "model_version": "m", "generated_at": "2026-01-05T08:00:00+00:00",
+                                    "records": {}}),
+                        json.dumps({"contract_version": CONTRACT_VERSION, "taxonomy_version": "t",
+                                    "model_version": "m", "generated_at": None, "records": []})):
+            with self.subTest(payload=payload), self.assertRaises(ForecastContractError):
+                from_json(payload)
+
+    def test_malformed_record_shapes_and_scalars_are_typed_errors(self):
+        base={"location_id":5,"product_category":"Coffee","forecast_hour":"2026-01-05T09:00:00-05:00",
+              "p70":"42","lower":"35","upper":"50","model_version":"m","taxonomy_version":"t"}
+        for malformed in (None, [], {**base,"product_category":[]}, {k:v for k,v in base.items() if k!="p70"},
+                          {**base,"location_id":True}, {**base,"forecast_hour":{}}, {**base,"p70":"not-a-number"}):
+            with self.subTest(malformed=malformed), self.assertRaises(InvalidForecastPayload):
+                record_from_dict(malformed)
+        self.assertEqual(record_from_dict(base).product_category, "Coffee")
+        with self.assertRaises(InvalidForecastPayload):
+            from_json(json.dumps({"contract_version":CONTRACT_VERSION,"taxonomy_version":"t","model_version":"m",
+                                  "generated_at":"2026-01-05T08:00:00+00:00","records":[None]}))
+
+    def test_direct_dataclass_values_cannot_bypass_shape_checks(self):
+        for record in (valid_record(product_category=[]), valid_record(forecast_hour="bad"),
+                       valid_record(p70="42"), valid_record(model_version=None)):
+            with self.assertRaises(ForecastContractError):
+                validate_set(valid_set((record,)), allowed_categories=CATEGORIES,
+                             allowed_locations=ALLOWED_LOCATIONS, store_hours=STORE_HOURS)
+        for field_value in (None, 1):
+            with self.assertRaises(ForecastContractError):
+                validate_set(ForecastSet(CONTRACT_VERSION, field_value, "m", datetime.now(UTC), ()),
+                             allowed_categories=CATEGORIES, allowed_locations=ALLOWED_LOCATIONS,
+                             store_hours=STORE_HOURS)
+    def test_load_store_hours_keeps_per_weekday_windows(self):
+        conn = Mock()
+        conn.execute.return_value.fetchall.return_value = [
+            (5, "Monday", time(6), time(21)),
+            (5, "Saturday", time(7), time(18)),
+        ]
+        self.assertEqual(load_store_hours(conn), {
+            5: {
+                0: StoreOpenWindow(6, 21, frozenset({0})),
+                5: StoreOpenWindow(7, 18, frozenset({5})),
+            },
+        })
+
+    def test_load_store_hours_ceils_open_minutes(self):
+        conn = Mock()
+        conn.execute.return_value.fetchall.return_value = [
+            (5, "Monday", time(6, 30), time(20, 30)),
+        ]
+        window = load_store_hours(conn)[5]
+        # Read either shape so the regression isolates rounding.
+        if not isinstance(window, StoreOpenWindow):
+            window = window[0]
+        self.assertEqual((window.open_hour, window.close_hour), (7, 21))
+
+    def test_load_store_hours_ceils_seconds_and_microseconds(self):
+        conn = Mock()
+        conn.execute.return_value.fetchall.return_value = [
+            (5, "Monday", time(6, 0, 1), time(20, 0, 1)),
+            (5, "Tuesday", time(6, 0, 0, 1), time(20, 0, 0, 1)),
+        ]
+        windows = load_store_hours(conn)[5]
+        self.assertEqual((windows[0].open_hour, windows[0].close_hour), (7, 21))
+        self.assertEqual((windows[1].open_hour, windows[1].close_hour), (7, 21))
+
+    def test_validate_set_uses_record_weekday_window(self):
+        hours = {5: {
+            0: StoreOpenWindow(6, 21, frozenset({0})),
+            5: StoreOpenWindow(7, 18, frozenset({5})),
+        }}
+        for day, hour, accepted in ((5, 6, True), (10, 7, True), (10, 6, False), (11, 9, False)):
+            with self.subTest(day=day, hour=hour):
+                record = valid_record(forecast_hour=datetime(
+                    2026, 1, day, hour, tzinfo=ZoneInfo("America/New_York"),
+                ))
+                if accepted:
+                    validate_set(valid_set((record,)), allowed_categories=CATEGORIES,
+                                 allowed_locations=ALLOWED_LOCATIONS, store_hours=hours)
+                else:
+                    with self.assertRaises(StoreHoursError):
+                        validate_set(valid_set((record,)), allowed_categories=CATEGORIES,
+                                     allowed_locations=ALLOWED_LOCATIONS, store_hours=hours)
+
+    def test_validate_set_accepts_uniform_window_mapping(self):
+        validate_set(valid_set(), allowed_categories=CATEGORIES,
+                     allowed_locations=ALLOWED_LOCATIONS, store_hours=STORE_HOURS)
+
+    def test_validate_set_weekday_boundary_across_utc(self):
+        record = valid_record(forecast_hour=datetime(2026, 1, 11, 2, tzinfo=UTC))
+        hours = {5: {
+            5: StoreOpenWindow(7, 22, frozenset({5})),
+            6: StoreOpenWindow(7, 18, frozenset({6})),
+        }}
+        validate_set(valid_set((record,)), allowed_categories=CATEGORIES,
+                     allowed_locations=ALLOWED_LOCATIONS, store_hours=hours)
+
     # spec: F8.ac1 — Pinned taxonomy categories are accepted and unknown or empty vocabularies fail closed.
     def test_ac1_vocabulary_accepts_pinned_categories_and_fails_closed(self):
         validate_record(

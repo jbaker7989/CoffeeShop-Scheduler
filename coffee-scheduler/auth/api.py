@@ -113,15 +113,8 @@ def _set_browser_cookies(response: Response, tokens: IssuedTokens, cfg: BrowserC
     _set_cookie(response, name=cfg.access_name, value=tokens.access_token, path=cfg.access_path, max_age=tokens.expires_in, cfg=cfg)
 
 
-def _cookie_pair_count(request: Request, name: str) -> int:
-    """Count an exact cookie name in the raw ``Cookie`` headers.
-
-    ``Request.cookies`` (and therefore FastAPI's ``Cookie`` dependency) collapses
-    duplicate names.  That is convenient for ordinary cookies but unsafe for the
-    browser refresh credential: a proxy and the application can disagree about
-    which duplicate value is authoritative.  Treat duplicate refresh-cookie pairs
-    as malformed instead of silently selecting one of them.
-    """
+def cookie_pair_count(request: Request, name: str) -> int:
+    """Count raw pairs because Request.cookies collapses duplicate credential names."""
     count = 0
     for header in request.headers.getlist("cookie"):
         for pair in header.split(";"):
@@ -164,7 +157,7 @@ def create_auth_router(
                 client_ip=_client_ip(request),
             )
         except AuthenticationError:
-            raise _unauthorized()
+            raise _unauthorized() from None
         return _json_body(tokens)
 
     @router.post("/auth/refresh", response_model=TokenResponse)
@@ -172,7 +165,7 @@ def create_auth_router(
         try:
             tokens = service.refresh_json(refresh_token=body.refresh_token, client_ip=_client_ip(request))
         except AuthenticationError:
-            raise _unauthorized()
+            raise _unauthorized() from None
         return _json_body(tokens)
 
     @router.post("/auth/browser/login", response_model=BrowserTokenResponse)
@@ -183,7 +176,7 @@ def create_auth_router(
                 client_ip=_client_ip(request),
             )
         except AuthenticationError:
-            raise _unauthorized()
+            raise _unauthorized() from None
         _set_browser_cookies(response, tokens, cfg)
         return _browser_body(tokens)
 
@@ -197,12 +190,12 @@ def create_auth_router(
         # cookie plus a body refresh_token) and is rejected, not silently honoured.
         if (await request.body()).strip():
             raise _mixed_transport()
-        if _cookie_pair_count(request, cfg.refresh_name) != 1 or not refresh_token:
+        if cookie_pair_count(request, cfg.refresh_name) != 1 or not refresh_token:
             raise _unauthorized()
         try:
             tokens = service.refresh_browser(refresh_token=refresh_token, client_ip=_client_ip(request))
         except AuthenticationError:
-            raise _unauthorized()
+            raise _unauthorized() from None
         _set_browser_cookies(response, tokens, cfg)
         return _browser_body(tokens)
 

@@ -53,7 +53,7 @@ def real_shape_inputs(days: int = 3, employees: int = 4) -> SolverInputs:
                         Decimal(2), Decimal(2), Decimal(2), "test", "tax"),),
     )
     rules = tuple(CoverageRuleInput(rule, None, rule, "1", "HEADCOUNT", "coverage") for rule in
-                  ("minimum crew", "key holder", "fpc", "peak skill", "break relief"))
+                  ("minimum crew", "COV-KEYHOLDER-OPEN", "COV-KEYHOLDER-CLOSE", "fpc", "peak skill", "break relief"))
     return SolverInputs(
         (StoreInput(3, "Test", 2, 2, windows),), (), (),
         rules + (CoverageRuleInput("COV-UTIL-TARGET", None, "utilisation", "1", "PERCENT", "coverage"),),
@@ -79,7 +79,7 @@ def tiny_optimal_inputs() -> SolverInputs:
                         Decimal(1), Decimal(1), Decimal(1), "test", "tax"),),
     )
     rules = tuple(CoverageRuleInput(rule, None, rule, "0", "HEADCOUNT", "coverage") for rule in
-                  ("minimum crew", "key holder", "fpc", "peak skill", "break relief"))
+                  ("minimum crew", "COV-KEYHOLDER-OPEN", "COV-KEYHOLDER-CLOSE", "fpc", "peak skill", "break relief"))
     return SolverInputs(
         (StoreInput(3, "Tiny", 9, 9, windows),), (), (),
         rules + (CoverageRuleInput("COV-UTIL-TARGET", None, "utilisation", "1", "PERCENT", "coverage"),),

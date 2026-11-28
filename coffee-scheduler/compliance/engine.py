@@ -12,7 +12,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 AGENT = "labor-compliance-agent"
@@ -319,10 +319,21 @@ def load_snapshot(proposal: Proposal, *, dsn: str | None = None) -> Snapshot:
     import psycopg
 
     url = dsn or os.environ.get("DATABASE_URL") or "postgresql://coffeeshop:coffeeshop@localhost:5432/coffeeshop"
-    with psycopg.connect(url) as conn:
-        with conn.transaction():
-            prepare_session(conn, proposal.tenant_id)
-            return _read_snapshot(conn, proposal)
+    with psycopg.connect(url) as conn, conn.transaction():
+        prepare_session(conn, proposal.tenant_id)
+        return _read_snapshot(conn, proposal)
+
+
+def load_scoped_snapshot(conn, proposal: Proposal) -> Snapshot:
+    """Read with the caller's transaction-local RLS context."""
+    if conn.autocommit or conn.info.transaction_status != 2:
+        raise ComplianceUnavailable("compliance requires an active scoped transaction")
+    role, tenant = conn.execute(
+        "SELECT current_user, current_setting('app.tenant_id', true)"
+    ).fetchone()
+    if role not in ("app_ro", "app_rw") or tenant != proposal.tenant_id:
+        raise ComplianceUnavailable("compliance session does not match the proposal tenant")
+    return _read_snapshot(conn, proposal)
 
 
 def prepare_session(conn, tenant_id: str) -> None:
@@ -432,24 +443,23 @@ def _persist(proposal, evaluation, when, *, dsn, log):
         return
     import psycopg
     url = dsn or os.environ.get("DATABASE_URL") or "postgresql://coffeeshop:coffeeshop@localhost:5432/coffeeshop"
-    with psycopg.connect(url) as conn:
-        with conn.transaction():
-            prepare_session(conn, proposal.tenant_id)
-            if proposal.shift_id is not None:
-                found = conn.execute(
-                    "SELECT 1 FROM shifts WHERE shift_id = %s", (proposal.shift_id,)
-                ).fetchone()
-                if found is None:
-                    raise ShiftNotPersisted(proposal.shift_id)
-            for row in rows:
-                conn.execute(
-                    """INSERT INTO rule_eval_log
+    with psycopg.connect(url) as conn, conn.transaction():
+        prepare_session(conn, proposal.tenant_id)
+        if proposal.shift_id is not None:
+            found = conn.execute(
+                "SELECT 1 FROM shifts WHERE shift_id = %s", (proposal.shift_id,)
+            ).fetchone()
+            if found is None:
+                raise ShiftNotPersisted(proposal.shift_id)
+        for row in rows:
+            conn.execute(
+                """INSERT INTO rule_eval_log
                        (tenant_id, schedule_id, shift_id, employee_id, rule_id, result,
                         premium_cost_usd, evaluated_at, agent, notes)
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (row["tenant_id"], row["schedule_id"], row["shift_id"], row["employee_id"], row["rule_id"],
-                     row["result"], row["premium_cost_usd"], row["evaluated_at"], row["agent"], row["notes"]),
-                )
+                (row["tenant_id"], row["schedule_id"], row["shift_id"], row["employee_id"], row["rule_id"],
+                 row["result"], row["premium_cost_usd"], row["evaluated_at"], row["agent"], row["notes"]),
+            )
 
 
 def _log_row(proposal, result, when) -> dict:
@@ -726,9 +736,7 @@ def _jurisdiction_ok(rule, jurisdictions) -> bool:
 def _age_ok(rule, age) -> bool:
     if rule.applies_age_min is not None and age < rule.applies_age_min:
         return False
-    if rule.applies_age_max is not None and age > rule.applies_age_max:
-        return False
-    return True
+    return rule.applies_age_max is None or age <= rule.applies_age_max
 
 
 def _flag_ok(rule, flags) -> bool:

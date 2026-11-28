@@ -57,7 +57,8 @@ def _inputs(*, crew: int = 1, break_relief: int = 1, station_count: int = 2, emp
         (StoreInput(3, "Test", 2, station_count, {0: StoreOpenWindow(8, 10, frozenset({0}))}),), (), (),
         (
             CoverageRuleInput("minimum crew", None, "minimum crew", str(crew), "HEADCOUNT", "coverage"),
-            CoverageRuleInput("key holder", None, "key holder", "1", "HEADCOUNT", "coverage"),
+            CoverageRuleInput("COV-KEYHOLDER-OPEN", None, "key holder", "1", "HEADCOUNT", "coverage"),
+            CoverageRuleInput("COV-KEYHOLDER-CLOSE", None, "key holder", "1", "HEADCOUNT", "coverage"),
             CoverageRuleInput("fpc", None, "fpc", "1", "HEADCOUNT", "coverage"),
             CoverageRuleInput("peak skill", None, "peak skill", "1", "HEADCOUNT", "peak"),
             CoverageRuleInput("break relief", None, "break relief", str(break_relief), "HEADCOUNT", "coverage"),
@@ -240,7 +241,7 @@ class DatabaseConstraintTests(unittest.TestCase):
                 # legality-evaluated schedule on the seeded data until the roster points at the
                 # calendar covering the scheduling window.
                 with self.assertRaises(ComplianceUnavailable) as caught:
-                    build_model(inputs, legality=legality_from_compliance(DSN, inputs))
+                    build_model(inputs, legality=legality_from_compliance(DSN, inputs, tenant_id="00000000-0000-0000-0000-000000000001"))
                 self.assertIn("school_calendar_days", str(caught.exception))
                 raise _Rollback()
         except _Rollback:
@@ -293,7 +294,7 @@ class LegalityPartitionDatabaseTests(unittest.TestCase):
                 persist_forecasts(conn, predict(conn, version, target_window=target, rows=rows))
                 inputs = assemble_solver_inputs(conn, target_window=target, model_version=version)
 
-                model = build_model(inputs, legality=legality_from_compliance(DSN, inputs))
+                model = build_model(inputs, legality=legality_from_compliance(DSN, inputs, tenant_id="00000000-0000-0000-0000-000000000001"))
                 bound = {rule_id for verdict in model.excluded.values() for rule_id, _ in verdict.binding}
                 # The defect: FPC-on-site blocked every candidate because the adapter claimed a
                 # complete-but-empty crew. Crew coverage is a model constraint, never an exclusion.

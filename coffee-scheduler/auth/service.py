@@ -21,10 +21,12 @@ import os
 import base64
 import json
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from enum import Enum
 from typing import Callable, Mapping, Protocol
 import logging
 
@@ -47,7 +49,12 @@ from .repository import (
     InvitationRecord, AuditEntry,
 )
 from .tokens import MAX_REFRESH_TOKEN_BYTES, OpaqueRefreshTokenService
-from .ratelimit import LoginAttemptKey
+from .ratelimit import (
+    LOCKOUT_DURATION_SECONDS,
+    LOCKOUT_WINDOW_SECONDS,
+    MAX_FAILED_ATTEMPTS,
+    LoginAttemptKey,
+)
 from .reset import PasswordResetService, PasswordResetError
 from .mfa import TOTPService, MfaSecretCipher, RecoveryCodeService, MfaRequiredError, MfaEnrollmentError, MfaReplayError
 
@@ -67,6 +74,27 @@ def _positive_env_int(source: Mapping[str, str], name: str, default: int) -> int
     except (TypeError, ValueError): raise ValueError(f"{name} must be a positive integer") from None
     if parsed <= 0: raise ValueError(f"{name} must be a positive integer")
     return parsed
+
+
+_AUDIT_FAILURES: dict[str, int] = {}
+_AUDIT_FAILURES_LOCK = threading.Lock()
+
+
+def audit_failure_count(action: str | None = None) -> int:
+    """Return the process-local audit failure count for one action or all actions."""
+    with _AUDIT_FAILURES_LOCK:
+        if action is None:
+            return sum(_AUDIT_FAILURES.values())
+        return _AUDIT_FAILURES.get(action, 0)
+
+
+def get_audit_failure_count(event_name: str) -> int:
+    return audit_failure_count(event_name)
+
+
+class AuditPolicy(Enum):
+    BEST_EFFORT = "best_effort"
+    REQUIRED = "required"
 
 
 class AuthenticationError(Exception):
@@ -182,7 +210,16 @@ class TenantAuthService:
             user = self._authenticate_credentials(tenant_slug=tenant_slug, email=email, password=password)
         except AuthenticationError:
             self._repo.record_login_attempt(key.tenant_id,key.email,key.ip,False,now or self._now(),self._throttle_max_failures,self._throttle_window_seconds)
-            self._audit(AuditEntry(user_hint.tenant_id if user_hint else None, user_hint.id if user_hint else None, "tenant_user" if user_hint else "system", "auth.login.failed", ip=client_ip))
+            self._audit(
+                AuditEntry(
+                    user_hint.tenant_id if user_hint else None,
+                    user_hint.id if user_hint else None,
+                    "tenant_user" if user_hint else "system",
+                    "auth.login.failed",
+                    ip=client_ip,
+                ),
+                policy=AuditPolicy.BEST_EFFORT,
+            )
             raise
         self._repo.record_login_attempt(key.tenant_id,key.email,key.ip,True,now or self._now(),self._throttle_max_failures,self._throttle_window_seconds)
         now = now or self._now()
@@ -202,18 +239,27 @@ class TenantAuthService:
             except (MfaReplayError, ValueError, UnicodeDecodeError):
                 raise AuthenticationError(_GENERIC_AUTH_FAILURE) from None
         self._repo.record_login(user.id, now)
-        self._audit(AuditEntry(user.tenant_id, user.id, "tenant_user", "auth.login.succeeded", ip=client_ip))
+        self._audit(
+            AuditEntry(user.tenant_id, user.id, "tenant_user", "auth.login.succeeded", ip=client_ip),
+            policy=AuditPolicy.BEST_EFFORT,
+        )
         return self._issue(tenant_id=user.tenant_id, user_id=user.id, role=user.role, now=now)
 
     # The browser login shares identical credential semantics; the cookie/body transport
     # split is enforced in auth.api, keeping CSRF/token-exposure rules out of this layer.
     login_browser = login_json
 
-    def _audit(self, entry: AuditEntry) -> None:
-        try: self._repo.record_audit(entry)
+    def _audit(self, entry: AuditEntry, *, policy: AuditPolicy = AuditPolicy.REQUIRED) -> None:
+        try:
+            self._repo.record_audit(entry)
         except Exception:
-            logging.getLogger(__name__).exception("audit write failed for %s", entry.action)
-            raise
+            with _AUDIT_FAILURES_LOCK:
+                _AUDIT_FAILURES[entry.action] = _AUDIT_FAILURES.get(entry.action, 0) + 1
+            logging.getLogger(__name__).exception(
+                "audit.write.failed", extra={"action": entry.action, "policy": policy.value}
+            )
+            if policy is AuditPolicy.REQUIRED:
+                raise
 
     def create_invitation(self, principal: Principal, email: str, role: str, *, accept_url_base: str = "/invitations/accept") -> InvitationIssued:
         ranks = {"read_only": 0, "staff": 1, "manager": 2, "owner": 3}
@@ -236,6 +282,29 @@ class TenantAuthService:
         if accepted is None: raise InvitationError(_GENERIC_AUTH_FAILURE)
         self._audit(AuditEntry(accepted.tenant_id, accepted.user_id, "tenant_user", "invitation.accepted", "invitation", None, after={"display_name": display_name} if display_name else None))
         return self._issue(tenant_id=accepted.tenant_id, user_id=accepted.user_id, role=accepted.role, now=self._now())
+
+    def reserve_invitation_accept_attempt(
+        self, client_ip: str, *, now: datetime | None = None,
+    ) -> bool:
+        """Atomically reserve an anonymous invite-accept attempt in repository state."""
+        attempted_at = now or self._now()
+        return self._repo.begin_invitation_accept(
+            client_ip,
+            attempted_at,
+            MAX_FAILED_ATTEMPTS,
+            LOCKOUT_WINDOW_SECONDS,
+            LOCKOUT_DURATION_SECONDS,
+        )
+
+    def mark_invitation_accept_success(
+        self, client_ip: str, *, now: datetime | None = None,
+    ) -> None:
+        """Clear the successful client's IP bucket without touching other clients."""
+        self._repo.complete_invitation_accept(
+            client_ip,
+            succeeded=True,
+            when=now or self._now(),
+        )
 
     def list_invitations(self, principal: Principal):
         if principal.role not in ("owner", "manager"): raise InvitationPermissionError("forbidden")

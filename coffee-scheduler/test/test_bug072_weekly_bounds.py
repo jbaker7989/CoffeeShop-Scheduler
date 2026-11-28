@@ -32,7 +32,8 @@ def _inputs(employee: EmployeeInput, start: date, end: date) -> SolverInputs:
         (StoreInput(3, "Test", 2, 2, {}),), (), (),
         (
             CoverageRuleInput("minimum crew", None, "minimum crew", "1", "HEADCOUNT", "coverage"),
-            CoverageRuleInput("key holder", None, "key holder", "1", "HEADCOUNT", "coverage"),
+            CoverageRuleInput("COV-KEYHOLDER-OPEN", None, "key holder", "1", "HEADCOUNT", "coverage"),
+            CoverageRuleInput("COV-KEYHOLDER-CLOSE", None, "key holder", "1", "HEADCOUNT", "coverage"),
             CoverageRuleInput("fpc", None, "fpc", "1", "HEADCOUNT", "coverage"),
             CoverageRuleInput("peak skill", None, "peak skill", "1", "HEADCOUNT", "peak"),
             CoverageRuleInput("break relief", None, "break relief", "1", "HEADCOUNT", "coverage"),

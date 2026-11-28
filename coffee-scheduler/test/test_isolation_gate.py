@@ -58,7 +58,7 @@ TENANT_TABLES = [
     "cost_targets", "throughput_standards", "demand_adjustments", "product_taxonomy",
     "calibration_log", "employees", "labor_rules", "consent_waivers", "events", "schedules",
     "shifts", "shift_assignments", "forecasts", "rule_eval_log", "transactions",
-    "weather_hourly", "weather_daily", "employee_pii", "langgraph_checkpoints",
+    "weather_hourly", "weather_daily", "employee_pii", "langgraph_checkpoints", "schedule_draft_runs",
     "tenant_users", "auth_refresh_tokens", "auth_revoked_tokens", "auth_password_reset_tokens",
     "auth_mfa_recovery_codes", "auth_login_attempts", "tenant_invitations", "audit_log",
     "onboarding_verification_tokens", "feature_sets", "forecast_features", "forecast_models",

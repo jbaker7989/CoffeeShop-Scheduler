@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
+
+from changed_files import changed_files
 
 ROOT = Path(__file__).resolve().parents[2]
 FEATURES = ROOT / "FEATURES.md"
@@ -75,15 +76,6 @@ def _test_tags() -> dict[str, set[str]]:
     return tags
 
 
-def _changed_files(base: str | None) -> list[str]:
-    """Return repo-relative paths changed against base (or staged/unstaged when no base)."""
-    cmd = ["git", "diff", "--name-only", f"{base}...HEAD"] if base else ["git", "diff", "--name-only", "HEAD"]
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise SystemExit(f"git diff failed: {result.stderr.strip()}")
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
 def _known_gaps() -> set[str]:
     if not KNOWN_GAPS.exists():
         return set()
@@ -111,8 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         failures.append(f"dangling spec tag: {dangling} is not an AC in FEATURES.md or docs/sdd-*.md")
 
     # Rule 2 — touched test files must carry a spec tag.
-    for path in _changed_files(args.base):
-        if not path.startswith("test/") or not path.endswith(".py"):
+    for path in changed_files(ROOT, args.base):
+        if not path.startswith("test/") or not Path(path).match("test_*.py"):
             continue
         if not Path(ROOT / path).exists():
             continue  # deleted file

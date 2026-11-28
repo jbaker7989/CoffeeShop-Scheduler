@@ -5,7 +5,8 @@
 pandas==3.1.1
 openpyxl==3.1.5
 requests==2.34.2
-psycopg[binary]==3.3.9
+# CS-061a (F61): the production auth gateway uses psycopg_pool for connection-per-call storage.
+psycopg[binary,pool]==3.3.9
 alembic==1.20.1
 # CS-014b/F9: deterministic numpy-only demand forecasting.
 numpy==2.4.6
@@ -17,3 +18,13 @@ argon2-cffi==25.1.0
 fastapi==0.120.4
 PyJWT==2.13.0
 cryptography==49.0.0
+# CS-011/015: A2A JSON-RPC and the deterministic schedule workflow.
+a2a-sdk[http-server]==0.3.26
+httpx==0.28.1
+langchain-core==1.8.5
+langgraph==1.2.24
+langsmith==0.16.2
+uvicorn==0.45.0
+# Keep the A2A transitive Google packages compatible with the CI OTel protobuf pin.
+google-api-core==2.30.0
+proto-plus==1.28.0

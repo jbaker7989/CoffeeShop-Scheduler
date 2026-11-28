@@ -1,35 +1,62 @@
-# coffee-scheduler
+# Coffee Shop Scheduler project guidance
 
-Repo-wide conventions.
+## Stack and layer ownership
 
-## Stack
-- n8n (workflow orchestration / exported workflows in `n8n/`)
-- LangGraph (agent orchestration graphs)
-- A2A (agent-to-agent protocol; agent cards in `agents/*/agent_card.json`)
+- **n8n** owns triggers, scheduled/external I/O, exported workflows and human-in-the-loop glue.
+- **LangGraph** owns per-agent orchestration and tool-call flow.
+- **A2A** owns contracts at real service boundaries; cards live under `agents/<agent>/agent_card.json`.
+- Domain code remains deterministic and typed: compliance decides legality, forecasting predicts demand,
+  and the CP-SAT scheduler produces assignments. An LLM may explain or route work; it must not invent
+  canonical employee/location facts, legal verdicts, forecasts, or schedules.
+- Follow the nearest `agents/<name>/AGENTS.md` for a component's ownership and boundaries. Shared procedures
+  belong in `skills/<name>/SKILL.md`, not duplicated across agent docs.
 
-## Layer split
-- **n8n** — triggers, external I/O, scheduled runs, human-in-the-loop glue.
-- **LangGraph** — per-agent reasoning graphs and tool calls.
-- **A2A** — contracts between agents (cards, auth, versioning).
+## Data, privacy, and source-of-truth rules
 
-## Data rules
-- Source data lives in the repo-root `data/` directory (roster, labor_rules, labor_standards, weather, school calendar). See `data/README.md` for the synthetic-fixture / real-PII git policy.
-- Agents never hardcode legality; see `agents/labor_compliance`.
+- Scheduling inputs and synthetic fixtures are documented in the workspace [`data/README.md`](../data/README.md).
+  Follow its gitignore/private-data policy and the source attribution in [`ATTRIBUTION.md`](ATTRIBUTION.md).
+- Synthetic workbooks and generated examples are test fixtures, never production/customer truth. Preserve
+  source, version, timezone, units and missingness; do not silently invent a value for missing data.
+- Never commit secrets, credentials, certificates, or real PII. Do not copy private employee/customer data
+  into tests, logs, docs, screenshots, or tracked workbooks. Use generated synthetic identities instead.
+- Agents never hardcode legality or bypass tenant/authorization checks. Use canonical contracts and
+  fail-closed behavior at trust boundaries.
 
-## Test commands
-- Python project tests: `cd coffee-scheduler && python3 -m unittest discover -s test`.
-- Manager UI tests: `cd coffee_shop && npm test`; lint with `npm run lint`; types with `npx tsc --noEmit`.
-- Database, Docker, and optional telemetry integration tests have explicit environment gates; run them only with the documented services/dependencies and report skips separately.
+## Test and lint commands
 
-## Security and bounded operations
-- Scope transaction-local state to the smallest operation. When setting a GUC or temporary role/visibility flag, capture the previous value and restore it in `finally`; test later queries in the same transaction after success and failure.
-- Validate type, range, and size at public data-access boundaries before borrowing a connection or executing SQL. Do not coerce user values with `int()` or silently clamp invalid values. Pagination must have a documented maximum.
-- Never hardcode fixture tenant/user/JTI identifiers in production service paths. Derive identity from validated claims and reconcile it against canonical records before persistence.
-- Keep telemetry development-only plaintext on loopback. Bind published local Collector ports to `127.0.0.1`; remote OTLP endpoints require configured TLS (and client authentication when required). Never commit certificates or keys.
-- Preserve fail-closed tenant isolation. Request input must not select a tenant, and helper-level visibility overrides must not persist into later work in a pooled transaction.
+Python dependencies are pinned in [`requirements.txt`](requirements.txt); Ruff's project rules are in
+[`ruff.toml`](ruff.toml). Run from `coffee-scheduler/`:
 
-## Review and validation evidence
-- A review finding must identify the current file/symbol, describe a concrete failure mode, and specify an assertion that would catch it. Record actionable follow-ups in `Backlog.md` with edge/adversarial cases and a plan under `docs/plans/`.
-- Report focused tests, full-suite results, and environment-gated skips separately. A skipped database/Docker integration test is not a pass; name the missing service, dependency, or environment variable. Do not call the full suite green when any test errored or was not run.
-- For Python unit tests, use `python3 -m unittest discover -s test`; install optional subsystem dependencies from that subsystem's requirements file when validating it (for example `otel/requirements.txt`). Run database- and Docker-backed checks only when their documented services and opt-in variables are available.
-- Avoid broad cleanup while fixing a focused issue. Keep one story per commit when practical and include the spec, tests, implementation, and review evidence in the same change series.
+```sh
+python3 -m unittest discover -s test
+python3 -m pytest test/ -q
+ruff check --config ruff.toml <changed-python-files>
+```
+
+The unittest discovery is the project's local stdlib baseline. CI additionally runs pytest and traceability
+gates; run both when dependencies are installed. Ruff uses the checked-in `ruff.toml` ratchet, so lint
+changed Python files rather than claiming the entire legacy tree is clean. Do not use `pip check` as the
+dependency contract; see pinned files for intentional subsystem constraints.
+
+For the manager UI, from the workspace directory run `cd coffee_shop && npm test`, `npm run lint`, and
+`npx tsc --noEmit` when the UI is in scope.
+
+Database, Docker, migration, and optional telemetry tests are environment-gated. Follow each test's docstring and
+`test/SKILL.md`; for the F61 disposable PostgreSQL suites, set `CS061B_DATABASE_INTEGRATION=1` and provide a
+disposable `DATABASE_URL`. A skip is not a pass: report which gate/dependency/service was absent and keep
+integration evidence separate from local unit results. Never point destructive migration/round-trip tests at
+a shared or production database.
+
+## Implementation and safety conventions
+
+- Validate type, range, size and identity at public boundaries before I/O. Reject invalid values rather
+  than coercing or silently clamping them.
+- Scope transactions, roles, and connection-local state to the smallest operation; restore prior state in a
+  `finally` path. Test later operations on the same pooled connection for leakage.
+- Derive authority from validated credentials and canonical records; request input cannot select a tenant.
+- Keep SQL parameterized, migrations reversible where their contract requires it, and destructive data
+  changes explicitly bounded.
+- Follow `test/SKILL.md` for spec → test → implementation, acceptance-criterion traceability, and adversarial
+  coverage. Add a plan under `docs/plans/` for material bugs/findings.
+- When reporting results, name the exact commands, pass/fail/skip counts, and gated omissions. Do not call a
+  suite green when it failed or required coverage was skipped.

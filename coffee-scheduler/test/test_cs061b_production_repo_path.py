@@ -87,6 +87,8 @@ def _make_repo(*, tenant_active: bool):
         def store_mfa(self, *a): self.calls.append("store_mfa")
         def consume_mfa_step(self, *a): self.calls.append("consume_mfa_step"); return False
         def consume_recovery_code(self, *a): self.calls.append("consume_recovery_code"); return False
+        def begin_invitation_accept(self, *a): self.calls.append("begin_invitation_accept"); return False
+        def complete_invitation_accept(self, *a, **kw): self.calls.append("complete_invitation_accept")
         # CS-061c mandatory repository seam (not exercised by this CS-061b probe).
         def create_invitation(self, *a): raise NotImplementedError
         def get_invitation(self, *a): return None
