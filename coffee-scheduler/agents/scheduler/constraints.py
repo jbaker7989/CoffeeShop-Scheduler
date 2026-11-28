@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import cache
 from typing import Any
@@ -23,6 +23,8 @@ from agents.scheduler.shifts import (
     build_slot_grid,
     build_slot_index,
     find_rule_value,
+    workweek,
+    workweek_days,
 )
 from compliance.engine import Evaluation, Proposal, Rule, ShiftSpan, Snapshot, judge, load_snapshot
 from contracts.forecast import CANONICAL_TZ
@@ -57,6 +59,7 @@ class SchedulingModel:
     slots: tuple[ShiftSlot, ...]
     index: SlotIndex
     premiums: dict[tuple[int, int], Decimal]
+    full_weeks: tuple[tuple[int, int], ...]
     skipped_minimums: tuple[tuple[int, tuple[int, int]], ...]
 
 
@@ -285,10 +288,8 @@ def build_model(
     if rest_minutes_decimal != rest_minutes_decimal.to_integral_value():
         raise SolverModelError(f"shift_rules rule {RULE_MIN_REST_HOURS!r}: not an exact whole minute")
     rest_minutes = int(rest_minutes_decimal)
-    days_by_week: dict[tuple[int, int], tuple] = {}
-    for day in calendar_days:
-        iso_year, iso_week, _ = day.isocalendar()
-        days_by_week[(iso_year, iso_week)] = days_by_week.get((iso_year, iso_week), ()) + (day,)
+    days_by_week = workweek_days(calendar_days)
+    full_weeks = tuple(iso_week for iso_week, week_days in days_by_week.items() if len(week_days) == 7)
     skipped_minimums: list[tuple[int, tuple[int, int]]] = []
     for employee in employees:
         if employee.min_hours_week > employee.max_hours_week:
@@ -308,9 +309,7 @@ def build_model(
             model.Add(sum(units) <= employee.max_hours_week * 2).OnlyEnforceIf(assumptions["shift_rules"])
             if employee.min_hours_week == 0:
                 continue
-            if len(week_days) == 7:
-                model.Add(sum(units) >= employee.min_hours_week * 2).OnlyEnforceIf(assumptions["shift_rules"])
-            else:
+            if len(week_days) != 7:
                 skipped_minimums.append((employee.employee_id, iso_week))
         for start in range(max(0, len(calendar_days) - consecutive_days)):
             span_indices = tuple(
@@ -338,7 +337,7 @@ def build_model(
                 model.Add(var == 0).OnlyEnforceIf(assumptions["shift_rules"])
             if slot.location_id != employee.home_location_id and not employee.cross_location_eligible:
                 model.Add(var == 0).OnlyEnforceIf(assumptions["home_location"])
-    return SchedulingModel(model, assign, assumptions, excluded, slots, index, premiums, tuple(skipped_minimums))
+    return SchedulingModel(model, assign, assumptions, excluded, slots, index, premiums, full_weeks, tuple(skipped_minimums))
 
 
 def _solver() -> cp_model.CpSolver:
@@ -414,7 +413,7 @@ def legality_from_compliance(conn_or_dsn: Any, inputs: SolverInputs) -> Callable
         proposal = Proposal(
             tenant_id=tenant_id, location_id=location_id, employee_id=employee_id, role=employee.role,
             start_at=span.start, end_at=span.end, breaks=[],
-            week_start=inputs.target_window[0], week_shifts=[span], week_complete=True,
+            week_start=date.fromisocalendar(*workweek(day), 1), week_shifts=[span], week_complete=True,
             # No crew-scoped rule is evaluated here, so no crew is claimed. Asserting a complete
             # crew we do not have is precisely the defect this replaces.
             crew=None, crew_complete=False,

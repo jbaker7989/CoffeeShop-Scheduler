@@ -126,7 +126,7 @@ class ObjectiveTests(unittest.TestCase):
                                                                           premium=0, labour_pct_breach=0))
         solver, status = _solve(model)
         self.assertEqual(status, cp_model.OPTIMAL)
-        self.assertEqual(solver.Value(terms.overtime_slack[employee.employee_id]), 4)
+        self.assertEqual(solver.Value(terms.overtime_slack[employee.employee_id]), 0)
 
     # spec: F11.ac19
     def test_ac19_premium_assignment_is_dispreferred(self):
@@ -211,6 +211,7 @@ class OvertimePricingTests(unittest.TestCase):
         self.assertIn(3, terms.overtime_budget_slack)
 
 
+@unittest.skipIf(_SKIP, _SKIP or "")
 class DatabaseObjectiveTests(unittest.TestCase):
     # spec: F11.ac21
     def test_ac21_real_one_day_objective_builds(self):

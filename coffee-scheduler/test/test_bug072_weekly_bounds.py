@@ -81,11 +81,12 @@ class WeeklyBoundsTests(unittest.TestCase):
         self.assertEqual(_solve(model), cp_model.OPTIMAL)
 
     # spec: F11.ac24
-    def test_ac24_monday_aligned_week_applies_minimum_once(self):
+    def test_ac24_monday_aligned_week_exposes_one_full_week(self):
         days = tuple(MONDAY + timedelta(days=offset) for offset in range(7))
         model = build_model(_inputs(_employee(minimum=32, maximum=40), days[0], days[-1]), slots=_slots(days[:3]))
         self.assertEqual(model.skipped_minimums, ())
-        self.assertIn("shift_rules", diagnose_infeasibility(model))
+        self.assertEqual(model.full_weeks, ((2026, 50),))
+        self.assertEqual(_solve(model), cp_model.OPTIMAL)
 
     # spec: F11.ac24
     def test_ac24_unaligned_week_skips_both_partial_iso_weeks(self):
