@@ -387,8 +387,19 @@ These were not in the original backlog but the data and Project Status already i
 - **Expected outcome:** Calendar coverage matching the forecast horizon — no `IN_SESSION = None` rows in any schedule the solver emits.
 
 ### F26. Coverage_Rules ↔ Labor_Rules reconciliation check
-- **Status:** Not started · **Size:** XS · **Priority:** P1
+- **Status:** Blocked on CS-021 · **Size:** XS · **Priority:** P1
 - **Description:** `Coverage_Rules` declares `COV-FPC` as `LAW (reference)` pointing at `NYC-FPC-COVERAGE` in `Labor_Rules`. Coverage_Rules otherwise holds business assumptions. Add a CI test or pre-commit check that flags any coverage row marked `LAW` whose underlying legal rule is not `VERIFIED` (gates on F19) and any coverage constraint whose effective dates conflict with the legal rule's effective dates.
+- **Acceptance criteria:**
+  1. **AC1 — LAW detection:** A whole-word, case-insensitive `LAW` marker in `description`, `value`, or `basis` classifies the coverage row as LAW. A non-LAW business assumption requires no citation.
+  2. **AC2 — Citation resolution:** A LAW row must cite at least one exact labor-rule ID. Every distinct ID must resolve in the same tenant. Missing, malformed, cross-tenant, and ambiguous references fail with rule diagnostics.
+  3. **AC3 — Verification:** Every cited version in force during the coverage period must have status `VERIFIED`, a valid `verified_on` date, a nonblank source citation, and a stored HTTP(S) source URL with a host. The check validates stored evidence without fetching URLs.
+  4. **AC4 — Effective dates:** Each cited rule's verified versions must cover the entire coverage validity without gaps, using PostgreSQL half-open `[)` ranges and supporting unbounded endpoints.
+  5. **AC5 — Conflicts:** Overlapping relevant versions or relevant enforcement outside the existing runtime blocking set (`HARD` or `PROCESS`) produce typed findings. `PAY_ONLY` cannot support LAW coverage.
+  6. **AC6 — Gate source:** The gate loads live canonical coverage and labor rules for the specified seed tenant under app-role RLS. Missing configuration, DB access, tenant identity, or rows in either source table fail explicitly. Soft-deleted rows are excluded.
+  7. **AC7 — Diagnostics:** Findings identify the coverage tenant and rule, cited rule when present, affected interval, and failed condition in deterministic order, omitting source and personal data.
+  8. **AC8 — Gate self-test:** Injecting a LAW row citing an unverified rule fails the gate, and verifying or removing it restores a pass. The gate has no exemptions for unverified LAW citations.
+- **Edge / adversarial cases:** Reject NULL and empty LAW validity. Abutting versions are contiguous, and a one-day hole fails. A finite legal range cannot support an unbounded claim. Repeated exact citations count once, and each distinct citation is checked. Minimum crew while open is a staffing assumption and requires no citation.
+- **Cross-references:** CS-021/F19, CS-013c/F10, `coverage_rules`, `labor_rules`, and migration `0002`. The canonical demo source is the migrated PostgreSQL database seeded by `scripts/etl_excel_to_postgres.py` at the repository root for `maven-demo`. Run `python3 -m compliance.coverage_law_gate --tenant-id 00000000-0000-0000-0000-000000000001 --tenant-slug maven-demo` from `coffee-scheduler/` with `DATABASE_URL` set. The command exits `0` for a pass, `1` for reconciliation findings, and `2` for setup errors. Required CI activation awaits CS-021 and a passing canonical run.
 - **Expected outcome:** A coverage rule can never silently contradict a legal rule — the assumption-vs-law boundary stays clean.
 
 ### F27. Event data ingest pipeline
