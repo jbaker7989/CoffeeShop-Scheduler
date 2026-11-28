@@ -364,7 +364,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-017 — Schedule explanation layer
 - **Feature:** [F13](./FEATURES.md) · **Priority:** P2 · **Size:** S
-- **Status:** Not started
+- **Status:** ✅ Done (2026-11-27) — `agents/explanation/` read-only layer: `gather_evidence` reads a shift's `rule_eval_log` under `app_ro` RLS (live `judge()` fallback when the log is empty; taxonomy category names), and `explain_assignment` uses a **closed-vocabulary** grounding — the model may only select/order pre-computed `[rule_id] result — reason` fact lines; any non-verbatim line (invented rule_id/number/verdict) fails validation and falls back to deterministic rendering, so it cannot hallucinate. Anthropic seam (`claude-sonnet-5-5`, injected/stubbed, deterministic fallback with no API key); endpoint `GET /schedule/shift/{id}/explain` (owner/manager). Never claims legal accuracy. F13.ac1–ac7. Codex dev / Claude validate. Tests: `test_cs017_explanation.py` (7, incl. adversarial + judge-fallback + no-key), no real API call.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
 - **Description:** Plain-language, rule-cited explanations of schedule decisions.
 - **Detailed specifications:**
@@ -2408,7 +2408,7 @@ closing regression evidence.
 | CS-016b | F11 | P1 | M | Blocked |
 | CS-016c | F11 | P1 | S | ✅ Done (2026-11-23) |
 | CS-016d | F11 | P1 | M | ✅ Done (2026-11-24) |
-| CS-017 | F13 | P2 | S | Not started |
+| CS-017 | F13 | P2 | S | ✅ Done — grounded (closed-vocabulary) explanation layer + /explain endpoint |
 | CS-018 | F14 | P2 | L | Not started (umbrella) |
 | CS-018a | F14 | P2 | M | Not started |
 | CS-018b | F14 | P2 | M | Not started |

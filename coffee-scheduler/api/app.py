@@ -29,6 +29,9 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from agents.explanation.grounding import ShiftNotFound
+from agents.explanation.model import AnthropicExplainer
+from agents.explanation.service import Explanation, explain_assignment
 from auth.api import BrowserCookieConfig, _set_browser_cookies, create_auth_router
 from auth.ratelimit import LoginAttemptKey
 from auth.repository import OnboardingConflictError
@@ -360,6 +363,17 @@ def create_app(
         principal: Principal = Depends(require_role("owner", "manager")),
     ) -> dict[str, list[dict]]:
         return {"rules": database.fetch_shift_rule_evals(principal.tenant_id, shift_id)}
+
+    @app.get("/schedule/shift/{shift_id}/explain", dependencies=[Depends(require_email_verified)])
+    def shift_explanation(
+        shift_id: UUID,
+        principal: Principal = Depends(require_role("owner", "manager")),
+    ) -> Explanation:
+        try:
+            with database._pool_for_request().connection() as conn:
+                return explain_assignment(conn, principal.tenant_id, shift_id, model_client=AnthropicExplainer())
+        except ShiftNotFound:
+            raise HTTPException(status_code=404, detail="Shift not found") from None
 
     @app.post("/auth/logout")
     def logout(request: Request, response: Response) -> dict[str, bool]:
