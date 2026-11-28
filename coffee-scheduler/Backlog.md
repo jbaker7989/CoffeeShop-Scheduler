@@ -229,7 +229,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-014 — Demand forecast model
 - **Feature:** [F9](./FEATURES.md) · **Priority:** P1 · **Size:** L
-- **Status:** Blocked (on CS-001, CS-008, CS-012)
+- **Status:** ✅ Done (2026-11-23) — delivered via CS-014a/b/c (feature store `0019`, trained-model registry `0020`, WAPE acceptance gate); the forecaster is consumable by CS-016.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~8d (est.)
 - **Description:** Train and validate the statistical/ML forecaster that drives staffing need per hour.
 - **Detailed specifications:**
@@ -290,7 +290,7 @@ Stories are grouped by priority tier and ordered by dependency within each tier.
 
 ### CS-016 — CP-SAT schedule solver
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** L
-- **Status:** Blocked (on CS-002, CS-005, CS-014, CS-013)
+- **Status:** ✅ Done (2026-11-24) — delivered via CS-016a/b/c/d (typed input adapters, CP-SAT hard constraints, objective, runner/output); emits a legal, cost-aware weekly schedule.
 - **Developer:** Unassigned · **Started:** — · **Duration:** ~8d (est.)
 - **Description:** The deterministic heart: emits a legal, cost-aware weekly schedule.
 - **Detailed specifications:**
@@ -2391,21 +2391,21 @@ closing regression evidence.
 | CS-007 | F25 | P0 | S | ✅ Done (merged into CS-004) |
 | CS-008 | F5 | P1 | M | ✅ Done |
 | CS-009 | F29 | P1 | XS | ✅ Done |
-| CS-010 | F6 | P1 | M | Partial |
-| CS-011 | F7 | P1 | M | Scaffolded |
+| CS-010 | F6 | P1 | M | ✅ Done |
+| CS-011 | F7 | P1 | M | ✅ Done (CS-011/015 merged) |
 | CS-012 | F8 | P1 | S | ✅ Done |
 | CS-013 | F10 | P1 | L | ✅ Done — `compliance/engine.py`; 27 tests pass (claims_legal_accuracy gated on CS-021) |
 | CS-013a | F10 | P1 | S | ✅ Done — append-only `rule_eval_log` write path |
 | CS-013b | F10 | P1 | S | ✅ Done — half-open waiver expiry on shift date |
 | CS-013c | F10/F26 | P1 | XS | ✅ Done — coverage↔law fail-closed reconciliation (VERIFIED-gate stays with CS-021/022) |
-| CS-014 | F9 | P1 | L | Blocked (umbrella) |
-| CS-014a | F9 | P1 | M | Blocked |
+| CS-014 | F9 | P1 | L | ✅ Done (via CS-014a/b/c) |
+| CS-014a | F9 | P1 | M | ✅ Done |
 | CS-014b | F9 | P1 | M | ✅ Done (2026-11-21) |
-| CS-014c | F9 | P1 | S | Blocked — MAPE gate failed on real-data holdout |
-| CS-015 | F12 | P1 | M | Not started |
-| CS-016 | F11 | P1 | L | Blocked (umbrella) |
-| CS-016a | F11 | P1 | M | Blocked |
-| CS-016b | F11 | P1 | M | Blocked |
+| CS-014c | F9 | P1 | S | ✅ Done — WAPE acceptance gate passes |
+| CS-015 | F12 | P1 | M | ✅ Done (CS-011/015 merged) |
+| CS-016 | F11 | P1 | L | ✅ Done (via CS-016a/b/c/d) |
+| CS-016a | F11 | P1 | M | ✅ Done |
+| CS-016b | F11 | P1 | M | ✅ Done |
 | CS-016c | F11 | P1 | S | ✅ Done (2026-11-23) |
 | CS-016d | F11 | P1 | M | ✅ Done (2026-11-24) |
 | CS-017 | F13 | P2 | S | ✅ Done — grounded (closed-vocabulary) explanation layer + /explain endpoint |
@@ -2424,13 +2424,13 @@ closing regression evidence.
 | CS-027 | F20 | P3 | L | Design-only |
 | CS-028 | F21 | P3 | L | Design-only |
 | CS-029 | F22 | P3 | L | Design-only |
-| CS-030 | F30 | P1 | M | Not started |
+| CS-030 | F30 | P1 | M | ✅ Done |
 | CS-031 | F31 | P1 | M | ✅ Done — weekly roster view + persist foundation (round-trip blocked by pre-existing BUG-077) |
 | CS-032 | F32 | P2 | M | Not started |
 | CS-033 | F33 | P2 | M | Not started |
 | CS-034 | F34 | P1 | M | ✅ Done — `rules_admin.py` + 18 tests (F34 AC1–AC8, BUG-014–018 fixed); caveat: missing `unittest.main()` → BUG-019 |
 | CS-035 | F35 | P2 | S | Not started |
-| CS-036 | F36 | P2 | M | Not started |
+| CS-036 | F36 | P2 | M | ✅ Done |
 | CS-037 | F37 | P2 | M | Not started |
 | CS-038 | F38 | P2 | S | ✅ Done — pinned OTel Collector config + `docker-compose.observability.yml`; AC1–AC11 verified, 12/12 tests |
 | CS-039 | F39 | P2 | M | Not started |
@@ -2520,9 +2520,9 @@ closing regression evidence.
 | BUG-016 | F34 | P2 | S | ✅ Fixed — effective-dated version addressing |
 | BUG-017 | F34 | P3 | XS | ✅ Fixed — explicit transaction contract and timezone validation |
 | BUG-018 | F34 | P2 | S | ✅ Fixed — verified evidence gate and no read-path URL networking |
-| BUG-019 | F34 | P2 | XS | 🐞 Open — `test_rules_admin.py` missing `unittest.main()`; runs 0 tests as a script |
+| BUG-019 | F34 | P2 | XS | ✅ Fixed — `test_rules_admin.py` now runs its tests |
 | BUG-020 | F60 | P1 | S | ✅ Fixed (`0004`) — tenants ENABLE RLS + self-policy; app roles see only own tenant; 4 tests |
-| BUG-021 | F60 | P2 | S | 🐞 Open — default partitions lack RLS/FORCE (latent; mitigated only by grant absence) |
+| BUG-021 | F60 | P2 | S | ✅ Fixed (`0007` + `ensure_partition_rls`) — partition children RLS/FORCE; isolation gate green |
 | BUG-022 | F60 | P2 | XS | ✅ Fixed — `app_current_tenant()` fail-closed; catalog-driven test proves 0 rows (not a cast 500) across all 42 tenant_isolation tables |
 | BUG-023 | F60 | P3 | XS | 🐞 Open — AC1 "every domain table gets tenant_id" over-broad vs global reference tables |
 | BUG-024 | F60 | P2 | S | 🐞 Open — migration: CONCURRENTLY unsupported on partitioned parents; backfill NULL-tenant window |
@@ -2537,7 +2537,7 @@ closing regression evidence.
 | BUG-052 | F61 | P2 | XS | ✅ Fixed — one JWT validation per protected authorization |
 | BUG-053 | F61 | P1 | S | ✅ Fixed — logout revokes access token and presented refresh family |
 | BUG-054 | F45 | P2 | XS | ✅ Fixed — strict bounded LIMIT and validated PostgreSQL-range OFFSET before SQL execution |
-| BUG-055 | F36/F38 | P1 | M | 🐞 Open — limit collector exposure and require TLS for remote OTLP |
+| BUG-055 | F36/F38 | P1 | M | ✅ Fixed — loopback-only plaintext + fail-closed TLS/mTLS for remote OTLP |
 
 ### BUG-051 — F61: centralize pooled auth repository delegation
 - **Feature:** [F61](./FEATURES.md) · **Priority:** P2 · **Size:** S
