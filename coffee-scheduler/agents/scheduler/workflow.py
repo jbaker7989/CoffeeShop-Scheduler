@@ -12,6 +12,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, START, StateGraph
 from langsmith import tracing_context
+from opentelemetry.trace import SpanKind
 
 from agents.a2a_transport import AgentError, ServiceIdentity
 from agents.requests import WindowRequest
@@ -19,6 +20,7 @@ from agents.scheduler.constraints import InfeasibleModelError
 from agents.scheduler.draft_runs import DraftRuns
 from agents.scheduler.solve import NoIncumbentError, UnacceptableGapError
 from compliance.engine import ComplianceError
+from otel.boundary import boundary_span
 
 _LOG = logging.getLogger(__name__)
 _INTENT_PROMPT = PromptTemplate.from_template(
@@ -58,6 +60,11 @@ def route_intent(text, classify) -> str:
         return "clarify"
     result = classify(_INTENT_PROMPT.format(text=text))
     return "generate" if result == "generate" else "clarify"
+
+
+def _invoke_tool(tool, state):
+    with boundary_span("tool.scheduler.invoke", SpanKind.INTERNAL, "scheduler", "invoke"):
+        return tool.invoke({"state": state})
 
 
 class ScheduleWorkflow:
@@ -191,7 +198,7 @@ class ScheduleWorkflow:
         def invoke(state: _State):
             started = monotonic()
             try:
-                return tool.invoke({"state": state})
+                return _invoke_tool(tool, state)
             finally:
                 _LOG.info("Schedule draft stage %s finished in %.3fs", name, monotonic() - started)
 

@@ -2,11 +2,11 @@ name: CI
 
 # The machine gate in coffee-scheduler/test/SKILL.md § "CI/CD shape".
 #
-# Four cheap jobs run greps against the change; two run the suite against a real Postgres.
+# The static and observability gates run independently of the Postgres test jobs.
 # The suite is split because test_migrations_roundtrip.py downgrades to base and wipes the
 # database — it cannot share a database with the behavioural tests.
 #
-# To make this a merge gate, mark all six jobs required in branch protection.
+# To make this a merge gate, mark the jobs required in branch protection.
 
 on:
   pull_request:
@@ -84,6 +84,33 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: No TODOs without an issue, no hardcoded secrets, no commented-out code
         run: python scripts/ci/review_checklist.py --base "origin/${{ github.base_ref || 'main' }}"
+
+  observability-contract:
+    name: CS-041 observability contract
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ""
+      DATABASE_URL_DIRECT: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            coffee-scheduler/requirements.txt
+            coffee-scheduler/otel/requirements.txt
+      - name: Install project and telemetry dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install -r otel/requirements.txt
+      - name: Run boundary contracts with networking disabled
+        run: |
+          sudo unshare --net -- runuser -u "$(id -un)" -- env \
+            -u OTEL_EXPORTER_OTLP_ENDPOINT -u OTEL_EXPORTER_OTLP_TRACES_ENDPOINT \
+            "$(command -v python)" -m unittest discover -s test -p 'test_cs041_observability.py'
+      - name: Check changed external call sites
+        run: python scripts/ci/check_observability.py
 
   lint:
     name: Lint (new files)

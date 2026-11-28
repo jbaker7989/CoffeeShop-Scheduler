@@ -487,9 +487,19 @@ OpenTelemetry is the chosen observability framework. F18 ("Observability across 
 - **Expected outcome:** A manager or engineer opens Grafana and sees the whole system's behaviour from one `trace_id`.
 
 ### F41. CI observability gate
-- **Status:** Not started · **Size:** S · **Priority:** P2
-- **Description:** Per-PR CI job that fails if any new external call (HTTP, A2A, DB, tool invocation) lacks an OTel span. Implemented as a span exporter in test mode — every test must exercise a code path that emits at least one span, asserted via the exporter. New agents or new tool wrappers without instrumentation fail this gate before they merge.
-- **Expected outcome:** A PR cannot land code that bypasses observability.
+- **Status:** In progress · **Size:** S · **Priority:** P2
+- **Description:** A dedicated CI job checks changed HTTP, A2A, database, and tool call sites against a code-owned inventory and runs exporter-backed tests at the registered operation boundaries.
+- **Acceptance criteria:**
+  1. **AC1** (`F41.ac1`) — Each boundary test owns an in-memory exporter that records ended spans and can be reset and shut down without affecting another test or the global provider.
+  2. **AC2** (`F41.ac2`) — Each registered HTTP, A2A, database, and tool boundary has a dedicated test that invokes the exact path and verifies its span name, kind, trace ID, and parent.
+  3. **AC3** (`F41.ac3`) — A failing boundary emits an ERROR span and sanitized event while preserving the existing caller-visible exception or result.
+  4. **AC4** (`F41.ac4`) — The changed-call-site check rejects a new or modified raw external call unless it uses a registered instrumented adapter with a matching exporter-backed test or has an exact exemption with a reason and owner.
+  5. **AC5** (`F41.ac5`) — The focused suite passes with telemetry endpoints unset and outbound network access disabled, using local fakes and in-process transports for external operations.
+  6. **AC6** (`F41.ac6`) — Boundary spans expose bounded operation, service, and outcome attributes without URLs, credentials, SQL, staff PII, request bodies, or tool payloads.
+  7. **AC7** (`F41.ac7`) — Dedicated CI runs the contract suite and call-site check, rejecting an uninstrumented wrapper fixture and accepting its registered counterpart.
+- **Edge / adversarial cases:** Missing and malformed W3C context, overlapping requests, cancellation, timeouts, exporter failure, import and method aliases, multiline calls, and a missing or stale registry entry.
+- **Cross-references:** F18, F36, F38, [CS-041 implementation plan](./docs/plans/CS-041-CS-022-observability-and-coverage-law.md).
+- **Expected outcome:** New or changed calls through monitored APIs require operation-specific observability evidence or an explicitly reviewed exemption.
 
 ---
 

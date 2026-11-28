@@ -28,7 +28,9 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry.trace import SpanKind
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.datastructures import Headers
 
 from agents.explanation.grounding import ShiftNotFound
 from agents.explanation.model import AnthropicExplainer
@@ -44,6 +46,7 @@ from auth.service import (
     TenantAuthService,
     TenantSuspendedError,
 )
+from otel.boundary import boundary_span, incoming_context, mark_error
 
 from .auth_gateway import ACCESS_COOKIE_NAME, build_auth_service_from_env, extract_access_credential
 from .config import gateway_cors_origins_from_env
@@ -84,6 +87,27 @@ class SignupRequest(BaseModel):
 class VerifyEmailRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     token: str = Field(min_length=1, max_length=4096)
+
+class _GatewayRequestSpan:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        with boundary_span(
+            "http.server.request", SpanKind.SERVER, "manager-gateway", "request",
+            parent=incoming_context(Headers(scope=scope)),
+        ) as span:
+            async def observe_response(message):
+                if message["type"] == "http.response.start" and message["status"] >= 400:
+                    mark_error(span)
+                await send(message)
+
+            await self.app(scope, receive, observe_response)
+
 
 def create_app(
     auth_service: TenantAuthService,
@@ -151,6 +175,8 @@ def create_app(
             elif "host" not in {value.strip().lower() for value in vary.split(",")}:
                 response.headers["Vary"] = f"{vary}, Host"
         return response
+
+    app.add_middleware(_GatewayRequestSpan)
 
     def current_principal(request: Request) -> Principal:
         # Tenant/user/role are established only from the reconciled access-token claims.

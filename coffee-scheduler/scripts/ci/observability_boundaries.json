@@ -1,0 +1,810 @@
+{
+  "boundaries": {
+    "http-client": {
+      "category": "HTTP",
+      "module": "agents/a2a_transport.py",
+      "symbol": "_post_stream",
+      "span": "http.client.post",
+      "kind": "CLIENT",
+      "test": "BoundaryTests.test_http_client",
+      "sites": {
+        "_post_stream|HTTP|httpx.Client|2ab6e5761cbbe1457089": 1,
+        "_post_stream|HTTP|client.stream|b4ceb0cfb6f6723290d1": 1
+      }
+    },
+    "http-server": {
+      "category": "HTTP",
+      "module": "api/app.py",
+      "symbol": "create_app",
+      "span": "http.server.request",
+      "kind": "SERVER",
+      "test": "BoundaryTests.test_http_server",
+      "sites": {
+        "create_app|HTTP server|FastAPI|12dd4cc76686393422dc": 1,
+        "create_app|HTTP server|FastAPI|250165b8de59cc9546c8": 1
+      }
+    },
+    "a2a-client": {
+      "category": "A2A",
+      "module": "agents/a2a_transport.py",
+      "symbol": "AgentClient.send",
+      "span": "a2a.message.send",
+      "kind": "CLIENT",
+      "test": "BoundaryTests.test_a2a_roundtrip",
+      "sites": {}
+    },
+    "a2a-server": {
+      "category": "A2A",
+      "module": "agents/a2a_transport.py",
+      "symbol": "create_agent_app",
+      "span": "a2a.message.receive",
+      "kind": "SERVER",
+      "test": "BoundaryTests.test_a2a_roundtrip",
+      "sites": {
+        "create_agent_app|HTTP server|FastAPI|12dd4cc76686393422dc": 1,
+        "create_agent_app|HTTP server|FastAPI|1a8d1e8c375b620746ec": 1
+      }
+    },
+    "db-execute": {
+      "category": "DB",
+      "module": "data_access/session.py",
+      "symbol": "execute_statement",
+      "span": "db.postgresql.execute",
+      "kind": "CLIENT",
+      "test": "BoundaryTests.test_database_execute",
+      "sites": {
+        "execute_statement|DB|conn.execute|225fb44a95c18e399947": 1
+      }
+    },
+    "tool-dispatch": {
+      "category": "tool",
+      "module": "agents/scheduler/workflow.py",
+      "symbol": "_invoke_tool",
+      "span": "tool.scheduler.invoke",
+      "kind": "INTERNAL",
+      "test": "BoundaryTests.test_scheduler_tool",
+      "sites": {
+        "_invoke_tool|tool|tool.invoke|3c348883650ce5003ebe": 1
+      }
+    }
+  },
+  "exemptions": {
+    "agents/demand_forecast/backtest.py": {
+      "owner": "Forecast",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "_load_actuals_and_keys|DB|conn.execute|0b0f88b057271b279aec": 1,
+        "load_source_window|DB|conn.execute|769db9ed15885f613d5c": 1
+      }
+    },
+    "agents/demand_forecast/feature_build.py": {
+      "owner": "Forecast",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "_current_tenant|DB|conn.execute|00cee63f367fbbc47e73": 1,
+        "build_feature_set|DB|conn.execute|0a61be82c35e5e42f6f5": 1,
+        "build_feature_set|DB|conn.execute|0e52856e74fa4905f3a8": 1,
+        "build_feature_set|DB|conn.execute|72b6da1627b57a43fa21": 1,
+        "build_feature_set|DB|conn.execute|838867ab83f48450b286": 1,
+        "build_feature_set|DB|conn.execute|839d8162d22c57ba4b33": 1,
+        "build_feature_set|DB|conn.execute|aa8e8c7dc1cbbfeb85c1": 1,
+        "build_feature_set|DB|cur.executemany|e59c96de8bd17dd26c66": 1
+      }
+    },
+    "agents/demand_forecast/inference.py": {
+      "owner": "Forecast",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "build_inference_rows|DB|conn.execute|0532a93ddb186f2aa28e": 1,
+        "build_inference_rows|DB|conn.execute|0a61be82c35e5e42f6f5": 1,
+        "build_inference_rows|DB|conn.execute|aa8e8c7dc1cbbfeb85c1": 1,
+        "history_priors|DB|conn.execute|0abe63de32d2a7d3e1e2": 1
+      }
+    },
+    "agents/demand_forecast/model.py": {
+      "owner": "Forecast",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "_current_tenant|DB|conn.execute|00cee63f367fbbc47e73": 1,
+        "_load_features|DB|conn.execute|ccd3fee572f140a1d2f8": 1,
+        "load_model|DB|conn.execute|7ce2b3f2d7741d788f11": 1,
+        "persist_forecasts|DB|cursor.executemany|af12db9014c5146fba85": 1,
+        "predict|DB|conn.execute|3bc61aef8c12aeab41fe": 1,
+        "train|DB|conn.execute|13b275f2e24bf9127496": 1,
+        "train|DB|conn.execute|39d24d41e620d8a3b973": 1
+      }
+    },
+    "agents/demand_forecast/service.py": {
+      "owner": "Forecast",
+      "reason": "Existing direct queries and dynamic reads of validated forecast record fields.",
+      "sites": {
+        "forecast_source|DB|conn.execute|b611215b74b87abda92b": 1,
+        "score_forecast|DB|conn.execute|ddc15b5e0e64a15a6933": 1,
+        "score_forecast|dynamic|getattr|126a17aa53838fd960ef": 1
+      }
+    },
+    "agents/explanation/grounding.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "_judge_shift|DB|conn.execute|3036a5d6d0031d4ba12e": 1,
+        "_judge_shift|DB|conn.execute|73f6c7817d8debab95b9": 1,
+        "gather_evidence|DB|conn.execute|9a6ec1305d93e8630267": 1,
+        "gather_evidence|DB|conn.execute|a1dde4c13993f68b1baa": 1
+      }
+    },
+    "agents/explanation/model.py": {
+      "owner": "Explanation",
+      "reason": "Existing optional explanation-model transport, which owns its timeout and API-error fallback.",
+      "sites": {
+        "AnthropicExplainer.__call__|HTTP|anthropic.Anthropic|a22ddda5da1462709d19": 1,
+        "AnthropicExplainer.__call__|HTTP|client.messages.create|87952e405b9ed5de2962": 1
+      }
+    },
+    "agents/labor_compliance/service.py": {
+      "owner": "Labor Compliance",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "evaluate_proposal|DB|conn.execute|06bc810f7dbc690f5814": 1,
+        "evaluate_proposal|DB|conn.execute|4463590378e032ce65df": 1,
+        "evaluate_proposal|DB|conn.execute|8ab550f7353fa9c0c024": 1,
+        "evaluate_proposal|DB|conn.execute|ddc15b5e0e64a15a6933": 1
+      }
+    },
+    "agents/scheduler/constraints.py": {
+      "owner": "Scheduler",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "legality_from_compliance|DB|conn_or_dsn.execute|a3d66272d13122f25d21": 1
+      }
+    },
+    "agents/scheduler/draft_runs.py": {
+      "owner": "Scheduler",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "DraftRuns._expire|DB|conn.execute|c19581d923b2ff70269a": 1,
+        "DraftRuns.claim|DB|conn.execute|1395507afe5e74e4173f": 1,
+        "DraftRuns.claim|DB|conn.execute|26bb96a73f2138ab2dc4": 1,
+        "DraftRuns.claim|DB|conn.execute|701344877b75abf20198": 1,
+        "DraftRuns.claim|DB|conn.execute|833d85d743a709ce758d": 1,
+        "DraftRuns.claim|DB|conn.execute|cf941759e31f607543e7": 1,
+        "DraftRuns.claim|DB|conn.execute|cf97c1c372a7cf82793d": 1,
+        "DraftRuns.claim|DB|conn.execute|ddc15b5e0e64a15a6933": 1,
+        "DraftRuns.release|DB|conn.execute|ddc15b5e0e64a15a6933": 1,
+        "DraftRuns.release|DB|conn.execute|fb855183018a82674045": 1,
+        "DraftRuns.save|DB|conn.execute|9172ef2ea19bfe973dbf": 1,
+        "DraftRuns.save|DB|conn.execute|ddc15b5e0e64a15a6933": 1,
+        "DraftRuns.save|DB|conn.execute|e0f85f9ea05767126046": 1
+      }
+    },
+    "agents/scheduler/inputs.py": {
+      "owner": "Scheduler",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "_rows|DB|cursor.execute|68ae2868343998755b46": 1,
+        "assemble_solver_inputs|DB|conn.execute|b5d48a949c1e195121a6": 1,
+        "main|DB|psycopg.connect|7a8e674b2c507f1e8e37": 1
+      }
+    },
+    "agents/scheduler/objective.py": {
+      "owner": "Scheduler",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "revenue_priors|DB|conn.execute|3d5e2100b6cb49f5f7ca": 1
+      }
+    },
+    "agents/scheduler/persist.py": {
+      "owner": "Scheduler",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "persist_schedule|DB|conn.execute|32f8a38c558a6ec741a5": 1,
+        "persist_schedule|DB|conn.execute|3a5304346027a453e23a": 1,
+        "persist_schedule|DB|conn.execute|531880fb1f2bf0244ade": 1,
+        "persist_schedule|DB|conn.execute|606029ff140ec736de90": 1,
+        "persist_schedule|DB|conn.execute|9852a53fd00e948d195a": 1,
+        "persist_schedule|DB|conn.execute|9a96f02d3618327c4729": 1,
+        "persist_schedule|DB|conn.execute|a07cb7f73ee5cb996c9c": 1,
+        "persist_schedule|DB|conn.execute|bbf6eed3c770c8a97d15": 1,
+        "persist_schedule|DB|conn.execute|df04d6e39244d858f5de": 1,
+        "persist_schedule|DB|conn.execute|fbd057ed7964e0896ffc": 1
+      }
+    },
+    "agents/scheduler/service.py": {
+      "owner": "Scheduler",
+      "reason": "Existing scheduler database operations and calls through the registered A2A client and local workflow.",
+      "sites": {
+        "generate_draft|tool|workflow.invoke|14eea2def9bc5f509605": 1,
+        "make_workflow.forecast|HTTP|client.send|d96a02741c3e5e75c596": 1,
+        "make_workflow.gather|DB|conn.execute|ddc15b5e0e64a15a6933": 1,
+        "make_workflow.prepare|DB|conn.execute|ddc15b5e0e64a15a6933": 1
+      }
+    },
+    "agents/scheduler/workflow.py": {
+      "owner": "Scheduler",
+      "reason": "Compilation invokes the local graph; external dispatch happens in the registered tool adapter.",
+      "sites": {
+        "ScheduleWorkflow.invoke|tool|.invoke|794bd838a1747881e3fc": 1
+      }
+    },
+    "api/app.py": {
+      "owner": "Gateway",
+      "reason": "Existing gateway application type annotations and local database accessors.",
+      "sites": {
+        "<module>|HTTP server|FastAPI|12dd4cc76686393422dc": 1,
+        "create_app.lifespan|HTTP server|FastAPI|12dd4cc76686393422dc": 1,
+        "create_app.shift_explanation|DB|.connection|5a19a0fd4dcfdf52926b": 1
+      }
+    },
+    "api/auth_gateway.py": {
+      "owner": "Identity",
+      "reason": "Existing pool access and dispatch to the internal authentication repository.",
+      "sites": {
+        "PooledAuthRepository._call|DB|self._pool.connection|cd52774949a9d42a80fa": 1,
+        "PooledAuthRepository._call|dynamic|getattr|c2e1b815c1d3a764fcd7": 1,
+        "_auth_pool|DB|ConnectionPool|d286f06ab29c9e92cea1": 1,
+        "_validate_auth_database_principal|DB|cur.execute|2a8cf41610222ecb091c": 1,
+        "_validate_auth_database_principal|DB|cur.execute|6cfd0b9d610630cffce3": 1,
+        "_validate_auth_database_principal|DB|pool.connection|e958991cc73bdf336c68": 1
+      }
+    },
+    "api/db.py": {
+      "owner": "Gateway",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "GatewayDatabase.__init__|DB|ConnectionPool|fe1ce4f75a099db21dd7": 1,
+        "GatewayDatabase._pool_for_request|DB|ConnectionPool|d847a2b61b2358b29ebd": 1,
+        "GatewayDatabase._pool_for_request|DB|ConnectionPool|fe1ce4f75a099db21dd7": 1,
+        "GatewayDatabase.fetch_schedule|DB|.connection|de59c24dba16a12af910": 1,
+        "GatewayDatabase.fetch_schedule|DB|cursor.execute|5c9a61109a8388457cb7": 1,
+        "GatewayDatabase.fetch_schedule|DB|cursor.execute|8e5a5a41e919e1471a54": 1,
+        "GatewayDatabase.fetch_shift_rule_evals|DB|.connection|de59c24dba16a12af910": 1,
+        "GatewayDatabase.fetch_shift_rule_evals|DB|cursor.execute|528613befc23c49a9940": 1,
+        "GatewayDatabase.fetch_stores|DB|.connection|de59c24dba16a12af910": 1,
+        "GatewayDatabase.fetch_stores|DB|conn.execute|dc7849309d99bd87c284": 1,
+        "GatewayDatabase.resolve_active_slug|DB|.connection|de59c24dba16a12af910": 1,
+        "GatewayDatabase.resolve_active_slug|DB|conn.execute|0c68ed2322527748d046": 1
+      }
+    },
+    "auth/repository.py": {
+      "owner": "Identity",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "DatabaseAuthRepository.accept_invitation|DB|cur.execute|ccb90cc626d2eef5d5a1": 1,
+        "DatabaseAuthRepository.accept_invitation|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.access_state|DB|cur.execute|b78570dd2fff4b30a584": 1,
+        "DatabaseAuthRepository.begin_invitation_accept|DB|cur.execute|815a9731dbb89bde3984": 1,
+        "DatabaseAuthRepository.begin_invitation_accept|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.complete_invitation_accept|DB|cur.execute|6e9dddcf520972379112": 1,
+        "DatabaseAuthRepository.complete_invitation_accept|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.consume_and_replace|DB|cur.execute|557268780b8d27c42c86": 1,
+        "DatabaseAuthRepository.consume_mfa_step|DB|cur.execute|c5d048bd46d770441bd3": 1,
+        "DatabaseAuthRepository.consume_mfa_step|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.consume_password_reset|DB|cur.execute|55fbbc19a96c679cf834": 1,
+        "DatabaseAuthRepository.consume_password_reset|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.consume_recovery_code|DB|cur.execute|37500c649089ec7b7e4d": 1,
+        "DatabaseAuthRepository.consume_recovery_code|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.create_invitation|DB|cur.execute|9a786285882d0e0cfd43": 1,
+        "DatabaseAuthRepository.create_invitation|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.create_invitation|DB|self.conn.rollback|be1cc509578788774f78": 1,
+        "DatabaseAuthRepository.get_invitation|DB|cur.execute|5284ba81d84671604f5c": 1,
+        "DatabaseAuthRepository.get_mfa|DB|cur.execute|5f1caa0ac7392ab4fcdd": 1,
+        "DatabaseAuthRepository.get_refresh_token|DB|cur.execute|631d059e7ea83f24a4f5": 1,
+        "DatabaseAuthRepository.get_tenant_user_by_email|DB|cur.execute|7fe34ecaca6960d87213": 1,
+        "DatabaseAuthRepository.get_tenant_user_by_id|DB|cur.execute|367d109dfba1ace43241": 1,
+        "DatabaseAuthRepository.insert_refresh_token|DB|cur.execute|7a101de641887d1231ac": 1,
+        "DatabaseAuthRepository.issue_password_reset|DB|cur.execute|6ab73e966f08a00891a2": 1,
+        "DatabaseAuthRepository.issue_password_reset|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.list_invitations|DB|cur.execute|17cbc885c952fbe1fd5b": 1,
+        "DatabaseAuthRepository.login_locked|DB|cur.execute|8924c23078e7f86075ca": 1,
+        "DatabaseAuthRepository.onboarding_email_verified|DB|cur.execute|e2f9858300dda0d1e8d2": 1,
+        "DatabaseAuthRepository.onboarding_issue_verification|DB|cur.execute|a4b04b9afb18e5e81273": 1,
+        "DatabaseAuthRepository.onboarding_issue_verification|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.onboarding_provision|DB|cur.execute|ce3ce3690666a67bbf8e": 1,
+        "DatabaseAuthRepository.onboarding_provision|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.onboarding_signup|DB|cur.execute|761e89bffff13f19f5d6": 1,
+        "DatabaseAuthRepository.onboarding_signup|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.onboarding_suspend_expired_trials|DB|cur.execute|4a2b8f0edd7d80faf1a3": 1,
+        "DatabaseAuthRepository.onboarding_suspend_expired_trials|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.onboarding_tenant_jurisdiction|DB|cur.execute|b36fe768449ce03cb9bc": 1,
+        "DatabaseAuthRepository.onboarding_verify_email|DB|cur.execute|9568e3380e6f61e6c402": 1,
+        "DatabaseAuthRepository.onboarding_verify_email|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.record_audit|DB|cur.execute|219946cdbe767fc90ac0": 1,
+        "DatabaseAuthRepository.record_audit|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.record_login_attempt|DB|cur.execute|0ec6ddce30e3fc16e44f": 1,
+        "DatabaseAuthRepository.record_login_attempt|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.record_login|DB|cur.execute|4d445e6126d49add3a64": 1,
+        "DatabaseAuthRepository.revoke_access_token|DB|cur.execute|040f31e097091a81711e": 1,
+        "DatabaseAuthRepository.revoke_access_token|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.revoke_family|DB|cur.execute|255fb1a6c08aa85bfe43": 1,
+        "DatabaseAuthRepository.revoke_invitation|DB|cur.execute|a5b883bc3c0d43056b52": 1,
+        "DatabaseAuthRepository.revoke_invitation|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.revoke_user_sessions|DB|cur.execute|66932a39dfc78f384c80": 1,
+        "DatabaseAuthRepository.revoke_user_sessions|DB|self.conn.commit|2b290d551ba3d77224cc": 1,
+        "DatabaseAuthRepository.store_mfa|DB|cur.execute|2973bef49c4b62a97cdd": 1,
+        "DatabaseAuthRepository.store_mfa|DB|self.conn.commit|2b290d551ba3d77224cc": 1
+      }
+    },
+    "compliance/engine.py": {
+      "owner": "Labor Compliance",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "_persist|DB|psycopg.connect|a761f234df8a33df43a9": 1,
+        "_read_snapshot|DB|conn.execute|2bbb45e335ee93c64376": 1,
+        "_read_snapshot|DB|conn.execute|2e3488660911eaf195ca": 1,
+        "_read_snapshot|DB|conn.execute|3068caa13a843f6fdb53": 1,
+        "_read_snapshot|DB|conn.execute|44eee0488767468d0953": 1,
+        "_read_snapshot|DB|conn.execute|9a5d2e15465ed8074fc4": 1,
+        "_read_snapshot|DB|conn.execute|9ad37c765b6d7b5d2cc4": 1,
+        "_read_snapshot|DB|conn.execute|f8acbee983c074cf0425": 1,
+        "_read_snapshot|DB|conn.execute|feb424e498f1bddc036b": 1,
+        "_require_scoped_session|DB|conn.execute|bb2b3cb496c000e76fb1": 1,
+        "_write_rule_evals|DB|conn.execute|23cdb1ccb903ddb59121": 1,
+        "_write_rule_evals|DB|conn.execute|52ca4f898a4b9337ac26": 1,
+        "load_snapshot|DB|psycopg.connect|a761f234df8a33df43a9": 1,
+        "prepare_session|DB|conn.execute|1d47f68ade5971ee7db7": 1,
+        "prepare_session|DB|conn.execute|485a32c527c7ff8d330e": 1,
+        "prepare_session|DB|conn.execute|be6d88d811721899640c": 1
+      }
+    },
+    "compliance/rules_admin.py": {
+      "owner": "Labor Compliance",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "_rows|DB|cur.execute|2b37f884338d64b99003": 1,
+        "_tenant_from_session|DB|conn.execute|b5d48a949c1e195121a6": 1,
+        "export_csv|DB|cur.copy|15fc2db558a642f43fe5": 1,
+        "patch_rule|DB|conn.execute|123144c4abdd2937bb36": 1,
+        "patch_rule|DB|conn.execute|fd36766cae017863bca4": 1,
+        "prepare_session|DB|conn.execute|1d47f68ade5971ee7db7": 1,
+        "prepare_session|DB|conn.execute|485a32c527c7ff8d330e": 1,
+        "prepare_session|DB|conn.execute|be6d88d811721899640c": 1
+      }
+    },
+    "contracts/forecast.py": {
+      "owner": "Forecast",
+      "reason": "Existing forecast persistence and reflection over local validated forecast records.",
+      "sites": {
+        "load_store_hours|DB|conn.execute|76ce817d8515d9ae8451": 1,
+        "load_vocabulary|DB|conn.execute|f7fb16fdf5320ea7d3f3": 1,
+        "record_to_dict|dynamic|getattr|7e1037baf4256aab32fd": 2,
+        "to_row|dynamic|r.__dict__|a5cce38e273330eb89d9": 1
+      }
+    },
+    "data_access/repository.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "CheckpointRepo.get_latest|DB|cur.execute|2fca0d024d57756cf488": 1,
+        "Repository.get|DB|cur.execute|44c4cb604f8a85b36329": 1,
+        "Repository.insert|DB|cur.execute|f3ac14cf2e5c230ee1a1": 1,
+        "Repository.list|DB|cur.execute|30fb4b9eb58397eab37f": 1,
+        "Repository.update|DB|cur.execute|5de80fe415e6f95d2e22": 1
+      }
+    },
+    "data_access/session.py": {
+      "owner": "Data Platform",
+      "reason": "Existing connection establishment for the tenant-scoped transaction adapter.",
+      "sites": {
+        "tenant_session|DB|psycopg.connect|6ca1fff4d4268188f254": 1
+      }
+    },
+    "data_access/soft_delete.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "_restore_show_deleted_setting|DB|conn.execute|5e3251276bb0ebe5906b": 1,
+        "_restore_show_deleted_setting|DB|conn.execute|fe1f350f1dcc3b4382fd": 1,
+        "_save_and_enable_show_deleted|DB|conn.execute|b538ca3332fbad130715": 1,
+        "enable_show_deleted|DB|conn.execute|38ca339cf0bbbfd55998": 1,
+        "list_including_deleted|DB|conn.execute|99a57a8d27e9f1052bdb": 1,
+        "restore|DB|conn.execute|b97e9196520f372af491": 1,
+        "soft_delete|DB|conn.execute|ff6a7acd532ebb665654": 1
+      }
+    },
+    "data_access/tables.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database statements and connection operations at the CS-041 baseline.",
+      "sites": {
+        "introspect|DB|conn.execute|a5645e16bbbf727e3d44": 1,
+        "introspect|DB|conn.execute|e0d81cac7c5f1feef6ab": 1
+      }
+    },
+    "db/migrations/env.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "run_migrations_online|DB|connectable.connect|a1136240d56a4c2f69a3": 1,
+        "run_migrations_online|DB|engine_from_config|60790896227cce7ef680": 1
+      }
+    },
+    "db/migrations/versions/0001_initial_schema.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|conn.exec_driver_sql|6103396fd24c4b4bedc4": 1,
+        "downgrade|DB|op.execute|2609225eb5aef01cf2c7": 1,
+        "downgrade|DB|op.execute|73401ee9f40619fe1bb1": 1,
+        "downgrade|DB|op.execute|a1ff69ea6d4aa7014a76": 1,
+        "downgrade|DB|op.get_bind|4f2b789be0ddc9852193": 1,
+        "upgrade|DB|conn.exec_driver_sql|6103396fd24c4b4bedc4": 1,
+        "upgrade|DB|op.execute|118c73c9a76437bf654b": 1,
+        "upgrade|DB|op.execute|15642daf2d122a1fd535": 1,
+        "upgrade|DB|op.execute|1c275dd6b6c6b988fbed": 2,
+        "upgrade|DB|op.execute|2c7a478769a998bb2b60": 1,
+        "upgrade|DB|op.execute|2dc1a64cfa3ed4025b61": 1,
+        "upgrade|DB|op.execute|461f4eb97900ba7feb7f": 1,
+        "upgrade|DB|op.execute|96fcbde77695c34ecb9e": 1,
+        "upgrade|DB|op.execute|9ec0a67f4c28f19fa70e": 1,
+        "upgrade|DB|op.execute|a713d7dfe8b1db6a3a79": 1,
+        "upgrade|DB|op.execute|ae2ab615f829ff356c10": 1,
+        "upgrade|DB|op.execute|aef1b4741eb1006c74a6": 1,
+        "upgrade|DB|op.execute|b911eef04ae28f606de7": 1,
+        "upgrade|DB|op.execute|c9b379cef8e68c661eba": 1,
+        "upgrade|DB|op.execute|dc9c70093e124f0f159c": 2,
+        "upgrade|DB|op.execute|e06e3616b1cb9d8f79d2": 1,
+        "upgrade|DB|op.get_bind|4f2b789be0ddc9852193": 1
+      }
+    },
+    "db/migrations/versions/0002_coverage_effective_dating.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|480bb04aa076669bba93": 1,
+        "upgrade|DB|op.execute|029aeaec9fa43bd4dea9": 1,
+        "upgrade|DB|op.execute|73f1a94e2d94017c2390": 1
+      }
+    },
+    "db/migrations/versions/0003_langgraph_checkpoints.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|1bfea222bffaca8e266e": 1,
+        "upgrade|DB|op.execute|4cb8ec00ba2036f1c3c1": 1,
+        "upgrade|DB|op.execute|6d069101926e4c20ebbb": 1,
+        "upgrade|DB|op.execute|7c61c04d0e5483095f59": 1,
+        "upgrade|DB|op.execute|860a791d35ed97785795": 1,
+        "upgrade|DB|op.execute|a1905258bc4e21c27a19": 1,
+        "upgrade|DB|op.execute|f080b8bdbf25bc5aee8c": 1,
+        "upgrade|DB|op.execute|fd17e1c1601d4e8d6ec5": 1
+      }
+    },
+    "db/migrations/versions/0004_tenants_rls.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|0cc91cd8b8a88a767522": 1,
+        "downgrade|DB|op.execute|36372f998d81008709a6": 1,
+        "upgrade|DB|op.execute|52cb27085c227d7c2258": 1,
+        "upgrade|DB|op.execute|7fc01939a23605d48f83": 1
+      }
+    },
+    "db/migrations/versions/0005_f60_tenant_stamp_verify.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "upgrade|DB|conn.exec_driver_sql|19ad8654169074d83870": 2,
+        "upgrade|DB|conn.exec_driver_sql|3fab40075e00e9549e51": 1,
+        "upgrade|DB|conn.exec_driver_sql|9f456c276cc904833957": 1,
+        "upgrade|DB|op.get_bind|4f2b789be0ddc9852193": 1
+      }
+    },
+    "db/migrations/versions/0006_f60_rls_failclosed.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|36372f998d81008709a6": 1,
+        "downgrade|DB|op.execute|40b370bf5dda8a231009": 1,
+        "downgrade|DB|op.execute|5354da7c71e05cfb315b": 1,
+        "downgrade|DB|op.execute|92d08a8006099cca41c4": 1,
+        "downgrade|DB|op.execute|dde509c798fbeeb1d69a": 1,
+        "upgrade|DB|op.execute|26d374550136eafd1195": 1,
+        "upgrade|DB|op.execute|36372f998d81008709a6": 1,
+        "upgrade|DB|op.execute|40b370bf5dda8a231009": 1,
+        "upgrade|DB|op.execute|560f309866597800f9d5": 1,
+        "upgrade|DB|op.execute|c729a7062866a37b449a": 1
+      }
+    },
+    "db/migrations/versions/0007_f60_partition_rls.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "_partition_names|DB|conn.exec_driver_sql|fbd1dd8726264fabf9e2": 1,
+        "_partition_names|DB|op.get_bind|4f2b789be0ddc9852193": 1,
+        "downgrade|DB|op.execute|694968909d310d3e6024": 1,
+        "downgrade|DB|op.execute|d1609a4adc3bdb800e27": 1,
+        "upgrade|DB|op.execute|1f73f7aa3a9b4e642afb": 1,
+        "upgrade|DB|op.execute|2011f5e06e2b4af23553": 1,
+        "upgrade|DB|op.execute|694968909d310d3e6024": 1,
+        "upgrade|DB|op.execute|c05a39447ffc2452377d": 1
+      }
+    },
+    "db/migrations/versions/0008_f60_fn_search_path.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|c729a7062866a37b449a": 1,
+        "upgrade|DB|op.execute|7c919dd9b97b499b7f9f": 1
+      }
+    },
+    "db/migrations/versions/0009_f60_rls_failclosed_sweep.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|8a67d5701663e3eaeb36": 1,
+        "downgrade|DB|op.execute|f2ca62c3b63867a6f59b": 1,
+        "upgrade|DB|conn.exec_driver_sql|8196139bac0058a06a5c": 1,
+        "upgrade|DB|op.execute|b54c40cb8009657844aa": 1,
+        "upgrade|DB|op.execute|f8d95a4a81d3d29d5480": 1,
+        "upgrade|DB|op.get_bind|4f2b789be0ddc9852193": 1
+      }
+    },
+    "db/migrations/versions/0010_cs061a_auth.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|conn.exec_driver_sql|35d952e2f18bbf6d030e": 1,
+        "downgrade|DB|op.execute|22e822b672e1b368214e": 1,
+        "downgrade|DB|op.execute|2609225eb5aef01cf2c7": 1,
+        "downgrade|DB|op.execute|26148e7d22dc8c00293b": 1,
+        "downgrade|DB|op.execute|2efd27af51cbf7e33982": 1,
+        "downgrade|DB|op.get_bind|4f2b789be0ddc9852193": 1,
+        "upgrade|DB|conn.exec_driver_sql|35d952e2f18bbf6d030e": 1,
+        "upgrade|DB|op.execute|01abb1421c6f80024c4b": 1,
+        "upgrade|DB|op.execute|099317d0d0d64177db83": 1,
+        "upgrade|DB|op.execute|105d27859e5b05df4ff5": 1,
+        "upgrade|DB|op.execute|141422839a031f53b596": 1,
+        "upgrade|DB|op.execute|15642daf2d122a1fd535": 1,
+        "upgrade|DB|op.execute|51c87798418bcefe458d": 1,
+        "upgrade|DB|op.execute|67ece49808566d736bea": 1,
+        "upgrade|DB|op.execute|784385b01710ce418297": 1,
+        "upgrade|DB|op.execute|831fda7647e3fad4c0a4": 1,
+        "upgrade|DB|op.execute|84e74810317d6bc6f5f3": 1,
+        "upgrade|DB|op.execute|e2860757b344cffd95da": 1,
+        "upgrade|DB|op.execute|f6e658c36644cea5e019": 1,
+        "upgrade|DB|op.execute|f964ed5649ea7cf77920": 1,
+        "upgrade|DB|op.get_bind|4f2b789be0ddc9852193": 1
+      }
+    },
+    "db/migrations/versions/0011_cs061b_auth_hardening.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|cfe9ece5683f159e5859": 1,
+        "upgrade|DB|op.execute|64a60f7194cfc0689c13": 1
+      }
+    },
+    "db/migrations/versions/0012_cs061c_invitations_audit.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|dc44f0de334bb0958cd3": 1,
+        "upgrade|DB|op.execute|64a60f7194cfc0689c13": 1
+      }
+    },
+    "db/migrations/versions/0013_cs087_soft_delete.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|69af76dc1e579738a89d": 1,
+        "upgrade|DB|op.execute|64b16a7cd691c2de1130": 1
+      }
+    },
+    "db/migrations/versions/0014_audit_revoke_app_rw.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|c7116d95bbcc56bf0c49": 1,
+        "upgrade|DB|op.execute|2927ea1a1c99bb2360fd": 1
+      }
+    },
+    "db/migrations/versions/0015_audit_append_only_trigger.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|9c593a6db59c8a00b838": 1,
+        "downgrade|DB|op.execute|cbacc56e8122eec9a8ec": 1,
+        "upgrade|DB|op.execute|ca1b183d88dc253e180c": 1
+      }
+    },
+    "db/migrations/versions/0016_cs062_onboarding.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|c2fc3d63b739d3e248ea": 1,
+        "upgrade|DB|op.execute|64a60f7194cfc0689c13": 1
+      }
+    },
+    "db/migrations/versions/0017_cs012_forecast_contract.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|39bef4ffd36f2784c802": 1,
+        "upgrade|DB|op.execute|48605e9fba05bb56df75": 1
+      }
+    },
+    "db/migrations/versions/0018_cs012_forecast_category_guard.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|39bef4ffd36f2784c802": 1,
+        "upgrade|DB|op.execute|48605e9fba05bb56df75": 1
+      }
+    },
+    "db/migrations/versions/0019_cs014a_forecast_features.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|39bef4ffd36f2784c802": 1,
+        "upgrade|DB|op.execute|333c50ea2eb50137bbaf": 1,
+        "upgrade|DB|op.execute|48605e9fba05bb56df75": 1,
+        "upgrade|DB|op.execute|838f43aa1f9d769fa0d4": 1,
+        "upgrade|DB|op.execute|c02a0d96eaab09024afa": 1,
+        "upgrade|DB|op.execute|f6b213ba1f96483784b8": 1,
+        "upgrade|DB|op.execute|fc86fbe36d49b699c3dd": 1
+      }
+    },
+    "db/migrations/versions/0020_cs014b_forecast_models.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|39bef4ffd36f2784c802": 1,
+        "upgrade|DB|op.execute|333c50ea2eb50137bbaf": 1,
+        "upgrade|DB|op.execute|48605e9fba05bb56df75": 1,
+        "upgrade|DB|op.execute|838f43aa1f9d769fa0d4": 1,
+        "upgrade|DB|op.execute|c02a0d96eaab09024afa": 1,
+        "upgrade|DB|op.execute|f6b213ba1f96483784b8": 1,
+        "upgrade|DB|op.execute|fc86fbe36d49b699c3dd": 1
+      }
+    },
+    "db/migrations/versions/0021_bug065_forecast_finite_interval.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|39bef4ffd36f2784c802": 1,
+        "upgrade|DB|op.execute|48605e9fba05bb56df75": 1,
+        "upgrade|DB|op.execute|b629d95cf8aa957072d0": 1
+      }
+    },
+    "db/migrations/versions/0022_bug043_invitation_accept_throttle.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|f7a1db07a0263799f280": 1,
+        "upgrade|DB|op.execute|e8bf703313e96b3226a0": 1
+      }
+    },
+    "db/migrations/versions/0023_bug041_qualify_invitation_accept.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|4757f47c065305a6fa49": 1,
+        "upgrade|DB|op.execute|a5759d53100e6616ffb9": 1
+      }
+    },
+    "db/migrations/versions/0024_bug067_validate_forecast_finite.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|68daac0e8e4eafed1bce": 1,
+        "downgrade|DB|op.execute|80e84f7d379421bd439f": 1,
+        "downgrade|DB|op.execute|b629d95cf8aa957072d0": 1,
+        "upgrade|DB|op.execute|766a9b8e642eacf198ca": 1,
+        "upgrade|DB|op.execute|b629d95cf8aa957072d0": 1,
+        "upgrade|DB|op.execute|b9f204b96cf11216d763": 1,
+        "upgrade|DB|op.get_context|cbac6a1c3b908b09cab2": 1
+      }
+    },
+    "db/migrations/versions/0025_cs015_draft_runs.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.execute|c581b113e8497757ff03": 1,
+        "downgrade|DB|op.execute|c741afbb8911dd1106db": 1,
+        "upgrade|DB|op.execute|354eb9f732a8fceeb170": 1,
+        "upgrade|DB|op.execute|3f89619f45525ef3f5fc": 1,
+        "upgrade|DB|op.execute|4a5ec27b47878fa4314e": 1,
+        "upgrade|DB|op.execute|86b8deb340f61fd5c98d": 1,
+        "upgrade|DB|op.execute|92c42ebeccae38b1c029": 1,
+        "upgrade|DB|op.execute|b010d51e5d674a5c6327": 1
+      }
+    },
+    "db/migrations/versions/0026_cs031_schedule_status.py": {
+      "owner": "Data Platform",
+      "reason": "Existing Alembic schema operations run on the migration job rather than a request boundary.",
+      "sites": {
+        "downgrade|DB|op.drop_constraint|18ee35f54d2bc726304e": 1,
+        "upgrade|DB|op.create_check_constraint|64901c1a7c55e081ba5f": 1
+      }
+    },
+    "db/partition_migrations.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database operations in deployment or offline maintenance tooling.",
+      "sites": {
+        "attach_partition_index|DB|Connection|7707147a7b7355b5ab27": 1,
+        "attach_partition_index|DB|conn.execute|b516ae453f269ad50c0f": 1,
+        "begin_tenant_backfill|DB|Connection|7707147a7b7355b5ab27": 1,
+        "begin_tenant_backfill|DB|conn.execute|4579b130b9514db75ed9": 1,
+        "begin_tenant_backfill|DB|conn.execute|b0256bcf7ed06dd5d769": 1,
+        "begin_tenant_backfill|DB|conn.execute|f7448daf5327e9d2aa88": 1,
+        "create_leaf_index_concurrently|DB|Connection|7707147a7b7355b5ab27": 1,
+        "create_leaf_index_concurrently|DB|conn.execute|8731e26b63bf5ccd96e3": 1,
+        "create_parent_index|DB|Connection|7707147a7b7355b5ab27": 1,
+        "create_parent_index|DB|conn.execute|2f3f4b8e8e190ae3423c": 1,
+        "finish_tenant_backfill|DB|Connection|7707147a7b7355b5ab27": 1,
+        "finish_tenant_backfill|DB|conn.execute|15252c58fc81dbf295e1": 1,
+        "finish_tenant_backfill|DB|conn.execute|1e6e683e4b8cfd46206c": 1,
+        "validate_tenant_backfill|DB|Connection|7707147a7b7355b5ab27": 1,
+        "validate_tenant_backfill|DB|conn.execute|816eb093221376c0bb64": 1
+      }
+    },
+    "db/partitions.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database operations in deployment or offline maintenance tooling.",
+      "sites": {
+        "ensure_partition_rls|DB|conn.execute|2792bc01efd20bdf5bcc": 1,
+        "ensure_partition_rls|DB|conn.execute|6a342928d6c342751f73": 1,
+        "ensure_partition_rls|DB|conn.execute|9c9d8ee0f503358eb727": 1,
+        "ensure_partition_rls|DB|conn.execute|dcf3b5a6be98aae4bc0c": 1
+      }
+    },
+    "otel/demo/service_a.py": {
+      "owner": "Observability",
+      "reason": "Existing standalone F36 demo client with its own span and bootstrap.",
+      "sites": {
+        "main|HTTP|urllib.request.urlopen|09f773f67a09322b58a7": 1
+      }
+    },
+    "otel/demo/service_b.py": {
+      "owner": "Observability",
+      "reason": "Existing standalone F36 demo server with its own span and bootstrap.",
+      "sites": {
+        "main|HTTP server|HTTPServer|290ec9b08377038d3dd5": 1
+      }
+    },
+    "scripts/check_schema_drift.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database operations in deployment or offline maintenance tooling.",
+      "sites": {
+        "check|DB|conn.execute|28055b71cdf37c1f618f": 1,
+        "check|DB|conn.execute|31180d0bfadbf0f60832": 2,
+        "check|DB|conn.execute|62d7d4bce6542652bce2": 1,
+        "check|DB|conn.execute|f6563b97ace0c54754cb": 2,
+        "check|DB|psycopg.connect|e41e67fca1185fa8ba79": 1
+      }
+    },
+    "scripts/measure_solver_scale.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database operations in deployment or offline maintenance tooling.",
+      "sites": {
+        "main|DB|psycopg.connect|7a8e674b2c507f1e8e37": 1
+      }
+    },
+    "scripts/seed_demo_schedule.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database operations in deployment or offline maintenance tooling.",
+      "sites": {
+        "seed|DB|conn.execute|616c0e451764d996c42b": 1,
+        "seed|DB|conn.execute|6d445ad2500d3beb0d57": 1,
+        "seed|DB|conn.execute|fbd68fcb555886db2fa6": 1
+      }
+    },
+    "scripts/seed_rule_templates.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database operations in deployment or offline maintenance tooling.",
+      "sites": {
+        "seed|DB|conn.commit|b580f1aea98beed7e28e": 1,
+        "seed|DB|cur.execute|7e4ed4fc5eefc02d165f": 1,
+        "seed|DB|cur.execute|f54cdde22db129d684ac": 1,
+        "seed|DB|psycopg.connect|39ae75614ef11706d166": 1
+      }
+    },
+    "scripts/suspend_expired_trials.py": {
+      "owner": "Data Platform",
+      "reason": "Existing database operations in deployment or offline maintenance tooling.",
+      "sites": {
+        "run|DB|cur.execute|58a70947b8971d3c233d": 1,
+        "run|DB|psycopg.connect|755552d84286361ff9c1": 1
+      }
+    }
+  }
+}

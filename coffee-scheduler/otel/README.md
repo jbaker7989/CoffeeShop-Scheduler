@@ -186,3 +186,25 @@ coffee-scheduler/otel/.venv/bin/python -m unittest coffee-scheduler.test.test_cs
 CS036_RUN_COLLECTOR_TESTS=1 OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
   coffee-scheduler/otel/.venv/bin/python -m unittest coffee-scheduler.test.test_cs036_otel_foundation
 ```
+
+## CS-041 boundary contracts
+
+From `coffee-scheduler/`, with the project and OTel dependencies installed, run
+`python -m unittest discover -s test -p 'test_cs041_observability.py'` and
+`python scripts/ci/check_observability.py`. CI runs the contract in a network
+namespace without network access. The boundary adapters use the process's
+existing OTel tracer provider when one is installed.
+
+For new HTTP, A2A, PostgreSQL, or tool calls, use a tested adapter listed in
+`scripts/ci/observability_boundaries.json`. To introduce a new adapter, register
+its owner module and symbol, exact raw sites, span identity, and the dedicated
+exporter-backed test. The checker rejects a new site even within an existing
+adapter until that site is registered.
+
+The checker inventories the current Python tree, including imports, aliases,
+and reflective access to monitored APIs. For an unfamiliar SDK or a call that
+requires dynamic dispatch, add the API to the checker and put the call behind
+an explicit tested adapter. Python reflection and arbitrary callbacks prevent
+the checker from proving the behavior of every runtime path. A reviewed
+exemption records a concrete owner, rationale, and exact AST fingerprints per
+module. Changes to a fingerprint or its occurrence count require fresh review.
