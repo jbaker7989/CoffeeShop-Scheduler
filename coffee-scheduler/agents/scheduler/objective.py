@@ -32,13 +32,14 @@ class ObjectiveError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ObjectiveWeights:
-    """Default relative weights: cost 1, coverage 100, overtime 10, premium 1, sales breach 10."""
+    """Default relative weights; guarantee 2 weakly favours filling priced half-hours."""
 
     labour_cost: int = 1
     understaffing: int = 100
     overtime: int = 10
     premium: int = 1
     labour_pct_breach: int = 10
+    guaranteed_hours_shortfall: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,11 +51,13 @@ class ObjectiveTerms:
     overtime: Any
     premium: Any
     labour_pct_breach: Any
+    guaranteed_hours_shortfall: Any
     weights: ObjectiveWeights
     understaffing_slack: dict[tuple[int, object, int], cp_model.IntVar]
     overtime_slack: dict[int, cp_model.IntVar]
     overtime_budget_slack: dict[int, cp_model.IntVar]
     labour_pct_breach_slack: dict[int, cp_model.IntVar]
+    guaranteed_hours_slack: dict[tuple[int, tuple[int, int]], cp_model.IntVar]
     omitted: tuple[str, ...]
 
 
@@ -154,6 +157,7 @@ def build_objective(
         ("overtime", weights.overtime),
         ("premium", weights.premium),
         ("labour_pct_breach", weights.labour_pct_breach),
+        ("guaranteed_hours_shortfall", weights.guaranteed_hours_shortfall),
     ):
         if not isinstance(value, int) or value < 0:
             raise ObjectiveError(f"objective weight {name!r}: expected non-negative integer")
@@ -210,9 +214,18 @@ def build_objective(
     overtime_ceiling: dict[int, int] = {store.location_id: 0 for store in inputs.stores}
     half_hours_available = sum(int(slot.hours * 2) for slot in slots)
     for employee in employees:
-        units = sum(int(slots[index].hours * 2) * model.assign[(employee.employee_id, index)] for index in range(len(slots)))
+        weekly_slacks: list[cp_model.IntVar] = []
+        for iso_week, slot_indices in sorted(index.by_week.items()):
+            units_week = sum(
+                int(slots[slot_index].hours * 2) * model.assign[(employee.employee_id, slot_index)]
+                for slot_index in slot_indices
+            )
+            available = sum(int(slots[slot_index].hours * 2) for slot_index in slot_indices)
+            weekly_slack = model.model.NewIntVar(0, available, f"overtime_e{employee.employee_id}_w{iso_week[0]}_{iso_week[1]}")
+            model.model.Add(weekly_slack >= units_week - _HALF_HOURS_PER_WEEK)
+            weekly_slacks.append(weekly_slack)
         slack = model.model.NewIntVar(0, half_hours_available, f"overtime_e{employee.employee_id}")
-        model.model.Add(slack >= units - _HALF_HOURS_PER_WEEK)
+        model.model.Add(slack == sum(weekly_slacks))
         overtime_slack[employee.employee_id] = slack
         target = targets.get(employee.home_location_id)
         if target is None:
@@ -227,6 +240,24 @@ def build_objective(
         overtime_parts.append(cost)
         overtime_cost[employee.home_location_id].append(cost)
         overtime_ceiling[employee.home_location_id] += per_half_hour * half_hours_available
+
+    guaranteed_hours_slack: dict[tuple[int, tuple[int, int]], cp_model.IntVar] = {}
+    guaranteed_hours_parts: list[Any] = []
+    for employee in employees:
+        if employee.min_hours_week == 0:
+            continue
+        rate = _decimal(employee.hourly_rate, description=f"employee {employee.employee_id} hourly_rate")
+        per_half_hour = _cents(rate / Decimal(2), description=f"employee {employee.employee_id} guaranteed hours rate")
+        required = employee.min_hours_week * 2
+        for iso_week in model.full_weeks:
+            units_week = sum(
+                int(slots[slot_index].hours * 2) * model.assign[(employee.employee_id, slot_index)]
+                for slot_index in index.by_week.get(iso_week, ())
+            )
+            shortfall = model.model.NewIntVar(0, required, f"guaranteed_e{employee.employee_id}_w{iso_week[0]}_{iso_week[1]}")
+            model.model.Add(shortfall >= required - units_week)
+            guaranteed_hours_slack[(employee.employee_id, iso_week)] = shortfall
+            guaranteed_hours_parts.append(per_half_hour * shortfall)
 
     for store_id, parts in sorted(overtime_cost.items()):
         if not parts:
@@ -277,7 +308,8 @@ def build_objective(
 
     terms = ObjectiveTerms(
         sum(labour_parts), sum(understaffing_parts), sum(overtime_parts), sum(premium_parts), sum(labour_pct_parts),
-        weights, understaffing_slack, overtime_slack, overtime_budget_slack, labour_pct_breach_slack,
+        sum(guaranteed_hours_parts), weights, understaffing_slack, overtime_slack, overtime_budget_slack,
+        labour_pct_breach_slack, guaranteed_hours_slack,
         tuple(omitted),
     )
     model.model.Minimize(
@@ -286,5 +318,6 @@ def build_objective(
         + weights.overtime * terms.overtime
         + weights.premium * terms.premium
         + weights.labour_pct_breach * terms.labour_pct_breach
+        + weights.guaranteed_hours_shortfall * terms.guaranteed_hours_shortfall
     )
     return terms

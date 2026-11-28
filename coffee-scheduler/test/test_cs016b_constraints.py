@@ -121,9 +121,14 @@ class ConstraintTests(unittest.TestCase):
         with self.assertRaisesRegex(SolverModelError, "SR-MIN-LEN"):
             build_slot_grid(bad)
         slots = (ShiftSlot(3, DAY, Decimal("8"), Decimal("10")),)
-        short = replace(_inputs(), employees=(replace(_inputs().employees[0], min_hours_week=3),))
-        short = replace(short, target_window=(DAY, DAY.fromordinal(DAY.toordinal() + 6)))
-        model = build_model(short, slots=slots)
+        # min_hours_week is a soft objective after CS-088, so a hard shift_rules infeasibility must
+        # come from a bound that stays hard. Coverage forces the 2-hour slot to be staffed, but a
+        # 1-hour weekly maximum cannot absorb it, so shift_rules is a binding infeasibility core.
+        capped = replace(
+            _inputs(), employees=tuple(replace(person, max_hours_week=1) for person in _inputs().employees)
+        )
+        model = build_model(capped, slots=slots)
+        self.assertEqual(_solve(model), cp_model.INFEASIBLE)
         self.assertIn("shift_rules", diagnose_infeasibility(model))
 
     # spec: F11.ac11

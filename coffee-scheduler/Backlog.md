@@ -2817,7 +2817,8 @@ closing regression evidence.
 
 ### CS-088 — Make guaranteed weekly hours a soft fairness term
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Status:** ✅ Done (2026-11-24)
+- **Summary:** Guaranteed weekly hours now use a non-negative, integer-cents shortfall objective only for fully covered ISO weeks. The default weight weakly prefers meeting the commitment, while legal feasibility and the hard weekly maximum remain unchanged; offline fixtures prove an unavoidable shortfall stays feasible, records its penalty, and responds to weighting.
 - **Description:** `min_hours_week` is currently a **hard** CP-SAT constraint. BUG-072 scoped it correctly to fully covered ISO weeks, but hardness itself is the deeper problem: a guaranteed-hours commitment can contradict the law. A minor whose lawful slots total fewer hours than their minimum makes the model infeasible with **no legal remedy** — the only "fix" would be to schedule them illegally.
 - **Detailed specifications:**
   - Move `min_hours_week` out of the `shift_rules` hard group and into the objective as a shortfall penalty, so an unmeetable guarantee costs the schedule rather than destroying it.
@@ -2827,7 +2828,8 @@ closing regression evidence.
 
 ### CS-089 — One authoritative definition of "week"
 - **Feature:** [F11](./FEATURES.md) · **Priority:** P1 · **Size:** S
-- **Status:** Not started · **Developer:** Unassigned · **Started:** — · **Duration:** ~1d (est.)
+- **Status:** ✅ Done (2026-11-24)
+- **Summary:** The ISO Monday-start workweek is now the shared helper for weekly bounds, guaranteed hours, slot indexing, compliance proposal context, and overtime. Overtime is calculated per ISO week rather than over a whole target window, correcting multi-week schedules while preserving Monday-to-Sunday behaviour.
 - **Description:** Three different notions of a week are now in play and nothing reconciles them: BUG-072's hour bounds use the **ISO week** (`date.isocalendar()`), `legality_from_compliance` passes `week_start = inputs.target_window[0]` as the compliance week, and the employer's payroll or contractual week may be neither. Minor weekly caps, overtime thresholds and guaranteed hours are all week-relative, so a mismatch silently mis-enforces the law.
 - **Detailed specifications:**
   - Decide and record the authoritative week (most likely tenant-configured, defaulting to Monday) and thread it through the hour bounds, the compliance week context, overtime, and any fairness term.

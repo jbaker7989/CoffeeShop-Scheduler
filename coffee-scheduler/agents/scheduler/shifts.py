@@ -15,6 +15,20 @@ class SolverModelError(Exception):
     """Raised when scheduler model inputs cannot safely be encoded."""
 
 
+def workweek(day: date) -> tuple[int, int]:
+    """Return THE Monday-start ISO workweek for hour caps, overtime, guarantees, and payroll."""
+    iso_year, iso_week, _ = day.isocalendar()
+    return iso_year, iso_week
+
+
+def workweek_days(window: tuple[date, ...]) -> dict[tuple[int, int], tuple[date, ...]]:
+    """Partition calendar days by the authoritative workweek in deterministic key order."""
+    grouped: dict[tuple[int, int], list[date]] = {}
+    for day in window:
+        grouped.setdefault(workweek(day), []).append(day)
+    return {key: tuple(days) for key, days in sorted(grouped.items())}
+
+
 @dataclass(frozen=True, slots=True)
 class ShiftSlot:
     location_id: int
@@ -154,8 +168,7 @@ def build_slot_index(
         minutes_from_base.append(_elapsed_minutes(base, start, description=f"slot {index} start"))
         duration_minutes.append(duration)
         by_day.setdefault(slot.day, []).append(index)
-        iso_year, iso_week, _ = slot.day.isocalendar()
-        by_week.setdefault((iso_year, iso_week), []).append(index)
+        by_week.setdefault(workweek(slot.day), []).append(index)
         first_hour = int(slot.start_hour.to_integral_value(rounding=ROUND_CEILING))
         last_hour = int((slot.end_hour - 1).to_integral_value(rounding=ROUND_FLOOR))
         close = closes.get((slot.location_id, slot.day.weekday()))
